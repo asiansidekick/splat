@@ -25,3 +25,7 @@ Goal: check splat quality on a real set before building the app.
 3. Open `out/export/splat.ply` on the iPad with a splat viewer such as the MetalSplatter sample app, or on a desktop with SuperSplat.
 
 Training takes roughly 5 to 30 minutes per room on a single modern GPU.
+
+## Marker board
+
+Print `python tools/make_marker_board.py board.pdf` on A4 at 100% scale and leave it on set, out of the film camera's frame but visible in every capture. Its known size gives the splat real-world scale and lets captures from different days line up.
