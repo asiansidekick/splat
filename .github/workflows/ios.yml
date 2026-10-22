@@ -10,7 +10,9 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    # Intel macOS runners: the arm64 pool repeatedly had no capacity for this repo.
+    runs-on: macos-15-intel
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
