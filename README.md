@@ -8,16 +8,20 @@ Scoping doc: https://claude.ai/artifact/1HArL85T18GQKTTVCsB6Z9
 
 Goal: check splat quality on a real set before building the app.
 
-1. Capture a room with Polycam (LiDAR mode) on an iPhone or iPad Pro.
-2. Export with **Raw data** and unzip it.
-3. On a machine with an NVIDIA GPU (a cloud GPU instance is fine):
+1. Capture a room on an iPhone or iPad Pro with one of:
+   - **Polycam** (LiDAR mode), exported as **Raw data** and unzipped (`polycam`).
+   - **Record3D**, exported as `.r3d` (`record3d`).
+   - The Camera app: 1 to 2 minutes of slow video around the room (`video`). No LiDAR depth or real-world scale.
+2. On a machine with an NVIDIA GPU (a cloud GPU instance is fine):
 
    ```sh
    docker build -t splat-pipeline pipeline/
-   docker run --gpus all -v /path/to/export:/data/in -v /path/to/out:/data/out \
-     splat-pipeline /data/in /data/out
+   docker run --gpus all -v /path/to/capture:/data/in -v /path/to/out:/data/out \
+     splat-pipeline <polycam|record3d|video> /data/in /data/out
    ```
 
-4. Open `out/export/splat.ply` on the iPad with a splat viewer such as the MetalSplatter sample app, or on a desktop with SuperSplat.
+   For `record3d` and `video`, mount the folder holding the file and pass the file path, e.g. `/data/in/room.r3d`.
+
+3. Open `out/export/splat.ply` on the iPad with a splat viewer such as the MetalSplatter sample app, or on a desktop with SuperSplat.
 
 Training takes roughly 5 to 30 minutes per room on a single modern GPU.
