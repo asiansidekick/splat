@@ -27,3 +27,16 @@ open Reset.xcodeproj
 ```
 
 In Xcode, select the **Reset** target, set your Apple ID team under **Signing & Capabilities**, plug in the device and press Run.
+
+## TestFlight (no computer needed to install)
+
+`.github/workflows/testflight.yml` builds, signs and uploads every push to TestFlight once these repository secrets exist (Settings, Secrets and variables, Actions):
+
+| Secret | Where it comes from |
+| --- | --- |
+| `APPLE_TEAM_ID` | developer.apple.com, Account, Membership details, Team ID |
+| `ASC_KEY_ID` | App Store Connect, Users and Access, Integrations, App Store Connect API: the key's ID (Admin access) |
+| `ASC_ISSUER_ID` | Same page, Issuer ID above the key list |
+| `ASC_KEY_P8` | The whole text of the downloaded `AuthKey_XXXX.p8` file, including the BEGIN and END lines |
+
+The first run registers the bundle ID `com.asiansidekick.reset`. Then create the app once in App Store Connect (Apps, +, New App, that bundle ID) and run the workflow again. Builds appear in the TestFlight app after Apple processes them.
