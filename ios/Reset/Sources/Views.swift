@@ -32,22 +32,29 @@ struct HomeView: View {
         NavigationStack {
             List {
                 if references.isEmpty {
-                    Text("No references yet. Record one before the first take, then use it to reset the set.")
+                    Text("No references yet. Record one for each setup before the first take, then use it to reset the set.")
                         .foregroundStyle(.secondary)
                 }
-                ForEach(references) { reference in
-                    NavigationLink(value: reference.id) {
-                        VStack(alignment: .leading) {
-                            Text(reference.name).font(.headline)
-                            Text("\(reference.created.formatted(date: .abbreviated, time: .shortened)) · \(reference.keyframes.count) views\(reference.hasDepth ? " · LiDAR" : "")")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                ForEach(Slate.sortedScenes(references), id: \.self) { scene in
+                    let setups = references
+                        .filter { $0.scene == scene }
+                        .sorted { $0.setup.localizedStandardCompare($1.setup) == .orderedAscending }
+                    Section(scene.isEmpty ? "No scene" : "Scene \(scene)") {
+                        ForEach(setups) { reference in
+                            NavigationLink(value: reference.id) {
+                                VStack(alignment: .leading) {
+                                    Text(reference.title).font(.headline)
+                                    Text(summary(reference))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .onDelete { offsets in
+                            offsets.map { setups[$0] }.forEach(ReferenceStore.delete)
+                            references = ReferenceStore.all()
                         }
                     }
-                }
-                .onDelete { offsets in
-                    offsets.map { references[$0] }.forEach(ReferenceStore.delete)
-                    references = ReferenceStore.all()
                 }
             }
             .navigationTitle("References")
@@ -60,10 +67,16 @@ struct HomeView: View {
                 Button { recording = true } label: { Label("New reference", systemImage: "plus") }
             }
             .fullScreenCover(isPresented: $recording, onDismiss: { references = ReferenceStore.all() }) {
-                RecordView()
+                RecordView(existing: references)
             }
             .onAppear { references = ReferenceStore.all() }
         }
+    }
+
+    private func summary(_ reference: Reference) -> String {
+        let takes = reference.takes.count == 1 ? "1 take" : "\(reference.takes.count) takes"
+        let date = reference.created.formatted(date: .abbreviated, time: .shortened)
+        return "\(takes) · \(date) · \(reference.keyframes.count) views\(reference.hasDepth ? " · LiDAR" : "")"
     }
 }
 
@@ -72,9 +85,20 @@ struct HomeView: View {
 struct RecordView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var recorder = Recorder()
-    @State private var name = "Scene 1, setup A"
+    let existing: [Reference]
+    @State private var scene: String
+    @State private var setup: String
+    @State private var name = ""
     @State private var useLiDAR = Recorder.lidarAvailable
     @State private var started = false
+
+    /// Carries on in the latest scene with the next free setup letter.
+    init(existing: [Reference]) {
+        self.existing = existing
+        let scene = Slate.currentScene(in: existing)
+        _scene = State(initialValue: scene)
+        _setup = State(initialValue: Slate.nextSetup(scene: scene, in: existing))
+    }
 
     var body: some View {
         ZStack {
@@ -116,15 +140,26 @@ struct RecordView: View {
 
     private var setup: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField("Name, for example 12B setup 1", text: $name)
-                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 8) {
+                TextField("Scene", text: $scene)
+                    .keyboardType(.numbersAndPunctuation)
+                    .frame(maxWidth: 90)
+                TextField("Setup", text: $setup)
+                    .textInputAutocapitalization(.characters)
+                    .frame(maxWidth: 70)
+                TextField("Description (optional)", text: $name)
+            }
+            .textFieldStyle(.roundedBorder)
+            .onChange(of: scene) { _, newScene in
+                setup = Slate.nextSetup(scene: newScene, in: existing)
+            }
             if Recorder.lidarAvailable {
                 Toggle("Use LiDAR (adds depth, highlights what moved)", isOn: $useLiDAR)
             }
             Text("Walk slowly around the area, pointing at the props. Cover each spot from a couple of angles.")
                 .font(.callout)
             Button("Start") {
-                recorder.start(name: name, useLiDAR: useLiDAR)
+                recorder.start(scene: scene, setup: setup, name: name, useLiDAR: useLiDAR)
                 started = true
             }
             .buttonStyle(.borderedProminent)
@@ -141,7 +176,8 @@ struct RecordView: View {
         case .limited: mapping = "Mapping, move slowly"
         default: mapping = "Starting"
         }
-        return "\(recorder.keyframeCount) views · \(mapping)"
+        let slate = scene + setup
+        return "\(slate.isEmpty ? "" : "\(slate) · ")\(recorder.keyframeCount) views · \(mapping)"
     }
 }
 
@@ -149,10 +185,14 @@ struct RecordView: View {
 
 struct RestoreView: View {
     @StateObject private var restorer: Restorer
+    @State private var reference: Reference
     @State private var ghostOpacity = 0.5
+    @State private var loggingTake: Take?
+    @State private var showingLog = false
 
     init(reference: Reference) {
         _restorer = StateObject(wrappedValue: Restorer(reference: reference))
+        _reference = State(initialValue: reference)
     }
 
     var body: some View {
@@ -193,8 +233,20 @@ struct RestoreView: View {
             .onChange(of: geometry.size) { _, size in restorer.viewport = size }
         }
         .ignoresSafeArea(edges: .bottom)
-        .navigationTitle(restorer.reference.name)
+        .navigationTitle(reference.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            Button("Take log") { showingLog = true }
+        }
+        .sheet(item: $loggingTake) { take in
+            TakeEditor(take: take, slate: reference.slate) { logged in
+                reference.takes.append(logged)
+                try? ReferenceStore.save(reference)
+            }
+        }
+        .sheet(isPresented: $showingLog) {
+            TakeLogView(reference: $reference)
+        }
         .onDisappear { restorer.stop() }
     }
 
@@ -209,6 +261,19 @@ struct RestoreView: View {
 
     private var controls: some View {
         VStack(spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(reference.slate.isEmpty ? "Next take" : "Scene \(reference.slate)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Take \(reference.nextTakeNumber)").font(.title3.bold().monospacedDigit())
+                }
+                Spacer()
+                Button("Log take \(reference.nextTakeNumber)") {
+                    loggingTake = Take(number: reference.nextTakeNumber, logged: Date(), resetChecked: restorer.matched)
+                }
+                .buttonStyle(.borderedProminent)
+            }
             HStack {
                 Image(systemName: "circle.lefthalf.filled")
                 Slider(value: $ghostOpacity, in: 0...1)

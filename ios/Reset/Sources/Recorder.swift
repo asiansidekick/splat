@@ -30,7 +30,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
     }
 
-    func start(name: String, useLiDAR: Bool) {
+    func start(scene: String, setup: String, name: String, useLiDAR: Bool) {
         let id = UUID()
         do {
             try FileManager.default.createDirectory(at: ReferenceStore.folder(for: id), withIntermediateDirectories: true)
@@ -38,7 +38,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
             self.error = error.localizedDescription
             return
         }
-        reference = Reference(id: id, name: name, created: Date(), keyframes: [])
+        reference = Reference(id: id, scene: scene, setup: setup, name: name, created: Date(), keyframes: [])
         lastSaved = nil
         keyframeCount = 0
 

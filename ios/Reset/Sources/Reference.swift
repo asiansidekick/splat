@@ -21,14 +21,37 @@ struct Keyframe: Codable, Identifiable {
     var forward: SIMD3<Float> { -cameraToWorld.columns.2.xyz }
 }
 
-/// A saved reference: the set as it should look, for example at the start of take 1.
+/// A saved reference: the set as it should look for one setup, for example at the start of take 1.
 struct Reference: Codable, Identifiable {
     let id: UUID
-    var name: String
+    var scene: String  // "12"
+    var setup: String  // "B", so the slate reads 12B
+    var name: String  // optional description, "desk"
     let created: Date
     var keyframes: [Keyframe]
+    var takes: [Take] = []
 
     var hasDepth: Bool { keyframes.contains { $0.depthFile != nil } }
+    var slate: String { scene + setup }
+    var title: String {
+        if slate.isEmpty { return name }
+        return name.isEmpty ? slate : "\(slate) · \(name)"
+    }
+    var nextTakeNumber: Int { (takes.map(\.number).max() ?? 0) + 1 }
+}
+
+extension Reference {
+    /// References saved before scenes and takes existed have only a name.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        scene = try c.decodeIfPresent(String.self, forKey: .scene) ?? ""
+        setup = try c.decodeIfPresent(String.self, forKey: .setup) ?? ""
+        name = try c.decode(String.self, forKey: .name)
+        created = try c.decode(Date.self, forKey: .created)
+        keyframes = try c.decode([Keyframe].self, forKey: .keyframes)
+        takes = try c.decodeIfPresent([Take].self, forKey: .takes) ?? []
+    }
 }
 
 /// Stores references in the app's Documents folder, one folder per reference.
