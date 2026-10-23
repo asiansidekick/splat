@@ -87,7 +87,7 @@ struct RecordView: View {
     @StateObject private var recorder = Recorder()
     let existing: [Reference]
     @State private var scene: String
-    @State private var setup: String
+    @State private var setupLetter: String
     @State private var name = ""
     @State private var useLiDAR = Recorder.lidarAvailable
     @State private var started = false
@@ -97,7 +97,7 @@ struct RecordView: View {
         self.existing = existing
         let scene = Slate.currentScene(in: existing)
         _scene = State(initialValue: scene)
-        _setup = State(initialValue: Slate.nextSetup(scene: scene, in: existing))
+        _setupLetter = State(initialValue: Slate.nextSetup(scene: scene, in: existing))
     }
 
     var body: some View {
@@ -109,7 +109,7 @@ struct RecordView: View {
                         .padding(10)
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
                 } else {
-                    setup
+                    setupCard
                 }
                 Spacer()
                 if let error = recorder.error {
@@ -138,20 +138,20 @@ struct RecordView: View {
         }
     }
 
-    private var setup: some View {
+    private var setupCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 TextField("Scene", text: $scene)
                     .keyboardType(.numbersAndPunctuation)
                     .frame(maxWidth: 90)
-                TextField("Setup", text: $setup)
+                TextField("Setup", text: $setupLetter)
                     .textInputAutocapitalization(.characters)
                     .frame(maxWidth: 70)
                 TextField("Description (optional)", text: $name)
             }
             .textFieldStyle(.roundedBorder)
             .onChange(of: scene) { _, newScene in
-                setup = Slate.nextSetup(scene: newScene, in: existing)
+                setupLetter = Slate.nextSetup(scene: newScene, in: existing)
             }
             if Recorder.lidarAvailable {
                 Toggle("Use LiDAR (adds depth, highlights what moved)", isOn: $useLiDAR)
@@ -159,7 +159,7 @@ struct RecordView: View {
             Text("Walk slowly around the area, pointing at the props. Cover each spot from a couple of angles.")
                 .font(.callout)
             Button("Start") {
-                recorder.start(scene: scene, setup: setup, name: name, useLiDAR: useLiDAR)
+                recorder.start(scene: scene, setup: setupLetter, name: name, useLiDAR: useLiDAR)
                 started = true
             }
             .buttonStyle(.borderedProminent)
@@ -176,7 +176,7 @@ struct RecordView: View {
         case .limited: mapping = "Mapping, move slowly"
         default: mapping = "Starting"
         }
-        let slate = scene + setup
+        let slate = scene + setupLetter
         return "\(slate.isEmpty ? "" : "\(slate) · ")\(recorder.keyframeCount) views · \(mapping)"
     }
 }
