@@ -191,6 +191,8 @@ struct TakeLogView: View {
     @Binding var reference: Reference
     @State private var editing: Take?
     @State private var editingSlate = false
+    @State private var sharing: SharedFile?
+    @State private var shareError: String?
 
     private var sortedTakes: [Take] {
         reference.takes.sorted { $0.number > $1.number }
@@ -230,7 +232,12 @@ struct TakeLogView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    ShareLink(item: reference.takeReport) { Label("Share", systemImage: "square.and.arrow.up") }
+                    Menu {
+                        Button("PDF with reference photos") { sharePDF() }
+                        ShareLink("Text only", item: reference.takeReport)
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -244,6 +251,14 @@ struct TakeLogView: View {
                     }
                 }
             }
+            .sheet(item: $sharing) { file in
+                ShareSheet(items: [file.url])
+            }
+            .alert("Could not make the PDF", isPresented: Binding(get: { shareError != nil }, set: { if !$0 { shareError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(shareError ?? "")
+            }
             .sheet(isPresented: $editingSlate) {
                 SlateEditor(reference: reference) { updated in
                     reference = updated
@@ -255,5 +270,13 @@ struct TakeLogView: View {
 
     private func save() {
         try? ReferenceStore.save(reference)
+    }
+
+    private func sharePDF() {
+        do {
+            sharing = SharedFile(url: try ReportPDF.make(for: reference))
+        } catch {
+            shareError = error.localizedDescription
+        }
     }
 }

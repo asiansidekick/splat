@@ -9,7 +9,7 @@ Put a set back the way it was, entirely on an iPhone or iPad. No internet, no co
    - with LiDAR, **red** where something is now in front of where it was and **blue** where something is missing.
    Tap **Hold this view** to keep one reference photo while you nudge props into place.
 
-3. **Log takes** from the reset screen: the panel shows the next take number. Tap **Log take** after each take. It ticks "Set matched the reference" when you were lined up, and you can circle the take and add notes. **Take log** lists every take for the setup: tap one to fix its number or notes, swipe to delete, tap the slate to correct the scene or setup, and **Share** sends a plain text take report (AirDrop works without signal).
+3. **Log takes** from the reset screen: the panel shows the next take number. Tap **Log take** after each take. It ticks "Set matched the reference" when you were lined up, and you can circle the take and add notes. **Take log** lists every take for the setup: tap one to fix its number or notes, swipe to delete, tap the slate to correct the scene or setup, and **Share** sends either a PDF (slate, take log and six reference photos spread around the set) or a plain text take report. AirDrop works without signal.
 
 The home screen groups setups by scene.
 
