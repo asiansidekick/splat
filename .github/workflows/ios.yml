@@ -1,0 +1,48 @@
+name: iOS build
+
+on:
+  push:
+    branches: [main]
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  pull_request:
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Intel macOS runners: the arm64 pool repeatedly had no capacity for this repo.
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate Xcode project
+        working-directory: ios/Reset
+        run: |
+          brew install xcodegen
+          xcodegen
+
+      - name: Build for device (unsigned)
+        working-directory: ios/Reset
+        run: |
+          # Compiler errors become annotations, so they show on the run summary and in the PR.
+          if ! xcodebuild -project Reset.xcodeproj -target Reset -configuration Release \
+            -sdk iphoneos SYMROOT="$PWD/build" CODE_SIGNING_ALLOWED=NO build > build.log 2>&1; then
+            grep -E ": error: " build.log | sort -u | head -10 \
+              | sed -E 's#^.*/(Sources/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Reset/\1,line=\2,col=\3::\4#'
+            tail -60 build.log
+            exit 1
+          fi
+
+      # Sideloading tools (AltStore, Sideloadly) sign this with the user's own Apple ID.
+      - name: Package unsigned IPA
+        working-directory: ios/Reset
+        run: |
+          mkdir -p Payload
+          cp -R build/Release-iphoneos/Reset.app Payload/
+          zip -qr Reset-unsigned.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Reset-unsigned-ipa
+          path: ios/Reset/Reset-unsigned.ipa

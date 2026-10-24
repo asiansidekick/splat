@@ -1,0 +1,108 @@
+name: TestFlight
+
+# Builds the Reset app, signs it with Apple's cloud signing and uploads it to TestFlight.
+# Off until the APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 repository secrets exist.
+on:
+  push:
+    branches: [main, ios-overlay]
+    paths: ["ios/**", ".github/workflows/testflight.yml", ".github/scripts/asc_check.py"]
+  workflow_dispatch:
+
+concurrency:
+  group: testflight
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.secrets.outputs.ready }}
+    steps:
+      - id: secrets
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          if [ -n "$TEAM_ID" ] && [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] && [ -n "$ASC_KEY_P8" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::TestFlight upload is off: add the APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 repository secrets to turn it on."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  upload:
+    needs: check
+    if: needs.check.outputs.ready == 'true'
+    # Intel macOS runners: the arm64 pool repeatedly had no capacity for this repo.
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      BUNDLE_ID: com.asiansidekick.reset
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write the App Store Connect key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          echo "ASC_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
+
+      - name: Check the bundle ID and App Store Connect app
+        run: |
+          python3 -m pip install --quiet --break-system-packages pyjwt cryptography
+          python3 .github/scripts/asc_check.py
+
+      - name: Generate Xcode project
+        working-directory: ios/Reset
+        run: |
+          brew install xcodegen
+          xcodegen
+
+      # Archived unsigned; the export step signs it with a cloud-managed distribution certificate,
+      # so no certificate or profile has to be stored in GitHub.
+      - name: Archive
+        working-directory: ios/Reset
+        run: |
+          if ! xcodebuild -project Reset.xcodeproj -scheme Reset -configuration Release \
+            -destination generic/platform=iOS -archivePath "$RUNNER_TEMP/Reset.xcarchive" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGNING_ALLOWED=NO archive > archive.log 2>&1; then
+            grep -E "error:" archive.log | sort -u | head -10 | sed -E 's/^/::error::/'
+            tail -60 archive.log
+            exit 1
+          fi
+
+      - name: Sign and upload to TestFlight
+        working-directory: ios/Reset
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          PLIST
+          if ! xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Reset.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" > export.log 2>&1; then
+            grep -iE "error" export.log | sort -u | head -10 | sed -E 's/^/::error::/'
+            tail -60 export.log
+            exit 1
+          fi
+          echo "::notice::Build ${{ github.run_number }} uploaded. It shows in TestFlight after Apple processes it, usually 5 to 30 minutes."
+
+      - name: Remove the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"
