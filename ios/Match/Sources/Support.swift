@@ -61,9 +61,10 @@ struct HelpView: View {
                     Text("Match opens straight into the camera. Everything is on this screen:")
                     Text("• Top left: the board you are shooting (for example Sc 12 · Sarah). Tap to switch boards or start a new one.")
                     Text("• Top right: the take. Tap for the next take; touch and hold to go back or to Prep. Every board in the scene follows it.")
-                    Text("• Above the shutter: reference thumbnails. Tap one to show it see-through over the camera, tap it again to hide it. The slider sets how strong; the square shows outlines only. Pinch or drag the overlay to line up a QTake screenshot; double tap resets it.")
-                    Text("• Under them: angles (Front, Left, Back…). Picking an angle also shows that angle's reference. The first photo of each angle becomes its reference.")
-                    Text("• Bottom left: your last photo. Tap it to compare it with the reference straight away.")
+                    Text("• Nothing is saved until you press the shutter.")
+                    Text("• Above the shutter: angles (Front, Left, Back…). Picking an angle shows that angle's reference see-through over the camera. The first photo of each angle becomes its reference.")
+                    Text("• The slider sets how strong the overlay is, the eye hides it, the square shows outlines only. Pinch or drag the overlay to line up a QTake screenshot; double tap resets it.")
+                    Text("• Bottom left: the reference thumbnail. Tap it for the gallery: tap any photo to overlay it, or compare your latest photo with its reference.")
                     Text("• Bottom right: boards and photos, for importing QTake screenshots, editing notes, PDFs and more.")
                 }
                 Section("Compare") {
