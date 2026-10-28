@@ -5,6 +5,13 @@ import UniformTypeIdentifiers
 
 @main
 struct ResetApp: App {
+    init() {
+        Diagnostics.logLaunch()
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main
+        ) { _ in Diagnostics.log("Memory warning") }
+    }
+
     var body: some Scene {
         WindowGroup { HomeView() }
     }
@@ -45,6 +52,8 @@ enum Screen {
 struct HomeView: View {
     @State private var references: [Reference] = []
     @State private var recording = false
+    @State private var showingHelp = false
+    @AppStorage("seenHelp") private var seenHelp = false
 
     var body: some View {
         NavigationStack {
@@ -82,7 +91,18 @@ struct HomeView: View {
                 }
             }
             .toolbar {
-                Button { recording = true } label: { Label("New reference", systemImage: "plus") }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showingHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { recording = true } label: { Label("New reference", systemImage: "plus") }
+                }
+            }
+            .sheet(isPresented: $showingHelp, onDismiss: { seenHelp = true }) {
+                HelpView()
+            }
+            .onAppear {
+                if !seenHelp { showingHelp = true }
             }
             .fullScreenCover(isPresented: $recording, onDismiss: { references = ReferenceStore.all() }) {
                 RecordView(existing: references)
@@ -161,7 +181,7 @@ struct RecordView: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(recorder.saving || recorder.keyframeCount < (snapshotMode ? 1 : 5))
+                        .disabled(recorder.saving || recorder.keyframeCount < (snapshotMode ? 1 : 5) || !recorder.canSaveMap)
                     }
                 }
             }
@@ -212,8 +232,8 @@ struct RecordView: View {
         let mapping: String
         switch recorder.mappingStatus {
         case .mapped: mapping = "Mapped"
-        case .extending: mapping = "Mapping, keep going"
-        case .limited: mapping = "Mapping, move slowly"
+        case .extending: mapping = "Ready to save (more helps)"
+        case .limited: mapping = "Keep moving slowly, not ready yet"
         default: mapping = "Starting"
         }
         let slate = scene + setupLetter
@@ -261,6 +281,9 @@ struct RestoreView: View {
                         .allowsHitTesting(false)
                 }
                 VStack {
+                    if restorer.status == .relocalizing, let photo = restorer.startPhoto {
+                        findingHint(photo)
+                    }
                     Text(headline)
                         .font(.subheadline.bold())
                         .multilineTextAlignment(.center)
@@ -325,6 +348,26 @@ struct RestoreView: View {
             Text(restorer.modelError ?? "")
         }
         .onDisappear { restorer.stop() }
+    }
+
+    /// While the room is being found: the first reference photo, so the person starts there.
+    private func findingHint(_ photo: UIImage) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(uiImage: photo)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: 110, maxHeight: 110)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            Text(restorer.slowToFind
+                ? "Still looking. Stand where this photo was taken and point at the same spot. Turn the lights back to how they were, and move slowly side to side."
+                : "Start where this photo was taken and point at the same spot.")
+                .font(.caption)
+                .foregroundStyle(.white)
+        }
+        .padding(8)
+        .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+        .frame(maxWidth: 480)
+        .dynamicTypeSize(...DynamicTypeSize.large)
     }
 
     private var headline: String {

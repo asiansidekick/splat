@@ -51,6 +51,14 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     private let ciContext = CIContext()
     private let diffQueue = DispatchQueue(label: "depth-diff")
     private let writeQueue = DispatchQueue(label: "snapshot-writer")
+    private let ghostQueue = DispatchQueue(label: "ghost-render")
+    private var ghostBusy = false
+    private var lastDiff = Date.distantPast
+    /// When the app started looking for the room, for hints if it takes a while.
+    @Published var relocalizingSince: Date?
+    @Published var startPhoto: UIImage?
+    /// Set after 20 seconds without finding the room, to show tips.
+    @Published var slowToFind = false
     private var depthCache: [String: [Float]] = [:]
 
     var usesDepth: Bool { reference.hasDepth && Recorder.lidarAvailable }
@@ -91,14 +99,22 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             config.initialWorldMap = map
             if usesDepth {
                 config.frameSemantics.insert(.sceneDepth)
+                // Temporally smoothed depth is steadier for spotting changes (Apple's advice).
+                if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+                    config.frameSemantics.insert(.smoothedSceneDepth)
+                }
             }
             session.delegate = self
             session.run(config, options: [.resetTracking, .removeExistingAnchors])
             status = .relocalizing
+            relocalizingSince = Date()
             buildCloud()
             loadSavedModels()
+            loadStartPhoto()
+            Diagnostics.log("Reset start: \(reference.title), \(reference.keyframes.count) keyframes, depth \(usesDepth)")
         } catch {
             status = .failed("Could not open this reference: \(error.localizedDescription)")
+            Diagnostics.log("Reset open failed: \(error)")
         }
     }
 
@@ -126,17 +142,60 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         // The session delivers frames on the main queue (no delegateQueue is set).
+        guard Thread.isMainThread else { return }
         MainActor.assumeIsolated { self.handle(frame) }
+    }
+
+    nonisolated func session(_ session: ARSession, didFailWithError error: Error) {
+        let message = ARErrors.message(for: error)
+        Diagnostics.log("Reset session failed: \(error)")
+        Task { @MainActor in self.status = .failed(message) }
+    }
+
+    nonisolated func sessionWasInterrupted(_ session: ARSession) {
+        Diagnostics.log("Reset interrupted")
+    }
+
+    nonisolated func sessionInterruptionEnded(_ session: ARSession) {
+        Diagnostics.log("Reset interruption ended")
+    }
+
+    /// Find the saved room again after an interruption instead of starting a new one.
+    nonisolated func sessionShouldAttemptRelocalization(_ session: ARSession) -> Bool {
+        true
+    }
+
+    /// The first reference photo, shown while the room is being found: start from there.
+    private func loadStartPhoto() {
+        guard let first = reference.keyframes.first else { return }
+        let url = ReferenceStore.folder(for: reference.id).appendingPathComponent(first.imageFile)
+        guard let cg = UIImage(contentsOfFile: url.path)?.cgImage else { return }
+        startPhoto = UIImage(cgImage: cg, scale: 1, orientation: first.uprightOrientation)
     }
 
     private func handle(_ frame: ARFrame) {
         // ARKit reports normal tracking once it has recognised the saved room.
+        if case .failed = status { return }
         guard case .normal = frame.camera.trackingState else {
-            if status == .ready { status = .relocalizing }
+            if status == .ready {
+                status = .relocalizing
+                relocalizingSince = Date()
+                Diagnostics.log("Reset lost tracking: \(frame.camera.trackingState)")
+            }
             modelsNode.isHidden = true
+            if !slowToFind, let since = relocalizingSince, Date().timeIntervalSince(since) > 20 {
+                slowToFind = true
+                Diagnostics.log("Reset still looking for the room after 20 s: \(frame.camera.trackingState)")
+            }
             return
         }
-        if status != .ready { status = .ready }
+        if status != .ready {
+            status = .ready
+            let seconds = relocalizingSince.map { Date().timeIntervalSince($0) } ?? 0
+            Diagnostics.log("Reset found the room after \(Int(seconds)) s")
+            relocalizingSince = nil
+            slowToFind = false
+        }
         modelsNode.isHidden = false
         let now = Date()
         guard now.timeIntervalSince(lastUpdate) > 0.1, viewport != .zero else { return }
@@ -148,7 +207,10 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         current = keyframe
         updateGuidance(camera: camera, target: keyframe)
         updateGhost(keyframe, frame: frame)
-        if usesDepth && showDifferences {
+        // Less often when the phone is hot, so it does not throttle or shut the camera down.
+        let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
+        if usesDepth && showDifferences && (!hot || now.timeIntervalSince(lastDiff) > 0.5) {
+            lastDiff = now
             updateDifferences(frame: frame, around: camera)
         } else if differences != nil {
             differences = nil
@@ -165,32 +227,57 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     private func updateGhost(_ keyframe: Keyframe, frame: ARFrame) {
         if let done = renderedFor, done.id == keyframe.id, done.viewport == viewport, done.orientation == orientation { return }
+        guard !ghostBusy else { return }
+        // Loading and drawing the photo happens off the main thread so camera frames keep flowing.
         let url = ReferenceStore.folder(for: reference.id).appendingPathComponent(keyframe.imageFile)
-        guard let image = CIImage(contentsOf: url) else { return }
-        ghost = render(image, frame: frame)
-        renderedFor = (keyframe.id, viewport, orientation)
+        let placement = Placement(display: frame.displayTransform(for: orientation, viewportSize: viewport), viewport: viewport)
+        let key = (keyframe.id, viewport, orientation)
+        let context = ciContext
+        ghostBusy = true
+        ghostQueue.async {
+            let image = CIImage(contentsOf: url).flatMap { Restorer.render($0, placement: placement, context: context) }
+            Task { @MainActor in
+                self.ghostBusy = false
+                guard let image else { return }
+                self.ghost = image
+                self.renderedFor = key
+            }
+        }
+    }
+
+    /// Where the camera image sits on screen, captured on the main thread for background drawing.
+    struct Placement: @unchecked Sendable {
+        let display: CGAffineTransform
+        let viewport: CGSize
     }
 
     /// Lays an image in the camera's sensor orientation over the screen exactly like the live
     /// camera feed is laid out.
     private func render(_ image: CIImage, frame: ARFrame) -> UIImage? {
+        let placement = Placement(display: frame.displayTransform(for: orientation, viewportSize: viewport), viewport: viewport)
+        return Restorer.render(image, placement: placement, context: ciContext)
+    }
+
+    nonisolated static func render(_ image: CIImage, placement: Placement, context: CIContext) -> UIImage? {
         let size = image.extent.size
+        let viewport = placement.viewport
+        guard size.width > 0, size.height > 0, viewport.width > 0, viewport.height > 0 else { return nil }
         let toUnit = CGAffineTransform(scaleX: 1 / size.width, y: 1 / size.height)
         // Core Image puts the origin bottom left; ARKit's display transform expects top left.
         let flip = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: 1)
-        let display = frame.displayTransform(for: orientation, viewportSize: viewport)
         let toView = CGAffineTransform(scaleX: viewport.width, y: viewport.height)
         let placed = image
-            .transformed(by: toUnit.concatenating(flip).concatenating(display).concatenating(flip).concatenating(toView))
+            .transformed(by: toUnit.concatenating(flip).concatenating(placement.display).concatenating(flip).concatenating(toView))
             .cropped(to: CGRect(origin: .zero, size: viewport))
-        guard let cg = ciContext.createCGImage(placed, from: CGRect(origin: .zero, size: viewport)) else { return nil }
+        guard let cg = context.createCGImage(placed, from: CGRect(origin: .zero, size: viewport)) else { return nil }
         return UIImage(cgImage: cg)
     }
 
     // MARK: LiDAR differences
 
     private func updateDifferences(frame: ARFrame, around camera: simd_float4x4) {
-        guard !diffBusy, let depthMap = frame.sceneDepth?.depthMap else { return }
+        guard !diffBusy, let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth else { return }
+        let depthMap = depthData.depthMap
         let liveDepth = DepthMap.floats(DepthMap.copy(depthMap))
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
@@ -216,7 +303,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             cameraToWorld: camera,
             intrinsics: frame.camera.intrinsics,
             imageWidth: CVPixelBufferGetWidth(frame.capturedImage),
-            confidence: frame.sceneDepth?.confidenceMap.map(DepthMap.bytes))
+            confidence: depthData.confidenceMap.map(DepthMap.bytes))
         let refs = references.map { keyframe, depth in
             DepthView(
                 depth: depth, width: keyframe.depthWidth, height: keyframe.depthHeight,

@@ -27,7 +27,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     /// A new keyframe is kept after the camera moves this far or turns this much.
     private let minMove: Float = 0.2  // metres
     private let minTurn: Float = 12 * .pi / 180
-    private let maxKeyframes = 400
+    private let maxKeyframes = 300
 
     nonisolated static var lidarAvailable: Bool {
         ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
@@ -51,6 +51,12 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         }
         session.delegate = self
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        Diagnostics.log("Record start: \(scene)\(setup) \(name), LiDAR \(config.frameSemantics.contains(.sceneDepth)), auto \(autoCapture)")
+    }
+
+    /// ARKit's map is only reliable once it has seen enough; Apple's guidance is to save then.
+    var canSaveMap: Bool {
+        mappingStatus == .mapped || mappingStatus == .extending
     }
 
     /// Saves the room map and the keyframe list. Returns the finished reference.
@@ -74,9 +80,11 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
             reference.keyframes = self.reference?.keyframes ?? []
             try ReferenceStore.save(reference)
             session.pause()
+            Diagnostics.log("Record saved: \(reference.keyframes.count) keyframes")
             return reference
         } catch {
             self.error = "Could not save the room map: \(error.localizedDescription). Keep moving slowly until the status says Mapped, then try again."
+            Diagnostics.log("Record save failed: \(error)")
             return nil
         }
     }
@@ -94,7 +102,28 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
 
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         // The session delivers frames on the main queue (no delegateQueue is set).
+        guard Thread.isMainThread else { return }
         MainActor.assumeIsolated { self.handle(frame) }
+    }
+
+    nonisolated func session(_ session: ARSession, didFailWithError error: Error) {
+        let message = ARErrors.message(for: error)
+        Diagnostics.log("Record session failed: \(error)")
+        Task { @MainActor in self.error = message }
+    }
+
+    nonisolated func sessionWasInterrupted(_ session: ARSession) {
+        Diagnostics.log("Record interrupted")
+    }
+
+    nonisolated func sessionInterruptionEnded(_ session: ARSession) {
+        Diagnostics.log("Record interruption ended")
+    }
+
+    /// Without this, ARKit starts a new coordinate system after an interruption (a call, the app
+    /// going to the background) and the keyframes before and after would not line up.
+    nonisolated func sessionShouldAttemptRelocalization(_ session: ARSession) -> Bool {
+        true
     }
 
     private func handle(_ frame: ARFrame) {
@@ -157,8 +186,11 @@ struct FrameSnapshot: @unchecked Sendable {
         intrinsics = frame.camera.intrinsics
         imageWidth = CVPixelBufferGetWidth(pixels)
         imageHeight = CVPixelBufferGetHeight(pixels)
-        if let depthMap = frame.sceneDepth?.depthMap {
-            depth = DepthMap.copy(depthMap)
+        if let sceneDepth = frame.sceneDepth {
+            let depthMap = sceneDepth.depthMap
+            // Unsure LiDAR readings (edges, dark or shiny surfaces) are dropped: they cause false
+            // highlights and stray 3D ghost points.
+            depth = DepthMap.copy(depthMap, keepingOnly: sceneDepth.confidenceMap)
             depthWidth = CVPixelBufferGetWidth(depthMap)
             depthHeight = CVPixelBufferGetHeight(depthMap)
         } else {
@@ -184,9 +216,13 @@ extension FrameSnapshot {
     }
 
     /// Saves the photo (and depth) under the keyframe's file names. Slow: call off the main thread.
+    /// Photos are stored at most 1280 pixels wide, enough for the ghost, to save space; the
+    /// keyframe keeps the camera's full size, which its intrinsics refer to.
     func write(_ keyframe: Keyframe, to folder: URL, context: CIContext) {
+        let scale = min(1, 1280 / max(image.extent.width, 1))
+        let stored = scale < 1 ? image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) : image
         if let jpeg = context.jpegRepresentation(
-            of: image, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+            of: stored, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
             options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.85])
         {
             try? jpeg.write(to: folder.appendingPathComponent(keyframe.imageFile))
@@ -209,6 +245,19 @@ extension CIImage {
 
 enum DepthMap {
     /// Copies a Float32 depth buffer (metres) into tightly packed Data.
+    /// Copies depth, setting readings below high confidence to 0 (no reading).
+    static func copy(_ buffer: CVPixelBuffer, keepingOnly confidence: CVPixelBuffer?) -> Data {
+        var data = copy(buffer)
+        guard let confidence else { return data }
+        let levels = bytes(confidence)
+        data.withUnsafeMutableBytes { raw in
+            let depth = raw.bindMemory(to: Float.self)
+            guard depth.count == levels.count else { return }
+            for i in 0..<depth.count where levels[i] < 2 { depth[i] = 0 }
+        }
+        return data
+    }
+
     static func copy(_ buffer: CVPixelBuffer) -> Data {
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }

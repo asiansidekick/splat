@@ -22,6 +22,13 @@ The home screen groups setups by scene.
 
 References are stored in the app's Documents folder (visible in the Files app).
 
+## Help and feedback
+
+The first launch shows a short guide; the ? button on the home screen brings it back. The app keeps
+a small log of what it did (device, tracking, saves, errors) in Documents/Reset log.txt. Help, then
+Send feedback log, shares it. Recording only allows Save once ARKit says the room is mapped, which is
+what makes the reference findable again later.
+
 ## Build
 
 Needs a Mac with Xcode 15 or later, and an iPhone or iPad (ARKit does not run in the simulator).

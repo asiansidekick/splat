@@ -34,12 +34,13 @@ enum DepthDiff {
     static func mask(live: DepthView, references: [DepthView]) -> CIImage? {
         let w = live.width
         let h = live.height
+        guard w > 0, h > 0, live.depth.count == w * h else { return nil }
         var expected = [Float](repeating: .infinity, count: w * h)
         let worldToLive = live.cameraToWorld.inverse
         let liveK = live.depthIntrinsics
 
         // Re-project each reference depth map into the live camera, keeping the nearest surface.
-        for ref in references {
+        for ref in references where ref.width > 0 && ref.depth.count == ref.width * ref.height {
             let k = ref.depthIntrinsics
             let toLive = worldToLive * ref.cameraToWorld
             for v in stride(from: 0, to: ref.height, by: 2) {
@@ -73,7 +74,7 @@ enum DepthDiff {
             let e = expected[i]
             let d = live.depth[i]
             guard e.isFinite, d > 0.1, d < maxRange else { continue }
-            if let confidence = live.confidence, confidence[i] < 2 { continue }
+            if let confidence = live.confidence, confidence.count == w * h, confidence[i] < 2 { continue }
             let limit = threshold + perMetre * e
             let o = i * 4
             if d < e - limit {
