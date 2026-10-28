@@ -57,28 +57,24 @@ struct HelpView: View {
                 Section {
                     Text("Match keeps continuity photos for hair, makeup, costume, props and set, and checks the set against them before each take. Everything stays on this device; no signal needed.")
                 }
-                Section("1. Make a board") {
-                    Text("Tap + for each character or prop you look after in a scene, for example \"Sarah\" with department Hair in scene 12. Swipe a board left to delete it.")
+                Section("The camera screen") {
+                    Text("Match opens straight into the camera. Everything is on this screen:")
+                    Text("• Top left: the board you are shooting (for example Sc 12 · Sarah). Tap to switch boards or start a new one.")
+                    Text("• Top right: the take. Tap for the next take; touch and hold to go back or to Prep. Every board in the scene follows it.")
+                    Text("• Above the shutter: reference thumbnails. Tap one to show it see-through over the camera, tap it again to hide it. The slider sets how strong; the square shows outlines only. Pinch or drag the overlay to line up a QTake screenshot; double tap resets it.")
+                    Text("• Under them: angles (Front, Left, Back…). Picking an angle also shows that angle's reference. The first photo of each angle becomes its reference.")
+                    Text("• Bottom left: your last photo. Tap it to compare it with the reference straight away.")
+                    Text("• Bottom right: boards and photos, for importing QTake screenshots, editing notes, PDFs and more.")
                 }
-                Section("2. Take reference photos") {
-                    Text("Open the board and tap Camera. Pick an angle (Front, Left, Back…) before shooting. The first photo from each angle becomes its reference, marked ★.")
-                    Text("Or tap Import to bring in QTake screenshots or photos from Photos, Files or the clipboard.")
-                }
-                Section("3. Keep the take number") {
-                    Text("Tap Next take as takes go by. Every board in the scene follows it, and new photos are filed under the current take. Prep means before the first take.")
-                }
-                Section("4. Check before a take") {
-                    Text("Tap Camera: the reference shows see-through over the live view. Use the slider for strength and the square for outlines only. Pinch or drag to line up a screenshot; double tap to reset. Take a photo, then tap its thumbnail to compare.")
-                }
-                Section("5. Compare") {
+                Section("Compare") {
                     Text("Side by side, Wipe, Blend, Flicker, or Changes, which lines the photos up and marks differences in red. Pinch to zoom; the expand button hides the controls.")
                 }
                 Section("Sharing and safety") {
-                    Text("Board menu (•••): Share PDF sheet. Home menu (•••): Back up all boards makes one zip of everything; AirDrop it to your computer now and then. Photos are also visible in the Files app under On My iPhone, Match.")
+                    Text("In a board, the ••• menu has Share PDF sheet. On the Boards screen, the ••• menu has Back up all boards, which makes one zip of everything; AirDrop it to your computer now and then. Photos are also visible in the Files app under On My iPhone, Match.")
                     Text("When re-installing the app, install over the top. Deleting the app deletes its photos.")
                 }
                 Section("Testing") {
-                    Text("Home menu (•••), Tester notes: jot down anything odd as it happens, then share the list. Version \(AppInfo.version).")
+                    Text("Boards screen, ••• menu, Tester notes: jot down anything odd as it happens, then share the list. Version \(AppInfo.version).")
                 }
             }
             .navigationTitle("How to use Match")

@@ -8,16 +8,18 @@ struct MatchApp: App {
 
     var body: some Scene {
         WindowGroup {
-            HomeView().environmentObject(store)
+            CaptureView().environmentObject(store)
         }
     }
 }
 
-// MARK: - Home
+// MARK: - Library
 
+/// Every board, grouped by scene, opened from the capture screen. Opens on the board being shot.
 struct HomeView: View {
     @EnvironmentObject private var store: BoardStore
-    @State private var path: [UUID] = []
+    @Environment(\.dismiss) private var dismiss
+    @State private var path: [UUID]
     @State private var creating: Board?
     @State private var search = ""
     @State private var deletingBoards: [Board] = []
@@ -25,7 +27,10 @@ struct HomeView: View {
     @State private var showingNotes = false
     @State private var sharing: SharedFile?
     @State private var backupError: String?
-    @AppStorage("seenHelp") private var seenHelp = false
+
+    init(openBoard: UUID? = nil) {
+        _path = State(initialValue: openBoard.map { [$0] } ?? [])
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -62,10 +67,17 @@ struct HomeView: View {
                     .padding(.bottom, 4)
             }
             .searchable(text: $search, prompt: "Character, prop or note")
-            .navigationTitle("Continuity")
+            .navigationTitle("Boards")
             .navigationDestination(for: UUID.self) { id in BoardView(boardID: id) }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label("Camera", systemImage: "camera.fill")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button { showingHelp = true } label: { Label("How to use Match", systemImage: "questionmark.circle") }
                         Button { showingNotes = true } label: { Label("Tester notes", systemImage: "note.text") }
@@ -92,7 +104,7 @@ struct HomeView: View {
                     deletingBoards = []
                 }
             }
-            .sheet(isPresented: $showingHelp, onDismiss: { seenHelp = true }) { HelpView() }
+            .sheet(isPresented: $showingHelp) { HelpView() }
             .sheet(isPresented: $showingNotes) { TesterNotesView() }
             .sheet(item: $sharing) { file in ShareSheet(items: [file.url]) }
             .alert("Backup", isPresented: Binding(get: { backupError != nil }, set: { if !$0 { backupError = nil } })) {
@@ -100,7 +112,6 @@ struct HomeView: View {
             } message: {
                 Text(backupError ?? "")
             }
-            .onAppear { if !seenHelp { showingHelp = true } }
             .sheet(item: $creating) { board in
                 BoardEditor(board: board, isNew: true) { saved in
                     store.save(saved)
@@ -211,8 +222,8 @@ struct BoardEditor: View {
 /// One board: the take counter, quick actions, reference photos, then every photo by take.
 struct BoardView: View {
     @EnvironmentObject private var store: BoardStore
+    @Environment(\.shoot) private var shoot
     let boardID: UUID
-    @State private var matching: MatchRequest?
     @State private var comparing: ComparePair?
     @State private var viewing: Shot?
     @State private var editing = false
@@ -282,14 +293,11 @@ struct BoardView: View {
         .fileImporter(isPresented: $importingFiles, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
             importFiles(result)
         }
-        .fullScreenCover(item: $matching) { request in
-            MatchCameraView(boardID: boardID, ghost: request.ghost).environmentObject(store)
-        }
         .fullScreenCover(item: $comparing) { pair in
             CompareView(boardID: boardID, before: pair.before, after: pair.after).environmentObject(store)
         }
         .sheet(item: $viewing) { shot in
-            ShotView(boardID: boardID, shotID: shot.id).environmentObject(store)
+            ShotView(boardID: boardID, shotID: shot.id).environmentObject(store).environment(\.shoot, shoot)
         }
         .sheet(isPresented: $editing) {
             BoardEditor(board: board, isNew: false) { store.save($0) }
@@ -312,7 +320,7 @@ struct BoardView: View {
     private func actions(_ board: Board) -> some View {
         HStack(spacing: 10) {
             actionButton("Camera", systemImage: "camera.viewfinder") {
-                matching = MatchRequest(ghost: board.references.last ?? board.newest)
+                shoot(board.id)
             }
             Menu {
                 PhotosPicker(selection: $pickerItems, maxSelectionCount: 30, selectionBehavior: .ordered, matching: .images) {
@@ -356,7 +364,7 @@ struct BoardView: View {
                         ShotThumbnail(shot: shot, boardID: board.id)
                     }
                     .contextMenu {
-                        Button { matching = MatchRequest(ghost: shot) } label: { Label("Match with camera", systemImage: "camera.viewfinder") }
+                        Button { shoot(board.id, ghost: shot) } label: { Label("Match with camera", systemImage: "camera.viewfinder") }
                         Button {
                             comparing = ComparePair(before: board.reference(for: shot)?.id, after: shot.id)
                         } label: { Label("Compare with reference", systemImage: "rectangle.split.2x1") }
@@ -445,11 +453,6 @@ struct BoardView: View {
     }
 }
 
-struct MatchRequest: Identifiable {
-    let id = UUID()
-    let ghost: Shot?
-}
-
 /// The scene's take counter, shared by every board in the scene. Prep is before the first take.
 struct TakeBar: View {
     @EnvironmentObject private var store: BoardStore
@@ -533,7 +536,7 @@ struct ShotView: View {
     @State private var image: UIImage?
     @State private var zoom = ZoomState()
     @State private var editing = false
-    @State private var matching: MatchRequest?
+    @Environment(\.shoot) private var shoot
     @State private var comparing: ComparePair?
     @State private var confirmingDelete = false
 
@@ -583,7 +586,7 @@ struct ShotView: View {
                             Label("Reference", systemImage: shot.isReference ? "star.fill" : "star")
                         }
                         Spacer()
-                        Button { matching = MatchRequest(ghost: shot) } label: { Label("Match", systemImage: "camera.viewfinder") }
+                        Button { shoot(boardID, ghost: shot) } label: { Label("Match", systemImage: "camera.viewfinder") }
                         Spacer()
                         Button {
                             comparing = ComparePair(before: board.reference(for: shot)?.id, after: shot.id)
@@ -613,9 +616,6 @@ struct ShotView: View {
                 if let shot {
                     ShotEditor(shot: shot) { store.update($0, in: boardID) }
                 }
-            }
-            .fullScreenCover(item: $matching) { request in
-                MatchCameraView(boardID: boardID, ghost: request.ghost).environmentObject(store)
             }
             .fullScreenCover(item: $comparing) { pair in
                 CompareView(boardID: boardID, before: pair.before, after: pair.after).environmentObject(store)

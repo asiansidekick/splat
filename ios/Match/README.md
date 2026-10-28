@@ -1,6 +1,8 @@
 # Match (iOS)
 
-Photo-only continuity for hair, makeup, costume, props and set: take or import a few photos, then check against them before each take. No 3D scan, no internet, no computer. Runs on iPhone and iPad, portrait or landscape.
+Photo-only continuity for hair, makeup, costume, props and set. It opens straight into the camera, laid out like the iPhone Camera app so it can be used fast from muscle memory: board and take at the top (tap the take for the next one), reference thumbnails above the shutter (tap to overlay, tap again to clear), angles below them (picking one shows its reference), last photo bottom left (tap to compare), boards and photos bottom right.
+
+In short: take or import a few photos, then check against them before each take. No 3D scan, no internet, no computer. Runs on iPhone and iPad, portrait or landscape.
 
 1. **Boards.** Tap **+** for each character or prop you look after in a scene, for example "Sarah · Hair" in scene 12. The scene and department carry over from the last board. Add notes (hair tucked behind left ear, top button undone).
 2. **Take numbering.** Each scene has a take counter (Prep before the first take). Tap **Next take** as takes go by; every board in the scene follows it, and new photos are filed under the current take. Fix any photo's take later with **Edit**.
