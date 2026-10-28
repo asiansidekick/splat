@@ -42,8 +42,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     var orientation: UIInterfaceOrientation = .portrait
 
     private var current: Keyframe?
-    private var ghostSource: CIImage?
-    private var renderedFor: (id: String, viewport: CGSize, orientation: UIInterfaceOrientation)?
+    /// The decoded photo of the keyframe the ghost shows, kept so each redraw only warps it.
+    private var ghostSource: (id: String, image: CIImage)?
+    private var lastGhostPose: simd_float4x4?
     private var lastUpdate = Date.distantPast
     private var diffBusy = false
     private let ciContext = CIContext()
@@ -207,6 +208,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             slowToFind = false
         }
         modelsNode.isHidden = false
+        // Read every frame: during a rotation the new orientation arrives after the size change.
+        let screen = Screen.orientation
+        if orientation != screen { orientation = screen }
         if !show3D, let target = lockedKeyframe ?? current { updateAim(frame: frame, target: target) }
         let now = Date()
         guard now.timeIntervalSince(lastUpdate) > 0.1, viewport != .zero else { return }
@@ -256,23 +260,91 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     // MARK: Ghost photo
 
+    /// Redraws the ghost for where the phone is now: the reference photo is turned to match how
+    /// the phone is held and pointed (a rotation re-projection, exact for anything more than a
+    /// few metres away and close for nearer props), then laid out like the live camera.
     private func updateGhost(_ keyframe: Keyframe, frame: ARFrame) {
-        if let done = renderedFor, done.id == keyframe.id, done.viewport == viewport, done.orientation == orientation { return }
         guard !ghostBusy else { return }
-        // Loading and drawing the photo happens off the main thread so camera frames keep flowing.
-        let url = ReferenceStore.folder(for: reference.id).appendingPathComponent(keyframe.imageFile)
+        let camera = frame.camera.transform
+        if let last = lastGhostPose, ghostSource?.id == keyframe.id, ghost != nil,
+            Restorer.angle(between: last, and: camera) < 0.002, simd_distance(last.columns.3, camera.columns.3) < 0.002
+        { return }
+        if ghostSource?.id != keyframe.id {
+            let url = ReferenceStore.folder(for: reference.id).appendingPathComponent(keyframe.imageFile)
+            guard let cg = UIImage(contentsOfFile: url.path)?.cgImage else { return }
+            ghostSource = (keyframe.id, CIImage(cgImage: cg))
+        }
+        guard let source = ghostSource?.image else { return }
+        let resolution = frame.camera.imageResolution
+        let warp = Warp(
+            reference: keyframe.cameraToWorld, referenceIntrinsics: keyframe.cameraIntrinsics,
+            referenceSize: CGSize(width: keyframe.imageWidth, height: keyframe.imageHeight),
+            live: camera, liveIntrinsics: frame.camera.intrinsics, liveSize: resolution)
         let placement = Placement(display: frame.displayTransform(for: orientation, viewportSize: viewport), viewport: viewport)
-        let key = (keyframe.id, viewport, orientation)
         let context = ciContext
+        lastGhostPose = camera
         ghostBusy = true
         ghostQueue.async {
-            let image = CIImage(contentsOf: url).flatMap { Restorer.render($0, placement: placement, context: context) }
+            let image = warp.apply(to: source).flatMap { Restorer.render($0, placement: placement, context: context) }
             Task { @MainActor in
                 self.ghostBusy = false
-                guard let image else { return }
+                // Nil when the phone faces away from where the photo was taken; the aim ring guides back.
                 self.ghost = image
-                self.renderedFor = key
             }
+        }
+    }
+
+    private static func angle(between a: simd_float4x4, and b: simd_float4x4) -> Float {
+        let forward = simd_dot(simd_normalize(a.columns.2.xyz), simd_normalize(b.columns.2.xyz))
+        let side = simd_dot(simd_normalize(a.columns.0.xyz), simd_normalize(b.columns.0.xyz))
+        return acos(min(1, max(-1, min(forward, side))))
+    }
+
+    /// Moves a reference photo into the live camera's image as if only the camera's rotation had
+    /// changed: each corner's viewing direction is projected through the live camera.
+    struct Warp: @unchecked Sendable {
+        let reference: simd_float4x4
+        let referenceIntrinsics: simd_float3x3
+        let referenceSize: CGSize
+        let live: simd_float4x4
+        let liveIntrinsics: simd_float3x3
+        let liveSize: CGSize
+
+        /// The photo in the live camera's sensor image layout, the size of the live image, or nil
+        /// when the photo was taken facing away from where the camera points now.
+        func apply(to image: CIImage) -> CIImage? {
+            let w = Float(referenceSize.width)
+            let h = Float(referenceSize.height)
+            // Top left, top right, bottom right, bottom left, in reference image pixels.
+            let corners: [SIMD2<Float>] = [SIMD2(0, 0), SIMD2(w, 0), SIMD2(w, h), SIMD2(0, h)]
+            var projected: [CGPoint] = []
+            for corner in corners {
+                guard let point = project(corner) else { return nil }
+                // Core Image counts y from the bottom.
+                projected.append(CGPoint(x: CGFloat(point.x), y: liveSize.height - CGFloat(point.y)))
+            }
+            guard let filter = CIFilter(name: "CIPerspectiveTransform") else { return nil }
+            filter.setValue(image, forKey: kCIInputImageKey)
+            filter.setValue(CIVector(cgPoint: projected[0]), forKey: "inputTopLeft")
+            filter.setValue(CIVector(cgPoint: projected[1]), forKey: "inputTopRight")
+            filter.setValue(CIVector(cgPoint: projected[2]), forKey: "inputBottomRight")
+            filter.setValue(CIVector(cgPoint: projected[3]), forKey: "inputBottomLeft")
+            guard let warped = filter.outputImage else { return nil }
+            let canvas = CGRect(origin: .zero, size: liveSize)
+            return warped.cropped(to: canvas).composited(over: CIImage(color: .clear).cropped(to: canvas))
+        }
+
+        private func project(_ pixel: SIMD2<Float>) -> SIMD2<Float>? {
+            let k = referenceIntrinsics
+            // ARKit camera space: x right, y up, looking down -z.
+            let ray = SIMD3<Float>((pixel.x - k[2][0]) / k[0][0], -(pixel.y - k[2][1]) / k[1][1], -1)
+            let world = simd_float3x3(reference.columns.0.xyz, reference.columns.1.xyz, reference.columns.2.xyz) * ray
+            let liveRotation = simd_float3x3(live.columns.0.xyz, live.columns.1.xyz, live.columns.2.xyz)
+            let local = liveRotation.transpose * world
+            guard local.z < -0.05 else { return nil }
+            let z = -local.z
+            let l = liveIntrinsics
+            return SIMD2(l[0][0] * local.x / z + l[2][0], -l[1][1] * local.y / z + l[2][1])
         }
     }
 
