@@ -501,7 +501,6 @@ struct ReferenceThumbnail: View {
         return size >= 100 ? "\(day) \(date.formatted(date: .omitted, time: .shortened))" : day
     }
 }
-}
 
 /// Every reference, opened on the newest like the Camera app's photo viewer: swipe right for
 /// older ones, tap Load (or double-tap the photo) to bring up its ghost. The grid button shows them
