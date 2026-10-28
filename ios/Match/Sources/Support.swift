@@ -3,6 +3,8 @@ import UIKit
 
 /// Which build is installed, for bug reports.
 enum AppInfo {
+    static var build: String { Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?" }
+
     static var version: String {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "?"

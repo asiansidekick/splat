@@ -41,9 +41,9 @@ jobs:
         run: |
           mkdir -p Payload
           cp -R build/Release-iphoneos/Match.app Payload/
-          zip -qr Match-unsigned.ipa Payload
+          zip -qr Match-build-${{ github.run_number }}.ipa Payload
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Match-unsigned-ipa
-          path: ios/Match/Match-unsigned.ipa
+          name: Match-build-${{ github.run_number }}
+          path: ios/Match/Match-build-${{ github.run_number }}.ipa

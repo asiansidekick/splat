@@ -54,6 +54,13 @@ struct HomeView: View {
                     }
                 }
             }
+            .safeAreaInset(edge: .bottom) {
+                // Shows which build is installed, so an old install is easy to spot.
+                Text("Match build \(AppInfo.build)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 4)
+            }
             .searchable(text: $search, prompt: "Character, prop or note")
             .navigationTitle("Continuity")
             .navigationDestination(for: UUID.self) { id in BoardView(boardID: id) }

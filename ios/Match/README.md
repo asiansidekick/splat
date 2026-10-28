@@ -16,7 +16,7 @@ Photos are stored in the app's Documents folder (visible in the Files app). Re-s
 
 ## Install without a Mac
 
-Every push that touches `ios/Match` builds an unsigned IPA on GitHub Actions (`.github/workflows/ios-match.yml`). Download the **Match-unsigned-ipa** artifact from the run and install it with Sideloadly using your Apple ID.
+Every push that touches `ios/Match` builds an unsigned IPA on GitHub Actions (`.github/workflows/ios-match.yml`). Download the **Match-build-N** artifact from the run (N is the run number, also shown at the bottom of the app's home screen) and install `Match-build-N.ipa` with Sideloadly using your Apple ID.
 
 ## Build with a Mac
 
