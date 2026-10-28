@@ -29,10 +29,11 @@ struct CompareView: View {
     @State private var lineUp = true
     @State private var wipe = 0.5
     @State private var blend = 0.5
-    @State private var sensitivity = 0.5
+    @State private var sensitivity = 0.3
     @State private var changes: UIImage?
     @State private var zoom = ZoomState()
     @State private var sharing: SharedFile?
+    @State private var expanded = false
 
     init(boardID: UUID, before: UUID?, after: UUID?) {
         self.boardID = boardID
@@ -46,26 +47,42 @@ struct CompareView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 10) {
-                pickers
-                Picker("Mode", selection: $mode) {
-                    ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
+            GeometryReader { geometry in
+                // The photos get most of the screen: controls go in a side column in landscape,
+                // and the expand button hides them altogether.
+                let landscape = geometry.size.width > geometry.size.height
+                if landscape {
+                    HStack(spacing: 12) {
+                        framedPicture
+                        if !expanded {
+                            ScrollView {
+                                VStack(spacing: 12) { controls }
+                            }
+                            .frame(width: min(320, geometry.size.width * 0.38))
+                        }
+                    }
+                    .padding(8)
+                } else {
+                    VStack(spacing: 8) {
+                        framedPicture
+                        if !expanded { controls }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 8)
                 }
-                .pickerStyle(.segmented)
-                picture
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .modifier(ZoomGestures(zoom: $zoom))
-                modeControls
             }
-            .padding()
             .navigationTitle(board?.title ?? "Compare")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                ToolbarItemGroup(placement: .cancellationAction) {
                     Button(action: share) { Label("Share", systemImage: "square.and.arrow.up") }
                         .disabled(before == nil || after == nil)
+                    Button {
+                        withAnimation { expanded.toggle() }
+                    } label: {
+                        Label(expanded ? "Show controls" : "Hide controls",
+                              systemImage: expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -78,6 +95,24 @@ struct CompareView: View {
     }
 
     // MARK: Pieces
+
+    private var framedPicture: some View {
+        picture
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .modifier(ZoomGestures(zoom: $zoom))
+    }
+
+    @ViewBuilder
+    private var controls: some View {
+        pickers
+        Picker("Mode", selection: $mode) {
+            ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        modeControls
+    }
 
     private var pickers: some View {
         HStack {
@@ -203,8 +238,9 @@ struct CompareView: View {
             changes = nil
             return
         }
-        // Sensitivity 0...1 maps to a difference threshold of 0.35 down to 0.06.
-        let threshold = Float(0.35 - 0.29 * sensitivity)
+        // Sensitivity 0...1 maps to a difference threshold of 0.4 down to 0.08. The default (0.3)
+        // ignores small shifts from lighting and imperfect lining up, so only real changes show.
+        let threshold = Float(0.4 - 0.32 * sensitivity)
         let image = await Task.detached(priority: .userInitiated) { Differ.changes(difference, threshold: threshold) }.value
         guard !Task.isCancelled else { return }
         changes = image

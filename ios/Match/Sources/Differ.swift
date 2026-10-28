@@ -63,10 +63,10 @@ enum Differ {
         cut.threshold = threshold
         let shrink = CIFilter.morphologyMinimum()
         shrink.inputImage = cut.outputImage?.clampedToExtent()
-        shrink.radius = 2
+        shrink.radius = 4  // drops thin edges left by imperfect lining up
         let grow = CIFilter.morphologyMaximum()
         grow.inputImage = shrink.outputImage
-        grow.radius = 7
+        grow.radius = 6
         let red = CIFilter.colorMatrix()
         red.inputImage = grow.outputImage
         red.rVector = CIVector(x: 0, y: 0, z: 0, w: 0)
@@ -173,7 +173,7 @@ enum Differ {
     private static func differenceMap(_ a: CIImage, _ b: CIImage) -> CIImage {
         let extent = b.extent
         func soften(_ image: CIImage) -> CIImage {
-            image.clampedToExtent().applyingGaussianBlur(sigma: 2.5).cropped(to: extent)
+            image.clampedToExtent().applyingGaussianBlur(sigma: 4).cropped(to: extent)
         }
         let difference = CIFilter.differenceBlendMode()
         difference.inputImage = soften(a)

@@ -209,13 +209,35 @@ struct MatchCameraView: View {
     private var board: Board? { store.board(boardID) }
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        GeometryReader { geometry in
+            // Controls sit beside the picture, never on it: a bar above and below in portrait,
+            // columns either side in landscape, like the built-in Camera app.
+            let landscape = geometry.size.width > geometry.size.height
+            let layout = landscape ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
+            layout {
+                if landscape { leftColumn } else { topBar }
+                viewfinder
+                if landscape { rightColumn } else { bottomBar }
+            }
+        }
+        .background(Color.black.ignoresSafeArea())
+        .foregroundStyle(.white)
+        .statusBarHidden()
+        .onAppear { camera.start() }
+        .onDisappear { camera.stop() }
+        .task(id: ghostID) { await loadGhost() }
+        .fullScreenCover(item: $comparing) { pair in
+            CompareView(boardID: boardID, before: pair.before, after: pair.after).environmentObject(store)
+        }
+    }
+
+    private var viewfinder: some View {
+        ZStack(alignment: .top) {
             ZStack {
                 CameraPreview(camera: camera)
                 ghostLayer
             }
-            .ignoresSafeArea()
+            .clipped()
             .contentShape(Rectangle())
             .gesture(ghostGesture)
             .onTapGesture(count: 2) {
@@ -224,25 +246,16 @@ struct MatchCameraView: View {
                     ghostOffset = .zero
                 }
             }
-            if flash { Color.white.opacity(0.6).ignoresSafeArea().allowsHitTesting(false) }
-            VStack(spacing: 10) {
-                topBar
+            if flash { Color.white.opacity(0.6).allowsHitTesting(false) }
+            VStack(spacing: 6) {
                 if camera.paused {
                     banner("Camera paused. On iPad it stops while another app uses it.")
                 }
                 if let error = camera.error { banner(error) }
-                Spacer()
-                controls
             }
-            .padding()
+            .padding(8)
         }
-        .statusBarHidden()
-        .onAppear { camera.start() }
-        .onDisappear { camera.stop() }
-        .task(id: ghostID) { await loadGhost() }
-        .fullScreenCover(item: $comparing) { pair in
-            CompareView(boardID: boardID, before: pair.before, after: pair.after).environmentObject(store)
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -277,70 +290,118 @@ struct MatchCameraView: View {
                 .onEnded { _ in dragStart = nil })
     }
 
-    private var topBar: some View {
-        HStack {
-            Button("Done") { dismiss() }
-                .buttonStyle(.borderedProminent)
-                .tint(.black.opacity(0.5))
-            Spacer()
-            if let board {
-                Text("Sc \(board.scene) · \(board.subject.isEmpty ? board.department.name : board.subject)")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.ultraThinMaterial, in: Capsule())
-            }
-            Spacer()
-            Button {
-                camera.flip()
-            } label: {
-                Image(systemName: "arrow.triangle.2.circlepath.camera")
-                    .font(.title2)
-                    .padding(8)
-                    .background(.ultraThinMaterial, in: Circle())
-            }
-            .accessibilityLabel("Switch camera")
-        }
+    private var title: String {
+        guard let board else { return "" }
+        return "Sc \(board.scene) · \(board.subject.isEmpty ? board.department.name : board.subject)"
     }
 
-    private var controls: some View {
-        VStack(spacing: 12) {
-            if ghost != nil {
-                HStack {
-                    Image(systemName: "circle.lefthalf.filled")
-                    Slider(value: $opacity, in: 0...1)
-                    Button {
-                        outlines.toggle()
-                    } label: {
-                        Image(systemName: outlines ? "square.dashed" : "photo")
-                            .frame(width: 30)
-                    }
-                    .accessibilityLabel(outlines ? "Show whole photo" : "Show outlines only")
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: Capsule())
-            }
-            HStack(spacing: 8) {
-                ghostMenu
-                angleMenu
-                takeMenu
-            }
-            HStack {
-                lastShotButton
-                Spacer()
-                Button(action: shoot) {
-                    ZStack {
-                        Circle().fill(.white).frame(width: 66, height: 66)
-                        Circle().stroke(.white, lineWidth: 4).frame(width: 78, height: 78)
-                    }
-                }
-                .accessibilityLabel("Take photo")
-                Spacer()
-                Color.clear.frame(width: 56, height: 56)
+    private var doneButton: some View {
+        Button("Done") { dismiss() }
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.yellow)
+    }
+
+    private var flipButton: some View {
+        Button {
+            camera.flip()
+        } label: {
+            Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3)
+        }
+        .accessibilityLabel("Switch camera")
+    }
+
+    private var outlinesButton: some View {
+        Button {
+            outlines.toggle()
+        } label: {
+            Image(systemName: outlines ? "square.dashed" : "photo").frame(width: 30, height: 30)
+        }
+        .accessibilityLabel(outlines ? "Show whole photo" : "Show outlines only")
+    }
+
+    private var shutter: some View {
+        Button(action: shoot) {
+            ZStack {
+                Circle().fill(.white).frame(width: 58, height: 58)
+                Circle().stroke(.white, lineWidth: 3).frame(width: 68, height: 68)
             }
         }
-        .foregroundStyle(.white)
+        .accessibilityLabel("Take photo")
+    }
+
+    // Portrait
+
+    private var topBar: some View {
+        HStack {
+            doneButton
+            Spacer()
+            Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+            Spacer()
+            flipButton
+        }
+        .padding(.horizontal)
+        .frame(height: 40)
+    }
+
+    private var bottomBar: some View {
+        VStack(spacing: 6) {
+            if ghost != nil {
+                HStack(spacing: 10) {
+                    Image(systemName: "circle.lefthalf.filled")
+                    Slider(value: $opacity, in: 0...1)
+                    outlinesButton
+                }
+                .padding(.horizontal)
+            }
+            HStack(alignment: .center) {
+                lastShotButton
+                Spacer(minLength: 4)
+                ghostMenu
+                Spacer(minLength: 4)
+                shutter
+                Spacer(minLength: 4)
+                angleMenu
+                Spacer(minLength: 4)
+                takeMenu
+            }
+            .padding(.horizontal)
+        }
+        .padding(.vertical, 8)
+    }
+
+    // Landscape
+
+    private var leftColumn: some View {
+        VStack(spacing: 12) {
+            doneButton
+            Spacer(minLength: 4)
+            if ghost != nil {
+                Image(systemName: "circle.lefthalf.filled")
+                Slider(value: $opacity, in: 0...1)
+                    .frame(width: 130)
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: 36, height: 130)
+                outlinesButton
+            }
+            Spacer(minLength: 4)
+            flipButton
+        }
+        .padding(.vertical, 12)
+        .frame(width: 76)
+    }
+
+    private var rightColumn: some View {
+        VStack(spacing: 8) {
+            takeMenu
+            angleMenu
+            Spacer(minLength: 4)
+            shutter
+            Spacer(minLength: 4)
+            ghostMenu
+            lastShotButton
+        }
+        .padding(.vertical, 12)
+        .frame(width: 96)
     }
 
     private var ghostMenu: some View {
@@ -359,7 +420,7 @@ struct MatchCameraView: View {
                 }
             }
         } label: {
-            chip(ghostID == nil ? "No overlay" : "Overlay", systemImage: "square.on.square")
+            control(ghostID == nil ? "No overlay" : "Overlay", systemImage: "square.on.square")
         }
     }
 
@@ -370,7 +431,7 @@ struct MatchCameraView: View {
                 ForEach(Slate.angles, id: \.self) { Text($0).tag($0) }
             }
         } label: {
-            chip(angle.isEmpty ? "Angle" : angle, systemImage: "camera.rotate")
+            control(angle.isEmpty ? "Angle" : angle, systemImage: "camera.rotate")
         }
     }
 
@@ -384,7 +445,7 @@ struct MatchCameraView: View {
                 Button("Prep") { store.setTake(0, for: scene) }
             }
         } label: {
-            chip(Slate.shortTake(take), systemImage: "film")
+            control(Slate.shortTake(take), systemImage: "film")
         }
     }
 
@@ -398,23 +459,23 @@ struct MatchCameraView: View {
                 Image(uiImage: thumbnail)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: 56, height: 56)
+                    .frame(width: 48, height: 48)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white, lineWidth: 2))
             }
             .accessibilityLabel("Compare last photo")
         } else {
-            Color.clear.frame(width: 56, height: 56)
+            Color.clear.frame(width: 48, height: 48)
         }
     }
 
-    private func chip(_ title: String, systemImage: String) -> some View {
-        Label(title, systemImage: systemImage)
-            .font(.subheadline)
-            .lineLimit(1)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(.ultraThinMaterial, in: Capsule())
+    /// A small icon with a caption, so the bars stay slim.
+    private func control(_ title: String, systemImage: String) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: systemImage).font(.title3)
+            Text(title).font(.caption2).lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .frame(width: 60, height: 44)
     }
 
     private func banner(_ text: String) -> some View {
