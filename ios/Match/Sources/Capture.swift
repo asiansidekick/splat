@@ -108,7 +108,7 @@ struct CaptureView: View {
             }
         }
         .sheet(isPresented: $showingHelp, onDismiss: { seenHelp = true }) { HelpView() }
-        .sheet(isPresented: $showingGallery) {
+        .fullScreenCover(isPresented: $showingGallery) {
             if let board {
                 GalleryView(board: board, overlay: ghostID, last: lastShot ?? board.newest) { choice in
                     showingGallery = false
@@ -535,8 +535,9 @@ struct CaptureView: View {
 
 // MARK: - Gallery
 
-/// The board's photos, references first. Tap one to show it over the camera; compare the latest
-/// photo from the top.
+/// The board's photos full screen, swiped through like the Photos app: references first, then the
+/// rest newest first, opening on the overlay (else the latest reference). A filmstrip at the bottom
+/// jumps along; Use shows the photo over the camera; Compare puts it against its reference.
 struct GalleryView: View {
     enum Choice {
         case overlay(Shot?)
@@ -546,71 +547,181 @@ struct GalleryView: View {
     @EnvironmentObject private var store: BoardStore
     @Environment(\.dismiss) private var dismiss
     let board: Board
-    let overlay: UUID?
-    let last: Shot?
     let onChoose: (Choice) -> Void
+    @State private var selection: UUID?
+    private let shots: [Shot]
 
-    private let grid = [GridItem(.adaptive(minimum: 96), spacing: 6)]
+    init(board: Board, overlay: UUID?, last: Shot?, onChoose: @escaping (Choice) -> Void) {
+        self.board = board
+        self.onChoose = onChoose
+        let others = board.shots.filter { !$0.isReference }.sorted { $0.taken > $1.taken }
+        shots = Array(board.references.reversed()) + others
+        _selection = State(initialValue: overlay ?? board.references.last?.id ?? shots.first?.id)
+    }
+
+    private var current: Shot? { shots.first { $0.id == selection } }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    if let last, board.shots.count > 1 {
-                        Button {
-                            let shown = overlay.flatMap { id in board.shots.first { $0.id == id } }
-                            let before = shown?.id == last.id ? board.reference(for: last) : (shown ?? board.reference(for: last))
-                            onChoose(.compare(before: before?.id, after: last.id))
-                        } label: {
-                            Label("Compare latest photo with its reference", systemImage: "rectangle.split.2x1")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    section("References", board.references.reversed())
-                    ForEach(board.takes, id: \.self) { take in
-                        section(Slate.takeName(take), board.shots(in: take).filter { !$0.isReference }.reversed())
+            VStack(spacing: 0) {
+                TabView(selection: $selection) {
+                    ForEach(shots) { shot in
+                        GalleryPage(shot: shot, boardID: board.id)
+                            .tag(Optional(shot.id))
                     }
                 }
-                .padding()
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .background(Color.black)
+                if let current {
+                    caption(current)
+                }
+                filmstrip
             }
+            .background(Color.black.ignoresSafeArea())
             .navigationTitle(board.title)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar, .bottomBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("No overlay") { onChoose(.overlay(nil)) }
-                }
-                ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("No overlay") { onChoose(.overlay(nil)) }
+                }
+                ToolbarItemGroup(placement: .bottomBar) {
+                    if let current {
+                        Button {
+                            onChoose(.compare(before: board.reference(for: current)?.id, after: current.id))
+                        } label: {
+                            Label("Compare", systemImage: "rectangle.split.2x1")
+                        }
+                        .disabled(board.shots.count < 2)
+                        Spacer()
+                        Button {
+                            onChoose(.overlay(current))
+                        } label: {
+                            Text("Use as overlay").bold()
+                        }
+                    }
+                }
+            }
+        }
+        .environment(\.colorScheme, .dark)
+    }
+
+    private func caption(_ shot: Shot) -> some View {
+        VStack(spacing: 2) {
+            Text((shot.isReference ? "★ Reference · " : "") + shot.label)
+                .font(.subheadline.weight(.semibold))
+            if !shot.note.isEmpty {
+                Text(shot.note).font(.caption).lineLimit(2)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(Color.black)
+    }
+
+    private var filmstrip: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 3) {
+                    ForEach(shots) { shot in
+                        Button {
+                            withAnimation { selection = shot.id }
+                        } label: {
+                            Group {
+                                if let image = store.thumbnail(shot, in: board.id) {
+                                    Image(uiImage: image).resizable().scaledToFill()
+                                } else {
+                                    Color.gray
+                                }
+                            }
+                            .frame(width: shot.id == selection ? 46 : 34, height: 46)
+                            .clipped()
+                            .overlay(alignment: .topLeading) {
+                                if shot.isReference {
+                                    Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.yellow).padding(2)
+                                }
+                            }
+                        }
+                        .id(shot.id)
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+            .frame(height: 52)
+            .background(Color.black)
+            .onAppear { if let selection { proxy.scrollTo(selection, anchor: .center) } }
+            .onChange(of: selection) { _, id in
+                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
             }
         }
     }
+}
 
-    @ViewBuilder
-    private func section(_ title: String, _ shots: [Shot]) -> some View {
-        if !shots.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.headline)
-                LazyVGrid(columns: grid, spacing: 6) {
-                    ForEach(shots) { shot in
-                        Button {
-                            onChoose(.overlay(shot))
-                        } label: {
-                            ShotThumbnail(shot: shot, boardID: board.id)
-                                .overlay(RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.yellow, lineWidth: shot.id == overlay ? 3 : 0))
-                        }
-                        .contextMenu {
-                            Button {
-                                onChoose(.compare(before: board.reference(for: shot)?.id, after: shot.id))
-                            } label: {
-                                Label("Compare with reference", systemImage: "rectangle.split.2x1")
-                            }
-                        }
-                    }
+/// One photo in the gallery. Pinch to zoom; drag pans only once zoomed, so swiping still turns pages.
+private struct GalleryPage: View {
+    let shot: Shot
+    let boardID: UUID
+    @State private var image: UIImage?
+    @State private var scale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var pinchStart: CGFloat?
+    @State private var dragStart: CGSize?
+
+    var body: some View {
+        ZStack {
+            Color.black
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .scaleEffect(scale)
+                    .offset(offset)
+            } else {
+                ProgressView().tint(.white)
+            }
+        }
+        .clipped()
+        .contentShape(Rectangle())
+        .gesture(
+            MagnifyGesture()
+                .onChanged { value in
+                    if pinchStart == nil { pinchStart = scale }
+                    scale = min(max((pinchStart ?? 1) * value.magnification, 1), 8)
+                }
+                .onEnded { _ in
+                    pinchStart = nil
+                    if scale < 1.05 { withAnimation { scale = 1; offset = .zero } }
+                }
+        )
+        .gesture(scale > 1 ? pan : nil)
+        .onTapGesture(count: 2) {
+            withAnimation {
+                if scale > 1 {
+                    scale = 1
+                    offset = .zero
+                } else {
+                    scale = 2.5
                 }
             }
         }
+        .task {
+            let shot = shot
+            let boardID = boardID
+            image = await Task.detached(priority: .userInitiated) { BoardStore.image(shot, in: boardID, maxPixels: 2048) }.value
+        }
+    }
+
+    private var pan: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                if dragStart == nil { dragStart = offset }
+                let start = dragStart ?? .zero
+                offset = CGSize(width: start.width + value.translation.width, height: start.height + value.translation.height)
+            }
+            .onEnded { _ in dragStart = nil }
     }
 }

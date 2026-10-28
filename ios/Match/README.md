@@ -1,6 +1,6 @@
 # Match (iOS)
 
-Photo-only continuity for hair, makeup, costume, props and set. It opens straight into the camera, laid out like the iPhone Camera app so it can be used fast from muscle memory: board and take at the top (tap the take for the next one), angles above the shutter (picking one shows its reference over the camera), one reference thumbnail bottom left (tap for the gallery: pick any photo as the overlay, or compare the latest photo), boards and photos bottom right. Nothing is saved until the shutter is pressed.
+Photo-only continuity for hair, makeup, costume, props and set. It opens straight into the camera, laid out like the iPhone Camera app so it can be used fast from muscle memory: board and take at the top (tap the take for the next one), angles above the shutter (picking one shows its reference over the camera), one reference thumbnail bottom left (tap for a swipeable gallery: Use as overlay, or Compare), boards and photos bottom right. Nothing is saved until the shutter is pressed.
 
 In short: take or import a few photos, then check against them before each take. No 3D scan, no internet, no computer. Runs on iPhone and iPad, portrait or landscape.
 
