@@ -867,6 +867,7 @@ struct CaptureStage: View {
     @AppStorage("useLiDAR") private var useLiDAR = true
     @State private var holder = CameraViewHolder()
     @State private var importingModels = false
+    @State private var justSaved = false
 
     private var slate: String { scene + setup }
 
@@ -897,6 +898,10 @@ struct CaptureStage: View {
                     holder.view = view
                 }
                 ModelSizeBadge(placer: recorder.placer)
+                if mode == .snapshot && (recorder.pendingSave || recorder.saving || justSaved) {
+                    ScanProgressOverlay(progress: justSaved ? 1 : recorder.scanProgress, saved: justSaved)
+                        .transition(.opacity)
+                }
                 VStack {
                     Banner(text: status, tint: recorder.capturing ? .red : .black)
                     Spacer()
@@ -934,7 +939,14 @@ struct CaptureStage: View {
             if case .success(let urls) = result { recorder.placer.add(from: urls) }
         }
         .onAppear {
-            recorder.onSaved = onSaved
+            recorder.onSaved = { reference in
+                onSaved(reference)
+                withAnimation(.snappy) { justSaved = true }
+                Task {
+                    try? await Task.sleep(for: .seconds(0.8))
+                    withAnimation(.snappy) { justSaved = false }
+                }
+            }
             recorder.prepare(useLiDAR: useLiDAR)
         }
         .onDisappear { recorder.stop() }
@@ -1247,5 +1259,37 @@ struct ResetStage: View {
 
     private func save() {
         try? ReferenceStore.save(reference)
+    }
+}
+
+/// After the shutter in Reference mode: a ring filling as the room is mapped, then a tick when the
+/// reference is saved.
+struct ScanProgressOverlay: View {
+    let progress: Double
+    let saved: Bool
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.25), lineWidth: 8)
+                Circle()
+                    .trim(from: 0, to: max(0.02, progress))
+                    .stroke(saved ? Color.green : Color.yellow, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeOut(duration: 0.3), value: progress)
+                if saved {
+                    Image(systemName: "checkmark").font(.title.bold()).foregroundStyle(.green)
+                } else {
+                    Text("\(Int(progress * 100))%").font(.title3.bold().monospacedDigit()).foregroundStyle(.white)
+                }
+            }
+            .frame(width: 90, height: 90)
+            Text(saved ? "Saved" : "Scanning. Move gently side to side")
+                .font(.subheadline.bold())
+                .foregroundStyle(.white)
+        }
+        .padding(18)
+        .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 18))
+        .allowsHitTesting(false)
     }
 }

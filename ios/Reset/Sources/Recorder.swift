@@ -47,6 +47,8 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     var onSaved: ((Reference) -> Void)?
     /// Set when the person has asked to save; the save happens as soon as ARKit's map is ready.
     @Published var pendingSave = false
+    /// How far ARKit has got mapping the room, 0 to 1, for the scanning overlay.
+    @Published var scanProgress = 0.0
     /// Whether a reference is being captured (the shutter was tapped and it is not saved yet).
     @Published var capturing = false
 
@@ -180,11 +182,27 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         true
     }
 
+    /// Mapping status in steps, filled in between by how many points of the room ARKit has found.
+    private func updateScanProgress(_ frame: ARFrame) {
+        let points = Double(frame.rawFeaturePoints?.points.count ?? 0)
+        let progress: Double
+        switch frame.worldMappingStatus {
+        case .mapped: progress = 1
+        case .extending: progress = 0.8 + min(0.15, points / 4000)
+        case .limited: progress = 0.2 + min(0.5, points / 1000)
+        default: progress = min(0.2, points / 1000)
+        }
+        // Only forwards while waiting to save, so the ring does not jump back.
+        let next = pendingSave ? max(scanProgress, progress) : progress
+        if abs(next - scanProgress) > 0.01 { scanProgress = next }
+    }
+
     private func handle(_ frame: ARFrame) {
         let isNormal: Bool
         if case .normal = frame.camera.trackingState { isNormal = true } else { isNormal = false }
         if trackingNormal != isNormal { trackingNormal = isNormal }
         if mappingStatus != frame.worldMappingStatus { mappingStatus = frame.worldMappingStatus }
+        updateScanProgress(frame)
         saveIfReady()
         guard isNormal, var reference, reference.keyframes.count < maxKeyframes, pendingWrites < 3 else { return }
 
