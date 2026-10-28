@@ -28,6 +28,14 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     @Published var cloudReady = false
     /// Added to the AR scene; sits in the reference's room coordinates once relocalised.
     let cloudNode = SCNNode()
+    /// Placed USDZ models, shown once the room is recognised so they appear in the right place.
+    let modelsNode = SCNNode()
+    /// Everything this screen draws in 3D.
+    let sceneContent = SCNNode()
+    @Published var models: [PlacedModel] = []
+    @Published var selectedModel: UUID?
+    @Published var modelError: String?
+    var modelNodes: [UUID: SCNNode] = [:]
 
     let session = ARSession()
     let reference: Reference
@@ -52,6 +60,10 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         super.init()
         cloudNode.isHidden = true
         cloudNode.opacity = 0.5
+        modelsNode.isHidden = true
+        sceneContent.addChildNode(cloudNode)
+        sceneContent.addChildNode(modelsNode)
+        models = reference.models
     }
 
     /// Whether the reference has LiDAR depth, which the 3D ghost is built from. Viewing it works on
@@ -84,6 +96,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             session.run(config, options: [.resetTracking, .removeExistingAnchors])
             status = .relocalizing
             buildCloud()
+            loadSavedModels()
         } catch {
             status = .failed("Could not open this reference: \(error.localizedDescription)")
         }
@@ -120,9 +133,11 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         // ARKit reports normal tracking once it has recognised the saved room.
         guard case .normal = frame.camera.trackingState else {
             if status == .ready { status = .relocalizing }
+            modelsNode.isHidden = true
             return
         }
         if status != .ready { status = .ready }
+        modelsNode.isHidden = false
         let now = Date()
         guard now.timeIntervalSince(lastUpdate) > 0.1, viewport != .zero else { return }
         lastUpdate = now

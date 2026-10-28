@@ -32,6 +32,8 @@ struct Reference: Codable, Identifiable {
     var takes: [Take] = []
     /// Photos (and depth) taken later from the reset screen, in the same room coordinates.
     var snapshots: [Snapshot] = []
+    /// USDZ models placed in the room, such as scans of props.
+    var models: [PlacedModel] = []
 
     var hasDepth: Bool { keyframes.contains { $0.depthFile != nil } }
     var slate: String { scene + setup }
@@ -54,6 +56,7 @@ extension Reference {
         keyframes = try c.decode([Keyframe].self, forKey: .keyframes)
         takes = try c.decodeIfPresent([Take].self, forKey: .takes) ?? []
         snapshots = try c.decodeIfPresent([Snapshot].self, forKey: .snapshots) ?? []
+        models = try c.decodeIfPresent([PlacedModel].self, forKey: .models) ?? []
     }
 }
 

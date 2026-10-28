@@ -16,6 +16,8 @@ Put a set back the way it was, entirely on an iPhone or iPad. No internet, no co
 4. **Quick snapshot** instead of walking around: on the record screen pick **Quick snapshot**, sway the phone gently for a couple of seconds, then tap the shutter (once, or from a few angles) and save.
 5. **Snapshots and Compare**: on the reset screen, **Snapshot** saves how the set looks now (labelled "Before take N"), in the reference's own room coordinates. **Compare** puts any two side by side with a wipe slider, the reference or an earlier snapshot against a later one, and with LiDAR highlights in red and blue what moved between them. Compare needs no camera, so it works for review away from the set.
 
+6. **3D models**: on the reset screen open the controls (chevron) and tap **Add 3D model (USDZ)**, for example a Polycam or Object Capture scan of a prop. It is placed at real size on the surface in the middle of the screen. Tap it to select, drag to move it over surfaces, pinch to scale, twist to turn; **True size** undoes scaling. Models are saved with the reference and come back in the same place.
+
 The home screen groups setups by scene.
 
 References are stored in the app's Documents folder (visible in the Files app).

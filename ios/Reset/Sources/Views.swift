@@ -1,6 +1,7 @@
 import ARKit
 import SceneKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct ResetApp: App {
@@ -14,12 +15,16 @@ struct CameraView: UIViewRepresentable {
     let session: ARSession
     /// 3D content placed in ARKit's world coordinates, such as the 3D ghost.
     var content: SCNNode?
+    /// Called once with the view, for example to add gestures.
+    var onMake: ((ARSCNView) -> Void)?
 
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView(frame: .zero)
         view.session = session
         view.automaticallyUpdatesLighting = false
+        view.autoenablesDefaultLighting = true  // lights imported models
         if let content { view.scene.rootNode.addChildNode(content) }
+        onMake?(view)
         return view
     }
 
@@ -229,6 +234,7 @@ struct RestoreView: View {
     @State private var showingCompare = false
     @State private var snapshotNote: String?
     @State private var showingMore = false
+    @State private var importingModel = false
 
     init(reference: Reference) {
         _restorer = StateObject(wrappedValue: Restorer(reference: reference))
@@ -238,7 +244,9 @@ struct RestoreView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                CameraView(session: restorer.session, content: restorer.cloudNode)
+                CameraView(session: restorer.session, content: restorer.sceneContent) { view in
+                    restorer.attachGestures(to: view)
+                }
                 if !restorer.show3D, let ghost = restorer.ghost {
                     Image(uiImage: ghost)
                         .resizable()
@@ -304,6 +312,18 @@ struct RestoreView: View {
         .sheet(isPresented: $showingLog) {
             TakeLogView(reference: $reference)
         }
+        .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz]) { result in
+            if case .success(let url) = result { restorer.addModel(from: url) }
+        }
+        .onChange(of: restorer.models) { _, models in
+            reference.models = models
+            try? ReferenceStore.save(reference)
+        }
+        .alert("3D model", isPresented: Binding(get: { restorer.modelError != nil }, set: { if !$0 { restorer.modelError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(restorer.modelError ?? "")
+        }
         .onDisappear { restorer.stop() }
     }
 
@@ -330,6 +350,13 @@ struct RestoreView: View {
                         }
                         .pickerStyle(.segmented)
                     }
+                    Button {
+                        importingModel = true
+                    } label: {
+                        Label("Add 3D model (USDZ)", systemImage: "cube")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(restorer.status != .ready)
                     HStack {
                         Button(restorer.lockedKeyframe == nil ? "Hold view" : "Follow camera") {
                             restorer.toggleLock()
@@ -349,6 +376,19 @@ struct RestoreView: View {
                         .font(.caption2)
                         .labelStyle(.titleAndIcon)
                     }
+                }
+            }
+            if let name = restorer.selectedModelName {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(name): drag to move, pinch to scale, twist to turn").font(.caption2)
+                    HStack {
+                        Button("True size") { restorer.resetSelectedModelSize() }
+                        Button("Delete", role: .destructive) { restorer.deleteSelectedModel() }
+                        Spacer()
+                        Button("Done") { restorer.selectedModel = nil }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
             }
             if let snapshotNote {
