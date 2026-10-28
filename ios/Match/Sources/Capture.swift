@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -423,6 +424,12 @@ struct CaptureView: View {
         let shown = ghostID.flatMap { id in board?.shots.first { $0.id == id } }
         let shot = shown ?? board?.references.last
         Button {
+            if board == nil {
+                // Start a board, so photos can be imported before any are taken.
+                let fresh = store.newBoard()
+                store.save(fresh)
+                currentBoard = fresh.id.uuidString
+            }
             showingGallery = true
         } label: {
             ZStack {
@@ -440,7 +447,6 @@ struct CaptureView: View {
             }
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(shown != nil ? Color.yellow : .white, lineWidth: 2))
         }
-        .disabled(board?.shots.isEmpty ?? true)
         .accessibilityLabel("Reference photos")
     }
 
@@ -549,24 +555,41 @@ struct GalleryView: View {
 
     @EnvironmentObject private var store: BoardStore
     @Environment(\.dismiss) private var dismiss
-    let board: Board
+    private let boardID: UUID
+    private let fallback: Board
     let onChoose: (Choice) -> Void
     @State private var selection: UUID?
-    private let shots: [Shot]
+    @State private var picked: [PhotosPickerItem] = []
+    @State private var importing = 0
+    @State private var notice: String?
 
     init(board: Board, overlay: UUID?, last: Shot?, onChoose: @escaping (Choice) -> Void) {
-        self.board = board
+        boardID = board.id
+        fallback = board
         self.onChoose = onChoose
-        let others = board.shots.filter { !$0.isReference }.sorted { $0.taken > $1.taken }
-        shots = Array(board.references.reversed()) + others
-        _selection = State(initialValue: overlay ?? board.references.last?.id ?? shots.first?.id)
+        _selection = State(initialValue: overlay ?? board.references.last?.id ?? board.newest?.id)
     }
 
+    /// Live, so photos imported here show up straight away.
+    private var board: Board { store.board(boardID) ?? fallback }
+    private var shots: [Shot] {
+        Array(board.references.reversed()) + board.shots.filter { !$0.isReference }.sorted { $0.taken > $1.taken }
+    }
     private var current: Shot? { shots.first { $0.id == selection } }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                if shots.isEmpty {
+                    ContentUnavailableView {
+                        Label("No photos yet", systemImage: "photo.on.rectangle")
+                    } description: {
+                        Text("Take one with the shutter, or bring in photos and QTake screenshots from your Photos library.")
+                    } actions: {
+                        importButton(prominent: true)
+                    }
+                    .frame(maxHeight: .infinity)
+                }
                 TabView(selection: $selection) {
                     ForEach(shots) { shot in
                         GalleryPage(shot: shot, boardID: board.id)
@@ -580,6 +603,17 @@ struct GalleryView: View {
                 }
                 filmstrip
             }
+            .overlay(alignment: .top) {
+                if importing > 0 || notice != nil {
+                    Text(importing > 0 ? "Importing \(importing)…" : notice ?? "")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.top, 8)
+                }
+            }
+            .onChange(of: picked) { _, items in importPicked(items) }
             .background(Color.black.ignoresSafeArea())
             .navigationTitle(board.title)
             .navigationBarTitleDisplayMode(.inline)
@@ -588,7 +622,8 @@ struct GalleryView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItemGroup(placement: .confirmationAction) {
+                    importButton(prominent: false)
                     Button("No overlay") { onChoose(.overlay(nil)) }
                 }
                 ToolbarItemGroup(placement: .bottomBar) {
@@ -601,6 +636,12 @@ struct GalleryView: View {
                         .disabled(board.shots.count < 2)
                         Spacer()
                         Button {
+                            save(current)
+                        } label: {
+                            Label("Save to Photos", systemImage: "square.and.arrow.down")
+                        }
+                        Spacer()
+                        Button {
                             onChoose(.overlay(current))
                         } label: {
                             Text("Use as overlay").bold()
@@ -610,6 +651,55 @@ struct GalleryView: View {
             }
         }
         .environment(\.colorScheme, .dark)
+    }
+
+    /// Several photos at once from the Photos library, in the order picked.
+    private func importButton(prominent: Bool) -> some View {
+        PhotosPicker(selection: $picked, maxSelectionCount: 50, selectionBehavior: .ordered, matching: .images) {
+            if prominent {
+                Text("Import from Photos").bold()
+            } else {
+                Label("Import from Photos", systemImage: "photo.badge.plus")
+            }
+        }
+    }
+
+    private func importPicked(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        picked = []
+        importing = items.count
+        Task {
+            var first: Shot?
+            var failed = 0
+            for item in items {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                    let shot = await store.addShot(data, to: boardID, angle: "", source: .imported)
+                {
+                    first = first ?? shot
+                } else {
+                    failed += 1
+                }
+                importing -= 1
+            }
+            if let first { selection = first.id }
+            flash(failed == 0
+                  ? "Imported \(items.count) photo\(items.count == 1 ? "" : "s")"
+                  : "\(failed) of \(items.count) could not be imported (iCloud only, or storage full?)")
+        }
+    }
+
+    private func save(_ shot: Shot) {
+        Task {
+            let saved = await PhotoLibrary.save([BoardStore.url(of: shot, in: boardID)])
+            flash(saved ? "Saved to Photos" : PhotoLibrary.deniedMessage)
+        }
+    }
+
+    private func flash(_ text: String) {
+        withAnimation { notice = text }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            withAnimation { if notice == text { notice = nil } }
+        }
     }
 
     private func caption(_ shot: Shot) -> some View {

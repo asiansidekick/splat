@@ -280,6 +280,13 @@ struct BoardView: View {
                 Menu {
                     Button { editing = true } label: { Label("Edit board", systemImage: "pencil") }
                     Button { sharePDF(board) } label: { Label("Share PDF sheet", systemImage: "doc.richtext") }
+                    Button {
+                        Task {
+                            let saved = await PhotoLibrary.save(board.shots.sorted { $0.taken < $1.taken }.map { BoardStore.url(of: $0, in: board.id) })
+                            message = saved ? "Saved \(board.shots.count) photos to Photos." : PhotoLibrary.deniedMessage
+                        }
+                    } label: { Label("Save all photos to Photos", systemImage: "square.and.arrow.down.on.square") }
+                        .disabled(board.shots.isEmpty)
                 } label: {
                     Label("More", systemImage: "ellipsis.circle")
                 }
@@ -310,7 +317,7 @@ struct BoardView: View {
                 deleting = nil
             }
         }
-        .alert("Import", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+        .alert("Photos", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(message ?? "")
@@ -323,7 +330,7 @@ struct BoardView: View {
                 shoot(board.id)
             }
             Menu {
-                PhotosPicker(selection: $pickerItems, maxSelectionCount: 30, selectionBehavior: .ordered, matching: .images) {
+                PhotosPicker(selection: $pickerItems, maxSelectionCount: 50, selectionBehavior: .ordered, matching: .images) {
                     Label("Photos and screenshots", systemImage: "photo.on.rectangle")
                 }
                 Button { importingFiles = true } label: { Label("Files", systemImage: "folder") }

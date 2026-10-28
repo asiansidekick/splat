@@ -34,6 +34,7 @@ struct CompareView: View {
     @State private var zoom = ZoomState()
     @State private var sharing: SharedFile?
     @State private var expanded = false
+    @State private var notice: String?
 
     init(boardID: UUID, before: UUID?, after: UUID?) {
         self.boardID = boardID
@@ -71,12 +72,29 @@ struct CompareView: View {
                     .padding(.bottom, 8)
                 }
             }
+            .overlay(alignment: .top) {
+                if let notice {
+                    Text(notice)
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.top, 8)
+                }
+            }
             .navigationTitle(board?.title ?? "Compare")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .cancellationAction) {
-                    Button(action: share) { Label("Share", systemImage: "square.and.arrow.up") }
-                        .disabled(before == nil || after == nil)
+                    Menu {
+                        Button { Task { await saveToPhotos() } } label: { Label("Save to Photos", systemImage: "square.and.arrow.down") }
+                        Button(action: share) { Label("Share…", systemImage: "square.and.arrow.up") }
+                    } label: {
+                        Label("Save or share", systemImage: "square.and.arrow.up")
+                    } primaryAction: {
+                        Task { await saveToPhotos() }
+                    }
+                    .disabled(before == nil || after == nil)
                     Button {
                         withAnimation { expanded.toggle() }
                     } label: {
@@ -252,14 +270,28 @@ struct CompareView: View {
         changes = image
     }
 
-    private func share() {
-        guard let before, let after, let board else { return }
+    /// Before and after side by side as one JPEG, labelled.
+    private func pairFile() -> URL? {
+        guard let before, let after, let board else { return nil }
         let image = PairImage.make(
             before: before, after: after, title: "Scene \(board.scene) · \(board.title)",
             beforeLabel: beforeShot?.label ?? "Before", afterLabel: afterShot?.label ?? "After")
         let url = FileManager.default.temporaryDirectory.appending(path: Slate.fileSafe("Scene \(board.scene) compare.jpg"))
-        guard let data = image.jpegData(compressionQuality: 0.9), (try? data.write(to: url, options: .atomic)) != nil else { return }
-        sharing = SharedFile(url: url)
+        guard let data = image.jpegData(compressionQuality: 0.9), (try? data.write(to: url, options: .atomic)) != nil else { return nil }
+        return url
+    }
+
+    private func share() {
+        if let url = pairFile() { sharing = SharedFile(url: url) }
+    }
+
+    /// One tap: the side-by-side picture goes into Photos.
+    private func saveToPhotos() async {
+        guard let url = pairFile() else { return }
+        let saved = await PhotoLibrary.save([url])
+        withAnimation { notice = saved ? "Saved to Photos" : PhotoLibrary.deniedMessage }
+        try? await Task.sleep(for: .seconds(2.5))
+        withAnimation { notice = nil }
     }
 }
 

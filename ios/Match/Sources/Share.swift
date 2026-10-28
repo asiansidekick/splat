@@ -1,3 +1,4 @@
+import Photos
 import SwiftUI
 import UIKit
 
@@ -119,5 +120,25 @@ enum BoardPDF {
             }
         }
         return url
+    }
+}
+
+/// Saves into the iPhone or iPad Photos library. Asks only for permission to add, not to read.
+enum PhotoLibrary {
+    static let deniedMessage = "Match can't add to Photos. Turn it on in Settings, Match, Photos."
+
+    static func save(_ files: [URL]) async -> Bool {
+        let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+        guard status == .authorized || status == .limited, !files.isEmpty else { return false }
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                for file in files {
+                    PHAssetCreationRequest.forAsset().addResource(with: .photo, fileURL: file, options: nil)
+                }
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 }

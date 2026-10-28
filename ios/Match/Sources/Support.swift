@@ -65,6 +65,7 @@ struct HelpView: View {
                     Text("• Above the shutter: angles (Front, Left, Back…). Picking an angle shows that angle's reference see-through over the camera. The first photo of each angle becomes its reference.")
                     Text("• The slider sets how strong the overlay is, the eye hides it, the square shows outlines only. Pinch or drag the overlay to line up a QTake screenshot; double tap resets it.")
                     Text("• Bottom left: the reference thumbnail. Tap it for the gallery: swipe through the photos like the Photos app, tap Use as overlay to show one over the camera, or Compare to check it against its reference.")
+                    Text("• In the gallery: Import from Photos (top) brings in several photos or QTake screenshots at once; Save to Photos (bottom) puts the photo you are looking at into your Photos library. In Compare, the save button puts the side-by-side picture into Photos in one tap.")
                     Text("• Bottom right: boards and photos, for importing QTake screenshots, editing notes, PDFs and more.")
                 }
                 Section("Compare") {
