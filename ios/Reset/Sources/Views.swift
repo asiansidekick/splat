@@ -462,7 +462,21 @@ struct ReferenceThumbnail: View {
             }
             .frame(width: size, height: size)
             .clipped()
-            if let slate = reference?.slate, !slate.isEmpty {
+            if let reference, size >= 50 {
+                HStack(spacing: 3) {
+                    if !reference.slate.isEmpty { Text(reference.slate).bold() }
+                    Spacer(minLength: 0)
+                    Text(timestamp(reference.created))
+                }
+                .font(.system(size: size >= 100 ? 11 : 9).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, 3)
+                .padding(.vertical, 1)
+                .frame(width: size)
+                .background(Color.black.opacity(0.65))
+                .foregroundStyle(.white)
+            } else if let slate = reference?.slate, !slate.isEmpty {
                 Text(slate)
                     .font(.caption2.bold())
                     .padding(.horizontal, 4)
@@ -477,6 +491,16 @@ struct ReferenceThumbnail: View {
             if let reference { await thumbnails.load(reference) }
         }
     }
+
+    /// When it was recorded: the time today, otherwise the date (and time on bigger tiles).
+    private func timestamp(_ date: Date) -> String {
+        if Calendar.current.isDateInToday(date) {
+            return date.formatted(date: .omitted, time: .shortened)
+        }
+        let day = date.formatted(.dateTime.day().month(.abbreviated))
+        return size >= 100 ? "\(day) \(date.formatted(date: .omitted, time: .shortened))" : day
+    }
+}
 }
 
 /// Every reference, opened on the newest like the Camera app's photo viewer: swipe right for
