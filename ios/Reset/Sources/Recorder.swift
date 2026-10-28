@@ -33,7 +33,28 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
     }
 
-    func start(scene: String, setup: String, name: String, useLiDAR: Bool) {
+    /// Called with each reference once it is saved.
+    var onSaved: ((Reference) -> Void)?
+    /// Set when the person has asked to save; the save happens as soon as ARKit's map is ready.
+    @Published var pendingSave = false
+    /// Whether a reference is being captured (the shutter was tapped and it is not saved yet).
+    @Published var capturing = false
+
+    /// Starts the camera and mapping the room, before any reference exists, so the map is
+    /// usually ready by the time the shutter is tapped.
+    func prepare(useLiDAR: Bool) {
+        let config = ARWorldTrackingConfiguration()
+        if useLiDAR && Recorder.lidarAvailable {
+            config.frameSemantics.insert(.sceneDepth)
+        }
+        session.delegate = self
+        session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        Diagnostics.log("Camera start: LiDAR \(config.frameSemantics.contains(.sceneDepth))")
+    }
+
+    /// Starts a new reference in the running session.
+    func begin(scene: String, setup: String, name: String) {
+        guard reference == nil else { return }
         let id = UUID()
         do {
             try FileManager.default.createDirectory(at: ReferenceStore.folder(for: id), withIntermediateDirectories: true)
@@ -44,14 +65,24 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         reference = Reference(id: id, scene: scene, setup: setup, name: name, created: Date(), keyframes: [])
         lastSaved = nil
         keyframeCount = 0
+        capturing = true
+        error = nil
+        Diagnostics.log("Record start: \(scene)\(setup) \(name), auto \(autoCapture)")
+    }
 
-        let config = ARWorldTrackingConfiguration()
-        if useLiDAR && Recorder.lidarAvailable {
-            config.frameSemantics.insert(.sceneDepth)
+    /// Saves as soon as there is at least one view and the map is ready.
+    func saveWhenReady() {
+        pendingSave = true
+        autoCapture = false
+        saveIfReady()
+    }
+
+    private func saveIfReady() {
+        guard pendingSave, !saving, canSaveMap, keyframeCount > 0 else { return }
+        pendingSave = false
+        Task {
+            if let saved = await finish() { onSaved?(saved) }
         }
-        session.delegate = self
-        session.run(config, options: [.resetTracking, .removeExistingAnchors])
-        Diagnostics.log("Record start: \(scene)\(setup) \(name), LiDAR \(config.frameSemantics.contains(.sceneDepth)), auto \(autoCapture)")
     }
 
     /// ARKit's map is only reliable once it has seen enough; Apple's guidance is to save then.
@@ -79,11 +110,14 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
             try ReferenceStore.saveWorldMap(map, for: reference.id)
             reference.keyframes = self.reference?.keyframes ?? []
             try ReferenceStore.save(reference)
-            session.pause()
+            // The session keeps running, so the next reference starts with the room already mapped.
+            self.reference = nil
+            capturing = false
+            keyframeCount = 0
             Diagnostics.log("Record saved: \(reference.keyframes.count) keyframes")
             return reference
         } catch {
-            self.error = "Could not save the room map: \(error.localizedDescription). Keep moving slowly until the status says Mapped, then try again."
+            self.error = "Could not save the room map: \(error.localizedDescription). Move the phone slowly and tap the shutter again."
             Diagnostics.log("Record save failed: \(error)")
             return nil
         }
@@ -94,10 +128,13 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         captureNext = true
     }
 
-    func cancel() {
+    /// Stops the camera and throws away a reference that was started but not saved.
+    func stop() {
         session.pause()
         if let reference { ReferenceStore.delete(reference) }
         reference = nil
+        capturing = false
+        pendingSave = false
     }
 
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -131,6 +168,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         if case .normal = frame.camera.trackingState { isNormal = true } else { isNormal = false }
         if trackingNormal != isNormal { trackingNormal = isNormal }
         if mappingStatus != frame.worldMappingStatus { mappingStatus = frame.worldMappingStatus }
+        saveIfReady()
         guard isNormal, var reference, reference.keyframes.count < maxKeyframes, pendingWrites < 3 else { return }
 
         let transform = frame.camera.transform
