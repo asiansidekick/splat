@@ -24,10 +24,12 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     let session = ARSession()
     let reference: Reference
     var viewport: CGSize = .zero
+    /// How the screen is turned, so the ghost, highlights and directions follow it.
+    var orientation: UIInterfaceOrientation = .portrait
 
     private var current: Keyframe?
     private var ghostSource: CIImage?
-    private var renderedFor: (id: String, viewport: CGSize)?
+    private var renderedFor: (id: String, viewport: CGSize, orientation: UIInterfaceOrientation)?
     private var lastUpdate = Date.distantPast
     private var diffBusy = false
     private let ciContext = CIContext()
@@ -109,7 +111,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     private func updateGuidance(camera: simd_float4x4, target: Keyframe) {
-        let move = Guidance.offset(from: camera, to: target)
+        let move = Guidance.offset(from: camera, to: target, orientation: orientation)
         matched = move.isMatched
         guidance = move.description
     }
@@ -117,11 +119,11 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: Ghost photo
 
     private func updateGhost(_ keyframe: Keyframe, frame: ARFrame) {
-        if let done = renderedFor, done.id == keyframe.id, done.viewport == viewport { return }
+        if let done = renderedFor, done.id == keyframe.id, done.viewport == viewport, done.orientation == orientation { return }
         let url = ReferenceStore.folder(for: reference.id).appendingPathComponent(keyframe.imageFile)
         guard let image = CIImage(contentsOf: url) else { return }
         ghost = render(image, frame: frame)
-        renderedFor = (keyframe.id, viewport)
+        renderedFor = (keyframe.id, viewport, orientation)
     }
 
     /// Lays an image in the camera's sensor orientation over the screen exactly like the live
@@ -131,7 +133,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let toUnit = CGAffineTransform(scaleX: 1 / size.width, y: 1 / size.height)
         // Core Image puts the origin bottom left; ARKit's display transform expects top left.
         let flip = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: 1)
-        let display = frame.displayTransform(for: .portrait, viewportSize: viewport)
+        let display = frame.displayTransform(for: orientation, viewportSize: viewport)
         let toView = CGAffineTransform(scaleX: viewport.width, y: viewport.height)
         let placed = image
             .transformed(by: toUnit.concatenating(flip).concatenating(display).concatenating(flip).concatenating(toView))

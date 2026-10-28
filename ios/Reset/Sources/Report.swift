@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import simd
 
 /// A PDF continuity report for one setup: the slate, the take log and a spread of reference
 /// photos, so crew without the app can see how the set should look. Made on the device, offline.
@@ -59,8 +60,7 @@ enum ReportPDF {
             let photos = spread(reference.keyframes, count: photoCount).compactMap { keyframe -> UIImage? in
                 guard let image = UIImage(contentsOfFile: folder.appendingPathComponent(keyframe.imageFile).path),
                       let cg = image.cgImage else { return nil }
-                // Camera frames are stored landscape; the app is used in portrait.
-                return UIImage(cgImage: cg, scale: 1, orientation: .right)
+                return UIImage(cgImage: cg, scale: 1, orientation: keyframe.uprightOrientation)
             }
             guard !photos.isEmpty else { return }
             text("Reference photos", size: 16, bold: true)
@@ -90,6 +90,20 @@ enum ReportPDF {
         let title = reference.title.isEmpty ? "Reference" : reference.title
         let safe = title.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
         return "\(safe) continuity.pdf"
+    }
+}
+
+extension Keyframe {
+    /// How to turn this keyframe's photo (stored in the sensor's landscape layout) so it shows
+    /// upright, worked out from which way was up when it was taken. Same for its depth map.
+    var uprightOrientation: UIImage.Orientation {
+        let up = SIMD3<Float>(0, 1, 0)
+        let alongX = simd_dot(cameraToWorld.columns.0.xyz, up)
+        let alongY = simd_dot(cameraToWorld.columns.1.xyz, up)
+        if abs(alongY) >= abs(alongX) {
+            return alongY >= 0 ? .up : .down
+        }
+        return alongX < 0 ? .right : .left
     }
 }
 

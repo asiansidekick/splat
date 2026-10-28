@@ -21,15 +21,15 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Reset
         # No custom encryption, so TestFlight skips the export compliance question.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
-        # Portrait only, which on iPad means opting out of multitasking.
+        # Full screen only: the camera view and AR session do not suit iPad split view.
         INFOPLIST_KEY_UIRequiresFullScreen: YES
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_NSCameraUsageDescription: "The camera records the set and shows the reference overlay."
         INFOPLIST_KEY_UIRequiredDeviceCapabilities: arkit
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UIFileSharingEnabled: YES
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         SWIFT_VERSION: "5.9"

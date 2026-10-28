@@ -89,7 +89,6 @@ struct CompareView: View {
     }
 
     private func picture(_ result: Comparison) -> some View {
-        // Photos are stored in the camera's landscape orientation and shown upright, so 3:4.
         let aspect = result.after.size.width / max(result.after.size.height, 1)
         return GeometryReader { geometry in
             let size = geometry.size
@@ -153,8 +152,8 @@ struct Comparison {
                 ? "Reference photo taken from the same spot."
                 : "Closest reference photo was taken \(cm) cm away, so the photos may not line up exactly. The highlights are worked out in 3D and do line up."
         }
-        guard let beforeImage = upright(folder.appendingPathComponent(beforeFrames[0].imageFile)),
-            let afterImage = upright(folder.appendingPathComponent(afterFrame.imageFile))
+        guard let beforeImage = upright(beforeFrames[0], folder: folder),
+            let afterImage = upright(afterFrame, folder: folder)
         else { return nil }
 
         var changes: UIImage?
@@ -163,15 +162,15 @@ struct Comparison {
             if !refs.isEmpty, let mask = DepthDiff.mask(live: live, references: refs),
                 let cg = CIContext().createCGImage(mask, from: mask.extent)
             {
-                changes = UIImage(cgImage: cg, scale: 1, orientation: .right)
+                changes = UIImage(cgImage: cg, scale: 1, orientation: afterFrame.uprightOrientation)
             }
         }
         return Comparison(before: beforeImage, after: afterImage, changes: changes, note: note)
     }
 
-    private static func upright(_ url: URL) -> UIImage? {
-        guard let cg = UIImage(contentsOfFile: url.path)?.cgImage else { return nil }
-        return UIImage(cgImage: cg, scale: 1, orientation: .right)
+    private static func upright(_ frame: Keyframe, folder: URL) -> UIImage? {
+        guard let cg = UIImage(contentsOfFile: folder.appendingPathComponent(frame.imageFile).path)?.cgImage else { return nil }
+        return UIImage(cgImage: cg, scale: 1, orientation: frame.uprightOrientation)
     }
 
     private static func depthView(_ frame: Keyframe, folder: URL) -> DepthView? {

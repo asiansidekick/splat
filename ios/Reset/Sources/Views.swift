@@ -22,6 +22,15 @@ struct CameraView: UIViewRepresentable {
     func updateUIView(_ view: ARSCNView, context: Context) {}
 }
 
+enum Screen {
+    /// The current interface orientation of the app's window.
+    @MainActor static var orientation: UIInterfaceOrientation {
+        let scene = UIApplication.shared.connectedScenes.first { $0 is UIWindowScene } as? UIWindowScene
+        let value = scene?.interfaceOrientation ?? .portrait
+        return value == .unknown ? .portrait : value
+    }
+}
+
 // MARK: - Home
 
 struct HomeView: View {
@@ -187,6 +196,7 @@ struct RecordView: View {
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: 560)  // keeps panels narrow when the device is held landscape
     }
 
     private var statusText: String {
@@ -253,9 +263,13 @@ struct RestoreView: View {
             }
             .onAppear {
                 restorer.viewport = geometry.size
+                restorer.orientation = Screen.orientation
                 restorer.start()
             }
-            .onChange(of: geometry.size) { _, size in restorer.viewport = size }
+            .onChange(of: geometry.size) { _, size in
+                restorer.viewport = size
+                restorer.orientation = Screen.orientation
+            }
         }
         .ignoresSafeArea(edges: .bottom)
         .navigationTitle(reference.title)
@@ -337,6 +351,7 @@ struct RestoreView: View {
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: 560)  // keeps panels narrow when the device is held landscape
     }
 
     /// Saves the set as it looks now, labelled for the take it comes before, to compare later.

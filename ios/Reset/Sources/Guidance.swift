@@ -1,9 +1,10 @@
 import Foundation
 import simd
+import UIKit
 
 /// How to move the device from where it is to where a reference photo was taken.
 struct Offset {
-    /// In the current camera's axes, metres: x right, y up, z forward.
+    /// Metres in screen directions: right and up as the person sees the screen, forward into it.
     let right: Float
     let up: Float
     let forward: Float
@@ -37,6 +38,19 @@ struct Offset {
 }
 
 enum Guidance {
+    /// The screen's right and up directions in world space. ARKit's camera axes follow the sensor,
+    /// which sits landscape (x right, y up with the device turned so the camera is top left).
+    static func screenAxes(_ camera: simd_float4x4, orientation: UIInterfaceOrientation) -> (right: SIMD3<Float>, up: SIMD3<Float>) {
+        let x = camera.columns.0.xyz
+        let y = camera.columns.1.xyz
+        switch orientation {
+        case .landscapeRight: return (x, y)
+        case .landscapeLeft: return (-x, -y)
+        case .portraitUpsideDown: return (-y, x)
+        default: return (y, -x)  // portrait
+        }
+    }
+
     /// Distance score between a live camera and a reference view: metres, plus 0.5 m per 30° of turn.
     static func score(_ camera: simd_float4x4, _ keyframe: Keyframe) -> Float {
         let position = camera.columns.3.xyz
@@ -53,10 +67,9 @@ enum Guidance {
         Array(keyframes.sorted { score(camera, $0) < score(camera, $1) }.prefix(count))
     }
 
-    static func offset(from camera: simd_float4x4, to keyframe: Keyframe) -> Offset {
+    static func offset(from camera: simd_float4x4, to keyframe: Keyframe, orientation: UIInterfaceOrientation) -> Offset {
         let worldDelta = keyframe.position - camera.columns.3.xyz
-        let right = camera.columns.0.xyz
-        let up = camera.columns.1.xyz
+        let (right, up) = screenAxes(camera, orientation: orientation)
         let forward = -camera.columns.2.xyz
         let turn = acos(min(1, max(-1, simd_dot(forward, keyframe.forward))))
         return Offset(
