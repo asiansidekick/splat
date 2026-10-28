@@ -17,8 +17,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     @Published var status: Status = .loading
     @Published var ghost: UIImage?
     @Published var differences: UIImage?
-    @Published var guidance = ""
     @Published var matched = false
+    /// Where to aim and move, updated every frame for the guidance graphic.
+    let aim = AimState()
     @Published var lockedKeyframe: Keyframe?
     @Published var showDifferences = true
     /// The 3D ghost, built from the reference's LiDAR depth and photos, instead of the photo ghost.
@@ -206,6 +207,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             slowToFind = false
         }
         modelsNode.isHidden = false
+        if !show3D, let target = lockedKeyframe ?? current { updateAim(frame: frame, target: target) }
         let now = Date()
         guard now.timeIntervalSince(lastUpdate) > 0.1, viewport != .zero else { return }
         lastUpdate = now
@@ -214,7 +216,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let keyframe = lockedKeyframe ?? Guidance.closest(to: camera, in: reference.keyframes)
         guard let keyframe else { return }
         current = keyframe
-        updateGuidance(camera: camera, target: keyframe)
         updateGhost(keyframe, frame: frame)
         // Less often when the phone is hot, so it does not throttle or shut the camera down.
         let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
@@ -226,10 +227,31 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    private func updateGuidance(camera: simd_float4x4, target: Keyframe) {
+    /// From ARKit's tracking (camera plus motion sensors): where the reference camera was aiming,
+    /// on screen; how far to turn the phone about its own axis; and how far to step.
+    private func updateAim(frame: ARFrame, target: Keyframe) {
+        guard viewport != .zero else { return }
+        let camera = frame.camera.transform
         let move = Guidance.offset(from: camera, to: target, orientation: orientation)
-        matched = move.isMatched
-        guidance = move.description
+        let (right, up) = Guidance.screenAxes(camera, orientation: orientation)
+        // The spot 1.5 m in front of where the reference photo was taken.
+        let spot = target.position + target.forward * 1.5
+        let local = camera.inverse * SIMD4<Float>(spot, 1)
+        let point: CGPoint
+        if local.z < -0.05 {
+            point = frame.camera.projectPoint(spot, orientation: orientation, viewportSize: viewport)
+        } else {
+            // Behind the phone: far off screen on the side to turn towards.
+            let direction = spot - camera.columns.3.xyz
+            let dx = CGFloat(simd_dot(direction, right))
+            let dy = CGFloat(-simd_dot(direction, up))
+            let length = max(hypot(dx, dy), 0.001)
+            point = CGPoint(x: viewport.width / 2 + dx / length * 5000, y: viewport.height / 2 + dy / length * 5000)
+        }
+        let (_, targetUp) = Guidance.screenAxes(target.cameraToWorld, orientation: orientation)
+        let roll = atan2(simd_dot(targetUp, right), simd_dot(targetUp, up))
+        aim.update(point: point, roll: Double(roll), offset: move)
+        if matched != move.isMatched { matched = move.isMatched }
     }
 
     // MARK: Ghost photo

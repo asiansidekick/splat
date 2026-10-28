@@ -16,7 +16,7 @@ struct HelpView: View {
                 }
                 Section("Between takes") {
                     step("photo.on.rectangle", "Tap the thumbnail bottom left. Swipe to the setup you want and tap Load. The grid button shows them all by scene.")
-                    step("circle.lefthalf.filled", "Line the props up with the see-through ghost. Follow the directions to stand where a photo was taken, or swipe the modes to 3D ghost to check from anywhere.")
+                    step("circle.lefthalf.filled", "Line the props up with the see-through ghost. Put the yellow ring on the cross with its ticks level, then step towards the dot (and along the bar) to stand where a photo was taken; the guide fades away once lined up, or swipe the modes to 3D ghost to check from anywhere.")
                     step("square.fill", "With LiDAR, red marks something in front of where it was, blue where something is missing.")
                     step("checkmark.circle", "Log logs the take in one tap. Press and hold it to add a note. The shutter saves a snapshot to compare later.")
                     step("xmark", "The cross at the top goes back to recording.")

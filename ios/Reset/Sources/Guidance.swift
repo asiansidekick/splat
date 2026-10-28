@@ -14,6 +14,8 @@ struct Offset {
     static let matchDistance: Float = 0.05
     static let matchAngle: Float = 3 * .pi / 180
 
+    var vector: SIMD3<Float> { SIMD3(right, up, forward) }
+
     var isMatched: Bool {
         simd_length(SIMD3(right, up, forward)) < Offset.matchDistance && turn < Offset.matchAngle
     }
@@ -34,6 +36,31 @@ struct Offset {
             text += (text.isEmpty ? "Turn " : ", then turn ") + "\(degrees)° to match the ghost"
         }
         return text
+    }
+}
+
+/// The guidance graphic's numbers, kept apart from the rest of the screen so updating them every
+/// frame redraws only the graphic.
+@MainActor
+final class AimState: ObservableObject {
+    /// On screen, where the reference camera was pointing; far off screen when it is behind.
+    @Published private(set) var point: CGPoint?
+    /// How far to turn the phone about its own axis, radians, clockwise positive.
+    @Published private(set) var roll: Double = 0
+    @Published private(set) var offset: Offset?
+
+    func update(point: CGPoint, roll: Double, offset: Offset) {
+        if let old = self.point, hypot(old.x - point.x, old.y - point.y) < 1.5, abs(self.roll - roll) < 0.01,
+            let previous = self.offset, simd_distance(previous.vector, offset.vector) < 0.003
+        { return }
+        self.point = point
+        self.roll = roll
+        self.offset = offset
+    }
+
+    func clear() {
+        point = nil
+        offset = nil
     }
 }
 

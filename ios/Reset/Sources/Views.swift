@@ -1170,6 +1170,9 @@ struct ResetStage: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .allowsHitTesting(false)
                 }
+                if restorer.status == .ready, !restorer.show3D, !reference.photoOnly {
+                    AimOverlay(state: restorer.aim)
+                }
                 VStack(spacing: 8) {
                     if restorer.status == .relocalizing, !reference.photoOnly, let photo = restorer.startPhoto {
                         findingHint(photo)
@@ -1233,7 +1236,9 @@ struct ResetStage: View {
         case .ready:
             if reference.photoOnly { return "Line the set up with the photo" }
             if restorer.show3D { return "3D ghost: check the props from anywhere" }
-            return restorer.guidance.isEmpty ? "Ready" : restorer.guidance
+            return restorer.matched
+                ? "Matched. Line the props up with the ghost"
+                : "Put the ring on the cross, then step towards the dot"
         }
     }
 
@@ -1350,5 +1355,140 @@ struct ScanProgressOverlay: View {
             }
             .stroke(Color.white.opacity(0.9), lineWidth: 2)
         }
+    }
+}
+
+// MARK: - Guidance graphic
+
+/// Live guidance over the camera, from ARKit's tracking: a ring where the reference camera was
+/// aiming (put it on the cross, ticks level), and a pad and bar showing where to step to stand
+/// where the photo was taken. It fades away once everything lines up.
+struct AimOverlay: View {
+    @ObservedObject var state: AimState
+
+    var body: some View {
+        GeometryReader { geometry in
+            let size = geometry.size
+            let centre = CGPoint(x: size.width / 2, y: size.height / 2)
+            if let point = state.point, let offset = state.offset {
+                let colour: Color = offset.isMatched ? .green : .yellow
+                let inset: CGFloat = 40
+                let shown = CGPoint(
+                    x: min(max(point.x, inset), size.width - inset),
+                    y: min(max(point.y, inset), size.height - inset))
+                let offScreen = shown != point
+                ZStack {
+                    Path { path in
+                        path.move(to: centre)
+                        path.addLine(to: shown)
+                    }
+                    .stroke(colour.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4, 6]))
+                    Crosshair()
+                        .stroke(Color.white.opacity(0.8), lineWidth: 1.5)
+                        .frame(width: 32, height: 32)
+                        .position(centre)
+                    if offScreen {
+                        Image(systemName: "arrowtriangle.up.fill")
+                            .font(.title2)
+                            .foregroundStyle(colour)
+                            .rotationEffect(.radians(atan2(point.x - centre.x, centre.y - point.y)))
+                            .position(shown)
+                    } else {
+                        AimRing(roll: state.roll)
+                            .stroke(colour, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .frame(width: 48, height: 48)
+                            .position(shown)
+                    }
+                    PositionGauge(offset: offset, colour: colour)
+                        .position(x: 50, y: size.height - 110)
+                }
+                .shadow(color: .black.opacity(0.5), radius: 1.5)
+                .animation(.linear(duration: 0.1), value: shown)
+                // Light enough to see the set through, and gone once everything lines up.
+                .opacity(offset.isMatched ? 0 : 0.75)
+                .animation(.easeOut(duration: 0.6), value: offset.isMatched)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// A fixed cross in the middle of the screen, with a gap in the centre.
+struct Crosshair: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let c = CGPoint(x: rect.midX, y: rect.midY)
+        let gap = rect.width * 0.15
+        path.move(to: CGPoint(x: rect.minX, y: c.y)); path.addLine(to: CGPoint(x: c.x - gap, y: c.y))
+        path.move(to: CGPoint(x: c.x + gap, y: c.y)); path.addLine(to: CGPoint(x: rect.maxX, y: c.y))
+        path.move(to: CGPoint(x: c.x, y: rect.minY)); path.addLine(to: CGPoint(x: c.x, y: c.y - gap))
+        path.move(to: CGPoint(x: c.x, y: c.y + gap)); path.addLine(to: CGPoint(x: c.x, y: rect.maxY))
+        return path
+    }
+}
+
+/// A ring with four ticks, turned by how far the phone needs to turn about its own axis.
+struct AimRing: Shape {
+    var roll: Double
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let r = min(rect.width, rect.height) / 2
+        let c = CGPoint(x: rect.midX, y: rect.midY)
+        path.addEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+        for k in 0..<4 {
+            let angle = roll + Double(k) * .pi / 2
+            let direction = CGPoint(x: sin(angle), y: -cos(angle))
+            // The top tick is longer, so it is clear which way is up.
+            let outer = k == 0 ? 1.6 : 1.35
+            path.move(to: CGPoint(x: c.x + direction.x * r * 0.6, y: c.y + direction.y * r * 0.6))
+            path.addLine(to: CGPoint(x: c.x + direction.x * r * outer, y: c.y + direction.y * r * outer))
+        }
+        return path
+    }
+}
+
+/// Where to stand: the dot is the spot the photo was taken from, seen from above the phone (step
+/// towards it until it is in the middle); the bar shows forward and back.
+struct PositionGauge: View {
+    let offset: Offset
+    let colour: Color
+
+    private let radius: CGFloat = 24
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.6), lineWidth: 1.5)
+                Circle().stroke(Color.white.opacity(0.35), lineWidth: 1).frame(width: 18, height: 18)
+                Circle().fill(colour).frame(width: 10, height: 10).offset(dot)
+            }
+            .frame(width: 2 * radius + 12, height: 2 * radius + 12)
+            ZStack {
+                Capsule().fill(Color.white.opacity(0.3)).frame(width: 6)
+                Rectangle().fill(Color.white).frame(width: 16, height: 2)
+                Capsule().fill(colour).frame(width: 14, height: 6).offset(y: bar)
+            }
+            .frame(width: 16, height: 2 * radius + 12)
+        }
+        .padding(6)
+        .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Far moves fill the pad gently, near ones move the dot a lot, so the last few centimetres show.
+    private func scaled(_ metres: Float) -> CGFloat {
+        radius * CGFloat(min(1, (abs(metres) / 0.6).squareRoot()))
+    }
+
+    private var dot: CGSize {
+        let length = hypot(offset.right, offset.up)
+        guard length > 0.001 else { return .zero }
+        let r = scaled(length)
+        return CGSize(width: CGFloat(offset.right / length) * r, height: CGFloat(-offset.up / length) * r)
+    }
+
+    private var bar: CGFloat {
+        let r = scaled(offset.forward)
+        return offset.forward > 0 ? -r : r
     }
 }
