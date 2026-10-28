@@ -1,6 +1,7 @@
 import ARKit
 import CoreImage
 import ImageIO
+import SceneKit
 import Foundation
 
 /// Records a reference: walk around the set and the recorder keeps a photo (plus LiDAR depth when
@@ -17,6 +18,15 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     @Published var autoCapture = true
 
     let session = ARSession()
+    /// 3D models placed before recording; each reference saved afterwards keeps them.
+    let modelsNode = SCNNode()
+    lazy var placer = ModelPlacer(session: session, root: modelsNode, folder: Recorder.staging)
+
+    /// Where model files wait until a reference is saved.
+    static var staging: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Staging", isDirectory: true)
+    }
     private var reference: Reference?
     private var lastSaved: (position: SIMD3<Float>, forward: SIMD3<Float>)?
     private let writeQueue = DispatchQueue(label: "keyframe-writer")
@@ -43,6 +53,9 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     /// Starts the camera and mapping the room, before any reference exists, so the map is
     /// usually ready by the time the shutter is tapped.
     func prepare(useLiDAR: Bool) {
+        // A new session has new coordinates, so models placed in the old one are cleared.
+        placer.removeAll()
+        try? FileManager.default.removeItem(at: Recorder.staging)
         let config = ARWorldTrackingConfiguration()
         if useLiDAR && Recorder.lidarAvailable {
             config.frameSemantics.insert(.sceneDepth)
@@ -109,6 +122,10 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
             }
             try ReferenceStore.saveWorldMap(map, for: reference.id)
             reference.keyframes = self.reference?.keyframes ?? []
+            if !placer.models.isEmpty {
+                try placer.copyFiles(to: ReferenceStore.folder(for: reference.id))
+                reference.models = placer.models
+            }
             try ReferenceStore.save(reference)
             // The session keeps running, so the next reference starts with the room already mapped.
             self.reference = nil

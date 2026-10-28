@@ -26,6 +26,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_NSCameraUsageDescription: "The camera records the set and shows the reference overlay."
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Shutter photos and references are saved to Photos so you can send them."
         INFOPLIST_KEY_UIRequiredDeviceCapabilities: arkit
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"

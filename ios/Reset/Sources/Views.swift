@@ -1,4 +1,6 @@
 import ARKit
+import Combine
+import PhotosUI
 import SceneKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -65,9 +67,14 @@ struct CameraHome: View {
     @State private var nextScene = "1"
     @State private var nextSetup = "A"
     @State private var nextName = ""
+    /// The last shutter photo, offered for sending straight away.
+    @State private var lastPhoto: UIImage?
+    @State private var lastPhotoTask: Task<Void, Never>?
+    @State private var sharingPhoto: UIImage?
+    @AppStorage("saveToPhotos") private var saveToPhotos = true
 
     enum Panel: Identifiable {
-        case takeLog(UUID), compare(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery
+        case takeLog(UUID), compare(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery, sharePhoto
 
         var id: String {
             switch self {
@@ -78,6 +85,7 @@ struct CameraHome: View {
             case .nextSlate: return "next"
             case .help: return "help"
             case .gallery: return "gallery"
+            case .sharePhoto: return "share"
             }
         }
     }
@@ -87,12 +95,12 @@ struct CameraHome: View {
             if let id = selectedID, let reference = binding(for: id) {
                 ResetStage(
                     reference: reference, thumbnail: thumbnail, open: { panel = $0 },
-                    close: { selectedID = nil }, showToast: show)
+                    close: { selectedID = nil }, showToast: show, onPhoto: took)
                     .id(id)
             } else {
                 CaptureStage(
                     scene: nextScene, setup: nextSetup, name: nextName, thumbnail: thumbnail,
-                    open: { panel = $0 }, onSaved: saved)
+                    open: { panel = $0 }, onSaved: saved, onPhoto: took, showToast: show)
             }
         }
         .background(Color.black.ignoresSafeArea())
@@ -107,6 +115,24 @@ struct CameraHome: View {
                     .padding(.top, 52)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if lastPhoto != nil {
+                Button {
+                    sharingPhoto = lastPhoto
+                    panel = .sharePhoto
+                } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                        .font(.subheadline.bold())
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.yellow, in: Capsule())
+                        .foregroundStyle(.black)
+                }
+                .padding(.trailing, 16)
+                .padding(.bottom, 130)
+                .transition(.scale.combined(with: .opacity))
             }
         }
         .sheet(item: $panel) { panel in sheet(for: panel) }
@@ -158,6 +184,56 @@ struct CameraHome: View {
         nextName = ""
     }
 
+    /// A shutter photo (with any 3D models in it): saved to Photos and offered for sending.
+    private func took(_ image: UIImage) {
+        if saveToPhotos {
+            Task {
+                let saved = await PhotoLibrary.save([image])
+                if !saved { show("Allow Photos in Settings, Reset, Photos to save there") }
+            }
+        }
+        lastPhotoTask?.cancel()
+        withAnimation(.snappy) { lastPhoto = image }
+        lastPhotoTask = Task {
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
+            withAnimation(.snappy) { lastPhoto = nil }
+        }
+    }
+
+    /// Each photo picked from Photos becomes a photo reference with the next setup letter.
+    private func importPhotos(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        show("Importing \(items.count == 1 ? "photo" : "\(items.count) photos")…")
+        Task {
+            var imported: [Reference] = []
+            for item in items {
+                guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+                let setup = Slate.nextSetup(scene: nextScene, in: references + imported)
+                if let reference = try? PhotoLibrary.makeReference(from: data, scene: nextScene, setup: setup) {
+                    imported.append(reference)
+                }
+            }
+            references = ReferenceStore.all()
+            nextSetup = Slate.nextSetup(scene: nextScene, in: references)
+            Diagnostics.log("Imported \(imported.count) of \(items.count) photos")
+            if imported.isEmpty {
+                show("Could not import those photos")
+            } else {
+                show(imported.count == 1 ? "Imported \(imported[0].slate)" : "Imported \(imported.count) photos")
+                selectedID = imported.last?.id
+            }
+        }
+    }
+
+    private func exportPhotos(_ reference: Reference) {
+        Task {
+            let images = PhotoLibrary.images(of: reference)
+            let saved = await PhotoLibrary.save(images)
+            show(saved ? "Saved \(images.count) \(images.count == 1 ? "photo" : "photos") to Photos" : "Allow Photos in Settings, Reset, Photos")
+        }
+    }
+
     private func delete(_ reference: Reference) {
         if selectedID == reference.id { selectedID = nil }
         ReferenceStore.delete(reference)
@@ -202,7 +278,7 @@ struct CameraHome: View {
         case .help:
             HelpView().onDisappear { seenHelp = true }
         case .gallery:
-            Gallery(references: references, selectedID: $selectedID, thumbnails: thumbnails) { action, reference in
+            Gallery(references: references, selectedID: $selectedID, thumbnails: thumbnails, onImport: importPhotos) { action, reference in
                 // Let the gallery close before the next sheet opens.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     switch action {
@@ -211,9 +287,12 @@ struct CameraHome: View {
                     case .slate: self.panel = .slate(reference.id)
                     case .pdf: self.panel = .pdf(reference.id)
                     case .delete: deleting = reference
+                    case .photos: exportPhotos(reference)
                     }
                 }
             }
+        case .sharePhoto:
+            if let sharingPhoto { ShareSheet(items: [sharingPhoto]) }
         }
     }
 }
@@ -506,21 +585,27 @@ struct ReferenceThumbnail: View {
 /// older ones, tap Load (or double-tap the photo) to bring up its ghost. The grid button shows them
 /// all by scene. Press and hold a photo for its take log, compare, report, slate or delete.
 struct Gallery: View {
-    enum Action { case takeLog, compare, slate, pdf, delete }
+    enum Action { case takeLog, compare, slate, pdf, delete, photos }
 
     @Environment(\.dismiss) private var dismiss
     /// Oldest first, so the newest is the last page, as in Photos.
     private let ordered: [Reference]
     @Binding var selectedID: UUID?
     @ObservedObject var thumbnails: Thumbnails
+    let onImport: ([PhotosPickerItem]) -> Void
     let action: (Action, Reference) -> Void
     @State private var current: UUID?
     @State private var showingGrid = false
+    @State private var picked: [PhotosPickerItem] = []
 
-    init(references: [Reference], selectedID: Binding<UUID?>, thumbnails: Thumbnails, action: @escaping (Action, Reference) -> Void) {
+    init(
+        references: [Reference], selectedID: Binding<UUID?>, thumbnails: Thumbnails,
+        onImport: @escaping ([PhotosPickerItem]) -> Void, action: @escaping (Action, Reference) -> Void
+    ) {
         ordered = references.sorted { $0.created < $1.created }
         _selectedID = selectedID
         self.thumbnails = thumbnails
+        self.onImport = onImport
         self.action = action
         _current = State(initialValue: selectedID.wrappedValue ?? ordered.last?.id)
     }
@@ -533,7 +618,7 @@ struct Gallery: View {
                 if ordered.isEmpty {
                     ContentUnavailableView(
                         "No references yet", systemImage: "camera.viewfinder",
-                        description: Text("Close this and tap the shutter to save one."))
+                        description: Text("Close this and tap the shutter to save one, or import photos with the arrow at the top."))
                 } else if showingGrid {
                     grid
                 } else {
@@ -548,6 +633,10 @@ struct Gallery: View {
                     Button("Close") { dismiss() }
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
+                    PhotosPicker(selection: $picked, matching: .images) {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .accessibilityLabel("Import from Photos")
                     Button {
                         withAnimation { showingGrid.toggle() }
                     } label: {
@@ -556,6 +645,12 @@ struct Gallery: View {
                     .accessibilityLabel(showingGrid ? "One at a time" : "All references")
                     if let shown, !showingGrid { menu(for: shown) }
                 }
+            }
+            .onChange(of: picked) { _, items in
+                guard !items.isEmpty else { return }
+                onImport(items)
+                picked = []
+                dismiss()
             }
         }
     }
@@ -665,6 +760,7 @@ struct Gallery: View {
         Button { dismiss(); action(.takeLog, reference) } label: { Label("Take log", systemImage: "list.number") }
         Button { dismiss(); action(.compare, reference) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
         Button { dismiss(); action(.pdf, reference) } label: { Label("Share PDF report", systemImage: "square.and.arrow.up") }
+        Button { dismiss(); action(.photos, reference) } label: { Label("Save photos to Photos", systemImage: "photo.on.rectangle.angled") }
         Button { dismiss(); action(.slate, reference) } label: { Label("Edit slate", systemImage: "pencil") }
         Button(role: .destructive) { dismiss(); action(.delete, reference) } label: { Label("Delete", systemImage: "trash") }
     }
@@ -709,6 +805,7 @@ struct GalleryPage: View {
         let date = reference.created.formatted(date: .abbreviated, time: .shortened)
         var parts = [date, takes]
         if reference.hasDepth { parts.append("LiDAR") }
+        if reference.photoOnly { parts.append("Imported photo") }
         if !reference.name.isEmpty { parts.insert(reference.name, at: 0) }
         return parts.joined(separator: " · ")
     }
@@ -736,14 +833,26 @@ final class Thumbnails: ObservableObject {
 // MARK: - Recording
 
 enum CaptureMode: String, CaseIterable {
-    case walk, snapshot
+    case photo, snapshot, walk
 
-    var label: String { self == .walk ? "WALK AROUND" : "SNAPSHOT" }
+    var label: String {
+        switch self {
+        case .photo: return "PHOTO"
+        case .snapshot: return "REFERENCE"
+        case .walk: return "WALK AROUND"
+        }
+    }
 }
 
-/// Recording new references. The camera maps the room from the moment the app opens. Snapshot:
-/// each tap of the shutter saves a reference. Walk around: tap to start, walk slowly round the
-/// props, tap to stop and save.
+/// Holds the camera view, to take pictures of it with the 3D models in.
+final class CameraViewHolder {
+    weak var view: ARSCNView?
+}
+
+/// Recording new references. The camera maps the room in the background, but nothing is saved
+/// until the shutter is tapped. Photo: a picture (with any 3D models) for Photos and sending.
+/// Reference: each tap saves a reference. Walk around: tap to start, walk slowly round the props,
+/// tap to stop and save.
 struct CaptureStage: View {
     @StateObject private var recorder = Recorder()
     let scene: String
@@ -752,8 +861,12 @@ struct CaptureStage: View {
     let thumbnail: AnyView
     let open: (CameraHome.Panel) -> Void
     let onSaved: (Reference) -> Void
+    let onPhoto: (UIImage) -> Void
+    let showToast: (String) -> Void
     @AppStorage("captureMode") private var mode: CaptureMode = .snapshot
     @AppStorage("useLiDAR") private var useLiDAR = true
+    @State private var holder = CameraViewHolder()
+    @State private var importingModels = false
 
     private var slate: String { scene + setup }
 
@@ -779,10 +892,15 @@ struct CaptureStage: View {
             .foregroundStyle(.white)
         } preview: {
             ZStack {
-                CameraView(session: recorder.session)
+                CameraView(session: recorder.session, content: recorder.modelsNode) { view in
+                    recorder.placer.attachGestures(to: view)
+                    holder.view = view
+                }
+                ModelSizeBadge(placer: recorder.placer)
                 VStack {
                     Banner(text: status, tint: recorder.capturing ? .red : .black)
                     Spacer()
+                    ModelOverlay(placer: recorder.placer)
                     if let error = recorder.error {
                         Text(error).font(.callout).padding(10)
                             .background(Color.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
@@ -801,7 +919,7 @@ struct CaptureStage: View {
                 shutterTapped()
             }
             .disabled(recorder.saving)
-            .accessibilityLabel(mode == .walk ? (recorder.capturing ? "Stop and save" : "Start recording") : "Save reference")
+            .accessibilityLabel(shutterLabel)
         } trailing: {
             if recorder.capturing {
                 Text("\(recorder.keyframeCount)\n\(recorder.keyframeCount == 1 ? "view" : "views")")
@@ -809,8 +927,11 @@ struct CaptureStage: View {
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.white)
             } else {
-                Color.clear.frame(width: 50, height: 50)
+                SideButton(title: "3D models", systemImage: "cube") { importingModels = true }
             }
+        }
+        .fileImporter(isPresented: $importingModels, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { recorder.placer.add(from: urls) }
         }
         .onAppear {
             recorder.onSaved = onSaved
@@ -823,16 +944,33 @@ struct CaptureStage: View {
         }
     }
 
+    private var shutterLabel: String {
+        switch mode {
+        case .photo: return "Take photo"
+        case .snapshot: return "Save reference"
+        case .walk: return recorder.capturing ? "Stop and save" : "Start recording"
+        }
+    }
+
+    /// The camera view as it looks, with any 3D models in it.
+    private func takePhoto() {
+        guard let image = holder.view?.snapshot() else { return }
+        onPhoto(image)
+    }
+
     private var shutterStyle: ShutterButton.Style {
         switch mode {
-        case .snapshot: return .photo
+        case .photo, .snapshot: return .photo
         case .walk: return recorder.capturing && !recorder.pendingSave ? .stop : .record
         }
     }
 
     private func shutterTapped() {
         switch mode {
+        case .photo:
+            takePhoto()
         case .snapshot:
+            takePhoto()
             // Another tap while waiting for the map adds a second view to the same reference.
             if !recorder.capturing {
                 recorder.autoCapture = false
@@ -861,6 +999,10 @@ struct CaptureStage: View {
         }
         if !recorder.trackingNormal { return "Move the phone slowly so the camera can get its bearings" }
         switch mode {
+        case .photo:
+            return recorder.placer.models.isEmpty
+                ? "Tap for a photo. Add 3D models with the cube button to mock up the set."
+                : "Tap for a photo with the models in it"
         case .snapshot:
             return ready ? "Point at the props and tap to save \(slate)" : "Move the phone gently to map the room, then tap to save \(slate)"
         case .walk:
@@ -880,14 +1022,16 @@ struct ResetStage: View {
     let open: (CameraHome.Panel) -> Void
     let close: () -> Void
     let showToast: (String) -> Void
+    let onPhoto: (UIImage) -> Void
     @AppStorage("ghostOpacity") private var ghostOpacity = 0.5
     @State private var importingModel = false
     @State private var notingTake: Take?
+    @State private var holder = CameraViewHolder()
 
     init(
         reference: Binding<Reference>, thumbnail: AnyView,
         open: @escaping (CameraHome.Panel) -> Void, close: @escaping () -> Void,
-        showToast: @escaping (String) -> Void
+        showToast: @escaping (String) -> Void, onPhoto: @escaping (UIImage) -> Void
     ) {
         _reference = reference
         _restorer = StateObject(wrappedValue: Restorer(reference: reference.wrappedValue))
@@ -895,6 +1039,7 @@ struct ResetStage: View {
         self.open = open
         self.close = close
         self.showToast = showToast
+        self.onPhoto = onPhoto
     }
 
     var body: some View {
@@ -933,17 +1078,12 @@ struct ResetStage: View {
                 save()
             }
         }
-        .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz]) { result in
-            if case .success(let url) = result { restorer.addModel(from: url) }
+        .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { restorer.placer.add(from: urls) }
         }
-        .onChange(of: restorer.models) { _, models in
+        .onReceive(restorer.placer.$models.dropFirst()) { models in
             reference.models = models
             save()
-        }
-        .alert("3D model", isPresented: Binding(get: { restorer.modelError != nil }, set: { if !$0 { restorer.modelError = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(restorer.modelError ?? "")
         }
         .onDisappear { restorer.stop() }
     }
@@ -961,14 +1101,16 @@ struct ResetStage: View {
                     restorer.showDifferences.toggle()
                 }
             }
-            Button { restorer.toggleLock() } label: {
-                Image(systemName: restorer.lockedKeyframe == nil ? "lock.open" : "lock.fill")
-                    .font(.title3)
-                    .foregroundStyle(restorer.lockedKeyframe == nil ? Color.white : Color.yellow)
+            if !reference.photoOnly {
+                Button { restorer.toggleLock() } label: {
+                    Image(systemName: restorer.lockedKeyframe == nil ? "lock.open" : "lock.fill")
+                        .font(.title3)
+                        .foregroundStyle(restorer.lockedKeyframe == nil ? Color.white : Color.yellow)
+                }
+                .accessibilityLabel(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow the camera")
             }
-            .accessibilityLabel(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow the camera")
             Menu {
-                Button { importingModel = true } label: { Label("Add 3D model (USDZ)", systemImage: "cube") }
+                Button { importingModel = true } label: { Label("Add 3D models (USDZ)", systemImage: "cube") }
                     .disabled(restorer.status != .ready)
                 Button { open(.compare(reference.id)) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
                 Button { open(.takeLog(reference.id)) } label: { Label("Take log", systemImage: "list.number") }
@@ -988,9 +1130,18 @@ struct ResetStage: View {
         GeometryReader { geometry in
             ZStack {
                 CameraView(session: restorer.session, content: restorer.sceneContent) { view in
-                    restorer.attachGestures(to: view)
+                    restorer.placer.attachGestures(to: view)
+                    holder.view = view
                 }
-                if !restorer.show3D, let ghost = restorer.ghost {
+                if reference.photoOnly, let photo = restorer.startPhoto {
+                    Image(uiImage: photo)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                        .opacity(ghostOpacity)
+                        .allowsHitTesting(false)
+                } else if !restorer.show3D, let ghost = restorer.ghost {
                     Image(uiImage: ghost)
                         .resizable()
                         .frame(width: geometry.size.width, height: geometry.size.height)
@@ -1004,14 +1155,12 @@ struct ResetStage: View {
                         .allowsHitTesting(false)
                 }
                 VStack(spacing: 8) {
-                    if restorer.status == .relocalizing, let photo = restorer.startPhoto {
+                    if restorer.status == .relocalizing, !reference.photoOnly, let photo = restorer.startPhoto {
                         findingHint(photo)
                     }
                     Banner(text: headline, tint: restorer.matched ? .green : .black)
                     Spacer()
-                    if let name = restorer.selectedModelName {
-                        modelControls(name)
-                    }
+                    ModelOverlay(placer: restorer.placer)
                     HStack(spacing: 8) {
                         Image(systemName: "circle.lefthalf.filled").font(.caption)
                         Slider(value: $ghostOpacity, in: 0...1)
@@ -1024,6 +1173,7 @@ struct ResetStage: View {
                     .foregroundStyle(.white)
                 }
                 .padding(8)
+                ModelSizeBadge(placer: restorer.placer)
             }
             .onAppear {
                 restorer.viewport = geometry.size
@@ -1037,23 +1187,6 @@ struct ResetStage: View {
             }
             .onChange(of: ghostOpacity) { _, value in restorer.setGhostOpacity(value) }
         }
-    }
-
-    private func modelControls(_ name: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("\(name): drag to move, pinch to scale, twist to turn").font(.caption2)
-            HStack {
-                Button("True size") { restorer.resetSelectedModelSize() }
-                Button("Delete", role: .destructive) { restorer.deleteSelectedModel() }
-                Spacer()
-                Button("Done") { restorer.selectedModel = nil }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-        .padding(8)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .frame(maxWidth: 420)
     }
 
     /// While the room is being found: the first reference photo, so the person starts there.
@@ -1082,6 +1215,7 @@ struct ResetStage: View {
         case .relocalizing: return "Point at the set and move slowly to find \(reference.slate.isEmpty ? "the reference" : reference.slate)"
         case .failed(let message): return message
         case .ready:
+            if reference.photoOnly { return "Line the set up with the photo" }
             if restorer.show3D { return "3D ghost: check the props from anywhere" }
             return restorer.guidance.isEmpty ? "Ready" : restorer.guidance
         }
@@ -1107,6 +1241,7 @@ struct ResetStage: View {
         guard let shot = restorer.takeSnapshot(label: count == 0 ? label : "\(label) (\(count + 1))") else { return }
         reference.snapshots.append(shot)
         save()
+        if let image = holder.view?.snapshot() { onPhoto(image) }
         showToast("Snapshot saved. Compare it from the ••• menu.")
     }
 

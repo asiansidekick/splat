@@ -3,13 +3,15 @@ import SwiftUI
 /// First-run guide and feedback: how to use Reset, and a way to send the diagnostics log.
 struct HelpView: View {
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("saveToPhotos") private var saveToPhotos = true
 
     var body: some View {
         NavigationStack {
             List {
                 Section("Recording a reference") {
-                    step("camera.circle", "The app opens on the camera. Point at the props and tap the shutter: that saves a reference for the setup shown at the top (tap it to change scene or setup).")
+                    step("camera.circle", "The app opens on the camera. In Reference mode, point at the props and tap the shutter: that saves a reference for the setup shown at the top (tap it to change scene or setup).")
                     step("figure.walk", "For a fuller reference, swipe the modes to Walk around, tap record, walk slowly round the props and tap stop.")
+                    step("cube", "Mock up the set: tap 3D models and pick one or more USDZ files. They appear at real size where the camera points. Drag to move, pinch to scale (the size shows as you pinch), twist to turn. Photo mode takes a picture with them in, ready to share.")
                     step("hourglass", "If the room is not mapped yet, it saves by itself as soon as it is. Move the phone gently side to side.")
                 }
                 Section("Between takes") {
@@ -18,6 +20,11 @@ struct HelpView: View {
                     step("square.fill", "With LiDAR, red marks something in front of where it was, blue where something is missing.")
                     step("checkmark.circle", "Log logs the take in one tap. Press and hold it to add a note. The shutter saves a snapshot to compare later.")
                     step("xmark", "The cross at the top goes back to recording.")
+                }
+                Section("Photos") {
+                    Toggle("Save shutter photos to Photos", isOn: $saveToPhotos)
+                    step("square.and.arrow.down", "To use photos as ghosts, open the gallery and tap the import arrow. Pick as many as you like; each becomes its own reference.")
+                    step("photo.on.rectangle.angled", "Press and hold a reference in the gallery and choose Save photos to Photos.")
                 }
                 Section("Your work") {
                     step("lock", "Everything stays on this device and works with no signal. References are also in the Files app, On My iPhone, Reset.")

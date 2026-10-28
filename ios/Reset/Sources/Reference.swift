@@ -34,6 +34,8 @@ struct Reference: Codable, Identifiable {
     var snapshots: [Snapshot] = []
     /// USDZ models placed in the room, such as scans of props.
     var models: [PlacedModel] = []
+    /// Imported from Photos: one photo with no room map, shown as a plain see-through ghost.
+    var photoOnly = false
 
     var hasDepth: Bool { keyframes.contains { $0.depthFile != nil } }
     var slate: String { scene + setup }
@@ -57,6 +59,7 @@ extension Reference {
         takes = try c.decodeIfPresent([Take].self, forKey: .takes) ?? []
         snapshots = try c.decodeIfPresent([Snapshot].self, forKey: .snapshots) ?? []
         models = try c.decodeIfPresent([PlacedModel].self, forKey: .models) ?? []
+        photoOnly = try c.decodeIfPresent(Bool.self, forKey: .photoOnly) ?? false
     }
 }
 

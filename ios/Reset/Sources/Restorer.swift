@@ -32,10 +32,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     let modelsNode = SCNNode()
     /// Everything this screen draws in 3D.
     let sceneContent = SCNNode()
-    @Published var models: [PlacedModel] = []
-    @Published var selectedModel: UUID?
-    @Published var modelError: String?
-    var modelNodes: [UUID: SCNNode] = [:]
+    lazy var placer = ModelPlacer(session: session, root: modelsNode, folder: ReferenceStore.folder(for: reference.id))
 
     let session = ARSession()
     let reference: Reference
@@ -71,7 +68,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         modelsNode.isHidden = true
         sceneContent.addChildNode(cloudNode)
         sceneContent.addChildNode(modelsNode)
-        models = reference.models
     }
 
     /// Whether the reference has LiDAR depth, which the 3D ghost is built from. Viewing it works on
@@ -93,6 +89,18 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func start() {
+        if reference.photoOnly {
+            // An imported photo has no room map: show it as the ghost over the live camera.
+            let config = ARWorldTrackingConfiguration()
+            session.delegate = self
+            session.run(config, options: [.resetTracking, .removeExistingAnchors])
+            loadStartPhoto()
+            placer.load(reference.models)
+            modelsNode.isHidden = false
+            status = .ready
+            Diagnostics.log("Reset start: photo \(reference.title)")
+            return
+        }
         do {
             let map = try ReferenceStore.loadWorldMap(for: reference.id)
             let config = ARWorldTrackingConfiguration()
@@ -109,7 +117,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             status = .relocalizing
             relocalizingSince = Date()
             buildCloud()
-            loadSavedModels()
+            placer.load(reference.models)
             loadStartPhoto()
             Diagnostics.log("Reset start: \(reference.title), \(reference.keyframes.count) keyframes, depth \(usesDepth)")
         } catch {
@@ -176,6 +184,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     private func handle(_ frame: ARFrame) {
         // ARKit reports normal tracking once it has recognised the saved room.
         if case .failed = status { return }
+        if reference.photoOnly { return }
         guard case .normal = frame.camera.trackingState else {
             if status == .ready {
                 status = .relocalizing
