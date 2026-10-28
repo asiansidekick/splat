@@ -143,10 +143,20 @@ struct Comparison {
             beforeFrames = [before.frame]
             note = "Comparing \(before.label) with \(after.label)."
         } else {
-            // The reference view taken from nearest where the snapshot was taken.
-            guard let closest = Guidance.closest(to: afterFrame.cameraToWorld, in: reference.keyframes) else { return nil }
-            beforeFrames = [closest] + Guidance.closest(
-                to: afterFrame.cameraToWorld, in: reference.keyframes.filter { $0.depthFile != nil && $0.id != closest.id }, count: 2)
+            // Reference views that saw what the snapshot is pointing at, from the most similar
+            // direction; the snapshot can be from off camera or another distance.
+            let camera = afterFrame.cameraToWorld
+            var seeing: [Keyframe] = []
+            if let live = depthView(afterFrame, folder: folder),
+                let target = Guidance.target(camera: camera, depth: live.depth, width: live.width, height: live.height)
+            {
+                seeing = Guidance.views(seeing: target, from: afterFrame.position, in: reference.keyframes, count: 3)
+            }
+            if seeing.isEmpty {
+                seeing = Guidance.closest(to: camera, in: reference.keyframes, count: 3)
+            }
+            guard let closest = seeing.first else { return nil }
+            beforeFrames = seeing
             let cm = Int((simd_distance(closest.position, afterFrame.position) * 100).rounded())
             note = cm < 5
                 ? "Reference photo taken from the same spot."

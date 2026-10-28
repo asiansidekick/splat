@@ -8,6 +8,8 @@ Put a set back the way it was, entirely on an iPhone or iPad. No internet, no co
    - directions to stand where that photo was taken ("Move 20 cm left, then turn 8°"), turning green when you match,
    - with LiDAR, **red** where something is now in front of where it was and **blue** where something is missing.
    Tap **Hold this view** to keep one reference photo while you nudge props into place.
+   - **3D ghost** (references recorded with LiDAR): a coloured 3D point cloud of the set, built on the phone from the reference's depth and photos. It lines up with the real set from any angle or distance, so you can check positions from off camera. Viewing it works on any ARKit phone or iPad.
+   - The LiDAR highlights use the reference views that actually saw what you are pointing at, so they also work from off camera.
 
 3. **Log takes** from the reset screen: the panel shows the next take number. Tap **Log take** after each take. It ticks "Set matched the reference" when you were lined up, and you can circle the take and add notes. **Take log** lists every take for the setup: tap one to fix its number or notes, swipe to delete, tap the slate to correct the scene or setup, and **Share** sends either a PDF (slate, take log and six reference photos spread around the set) or a plain text take report. AirDrop works without signal.
 

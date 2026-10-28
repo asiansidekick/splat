@@ -1,6 +1,7 @@
 import ARKit
 import CoreImage
 import Foundation
+import SceneKit
 import UIKit
 
 /// Restores a set to a saved reference. ARKit finds the room again from the saved map (offline),
@@ -20,6 +21,13 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     @Published var matched = false
     @Published var lockedKeyframe: Keyframe?
     @Published var showDifferences = true
+    /// The 3D ghost, built from the reference's LiDAR depth and photos, instead of the photo ghost.
+    @Published var show3D = false {
+        didSet { cloudNode.isHidden = !show3D }
+    }
+    @Published var cloudReady = false
+    /// Added to the AR scene; sits in the reference's room coordinates once relocalised.
+    let cloudNode = SCNNode()
 
     let session = ARSession()
     let reference: Reference
@@ -41,6 +49,27 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     init(reference: Reference) {
         self.reference = reference
+        super.init()
+        cloudNode.isHidden = true
+        cloudNode.opacity = 0.5
+    }
+
+    /// Whether the reference has LiDAR depth, which the 3D ghost is built from. Viewing it works on
+    /// any ARKit device.
+    var can3D: Bool { reference.hasDepth }
+
+    func setGhostOpacity(_ value: Double) {
+        cloudNode.opacity = CGFloat(value)
+    }
+
+    private func buildCloud() {
+        guard can3D, !cloudReady else { return }
+        let saved = reference
+        Task {
+            let cloud = await Task.detached(priority: .utility) { Ghost3D.build(reference: saved) }.value
+            cloudNode.addChildNode(Ghost3D.node(for: cloud))
+            cloudReady = !cloud.positions.isEmpty
+        }
     }
 
     func start() {
@@ -54,6 +83,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             session.delegate = self
             session.run(config, options: [.resetTracking, .removeExistingAnchors])
             status = .relocalizing
+            buildCloud()
         } catch {
             status = .failed("Could not open this reference: \(error.localizedDescription)")
         }
@@ -146,14 +176,26 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     private func updateDifferences(frame: ARFrame, around camera: simd_float4x4) {
         guard !diffBusy, let depthMap = frame.sceneDepth?.depthMap else { return }
-        let nearby = Guidance.closest(to: camera, in: reference.keyframes.filter { $0.depthFile != nil }, count: 3)
+        let liveDepth = DepthMap.floats(DepthMap.copy(depthMap))
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+        // Use the reference views that saw what the camera is pointing at, from the most similar
+        // direction, so the check works from off camera and from other distances too.
+        let withDepth = reference.keyframes.filter { $0.depthFile != nil }
+        let nearby: [Keyframe]
+        if let target = Guidance.target(camera: camera, depth: liveDepth, width: width, height: height) {
+            let seeing = Guidance.views(seeing: target, from: camera.columns.3.xyz, in: withDepth, count: 3)
+            nearby = seeing.isEmpty ? Guidance.closest(to: camera, in: withDepth, count: 3) : seeing
+        } else {
+            nearby = Guidance.closest(to: camera, in: withDepth, count: 3)
+        }
         let references = nearby.compactMap { keyframe -> (Keyframe, [Float])? in
             guard let depth = depth(for: keyframe) else { return nil }
             return (keyframe, depth)
         }
         guard !references.isEmpty else { return }
         let live = DepthView(
-            depth: DepthMap.floats(DepthMap.copy(depthMap)),
+            depth: liveDepth,
             width: CVPixelBufferGetWidth(depthMap),
             height: CVPixelBufferGetHeight(depthMap),
             cameraToWorld: camera,

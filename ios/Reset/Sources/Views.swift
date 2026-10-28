@@ -1,4 +1,5 @@
 import ARKit
+import SceneKit
 import SwiftUI
 
 @main
@@ -11,11 +12,14 @@ struct ResetApp: App {
 /// Shows the live camera for an ARSession.
 struct CameraView: UIViewRepresentable {
     let session: ARSession
+    /// 3D content placed in ARKit's world coordinates, such as the 3D ghost.
+    var content: SCNNode?
 
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView(frame: .zero)
         view.session = session
         view.automaticallyUpdatesLighting = false
+        if let content { view.scene.rootNode.addChildNode(content) }
         return view
     }
 
@@ -233,8 +237,8 @@ struct RestoreView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                CameraView(session: restorer.session)
-                if let ghost = restorer.ghost {
+                CameraView(session: restorer.session, content: restorer.cloudNode)
+                if !restorer.show3D, let ghost = restorer.ghost {
                     Image(uiImage: ghost)
                         .resizable()
                         .frame(width: geometry.size.width, height: geometry.size.height)
@@ -300,7 +304,9 @@ struct RestoreView: View {
         case .loading: return "Loading…"
         case .relocalizing: return "Point at the set and move slowly so it can find where the reference was recorded"
         case .failed(let message): return message
-        case .ready: return restorer.guidance.isEmpty ? "Ready" : restorer.guidance
+        case .ready:
+            if restorer.show3D { return "3D ghost: check the props from anywhere" }
+            return restorer.guidance.isEmpty ? "Ready" : restorer.guidance
         }
     }
 
@@ -329,9 +335,17 @@ struct RestoreView: View {
             if let snapshotNote {
                 Text(snapshotNote).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
             }
+            if restorer.can3D {
+                Picker("Ghost", selection: $restorer.show3D) {
+                    Text("Photo ghost").tag(false)
+                    Text(restorer.cloudReady ? "3D ghost" : "3D ghost (building…)").tag(true)
+                }
+                .pickerStyle(.segmented)
+            }
             HStack {
                 Image(systemName: "circle.lefthalf.filled")
                 Slider(value: $ghostOpacity, in: 0...1)
+                    .onChange(of: ghostOpacity) { _, value in restorer.setGhostOpacity(value) }
             }
             HStack {
                 Button(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow camera") {

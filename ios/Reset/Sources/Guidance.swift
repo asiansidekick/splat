@@ -59,6 +59,37 @@ enum Guidance {
         return simd_distance(position, keyframe.position) + angle / (.pi / 6) * 0.5
     }
 
+    /// The point the camera is looking at: the middle of its depth map, in world space.
+    static func target(camera: simd_float4x4, depth: [Float], width: Int, height: Int) -> SIMD3<Float>? {
+        var samples: [Float] = []
+        for v in (height / 2 - 4)...(height / 2 + 4) {
+            for u in (width / 2 - 4)...(width / 2 + 4) where u >= 0 && u < width && v >= 0 && v < height {
+                let d = depth[v * width + u]
+                if d > 0.1 && d < DepthDiff.maxRange { samples.append(d) }
+            }
+        }
+        guard !samples.isEmpty else { return nil }
+        let d = samples.sorted()[samples.count / 2]
+        return camera.columns.3.xyz + -camera.columns.2.xyz * d
+    }
+
+    /// Reference views that had `point` in their picture, best first: those that looked at it
+    /// from the direction most like the viewer's, so off-camera and closer or further views work.
+    static func views(seeing point: SIMD3<Float>, from viewer: SIMD3<Float>, in keyframes: [Keyframe], count: Int) -> [Keyframe] {
+        let wanted = simd_normalize(point - viewer)
+        let scored = keyframes.compactMap { keyframe -> (Keyframe, Float)? in
+            let p = keyframe.cameraToWorld.inverse * SIMD4<Float>(point, 1)
+            let z = -p.z
+            guard z > 0.1, z < DepthDiff.maxRange else { return nil }
+            let k = keyframe.cameraIntrinsics
+            let u = k[0][0] * p.x / z + k[2][0]
+            let v = -k[1][1] * p.y / z + k[2][1]
+            guard u >= 0, u < Float(keyframe.imageWidth), v >= 0, v < Float(keyframe.imageHeight) else { return nil }
+            return (keyframe, simd_dot(simd_normalize(point - keyframe.position), wanted))
+        }
+        return scored.sorted { $0.1 > $1.1 }.prefix(count).map { $0.0 }
+    }
+
     static func closest(to camera: simd_float4x4, in keyframes: [Keyframe]) -> Keyframe? {
         keyframes.min { score(camera, $0) < score(camera, $1) }
     }
