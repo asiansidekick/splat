@@ -11,6 +11,9 @@ Put a set back the way it was, entirely on an iPhone or iPad. No internet, no co
 
 3. **Log takes** from the reset screen: the panel shows the next take number. Tap **Log take** after each take. It ticks "Set matched the reference" when you were lined up, and you can circle the take and add notes. **Take log** lists every take for the setup: tap one to fix its number or notes, swipe to delete, tap the slate to correct the scene or setup, and **Share** sends either a PDF (slate, take log and six reference photos spread around the set) or a plain text take report. AirDrop works without signal.
 
+4. **Quick snapshot** instead of walking around: on the record screen pick **Quick snapshot**, sway the phone gently for a couple of seconds, then tap the shutter (once, or from a few angles) and save.
+5. **Snapshots and Compare**: on the reset screen, **Snapshot** saves how the set looks now (labelled "Before take N"), in the reference's own room coordinates. **Compare** puts any two side by side with a wipe slider, the reference or an earlier snapshot against a later one, and with LiDAR highlights in red and blue what moved between them. Compare needs no camera, so it works for review away from the set.
+
 The home screen groups setups by scene.
 
 References are stored in the app's Documents folder (visible in the Files app).

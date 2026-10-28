@@ -32,6 +32,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     private var diffBusy = false
     private let ciContext = CIContext()
     private let diffQueue = DispatchQueue(label: "depth-diff")
+    private let writeQueue = DispatchQueue(label: "snapshot-writer")
     private var depthCache: [String: [Float]] = [:]
 
     var usesDepth: Bool { reference.hasDepth && Recorder.lidarAvailable }
@@ -58,6 +59,19 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     func stop() {
         session.pause()
+    }
+
+    /// Saves what the camera sees now (and LiDAR depth) into the reference, in the reference's own
+    /// room coordinates, so it can be compared with the reference or other snapshots later.
+    func takeSnapshot(label: String) -> Snapshot? {
+        guard status == .ready, let frame = session.currentFrame else { return nil }
+        let shot = FrameSnapshot(frame)
+        let stem = "snap_" + UUID().uuidString.prefix(8)
+        let keyframe = shot.keyframe(imageFile: stem + ".jpg", depthFile: stem + ".bin", transform: frame.camera.transform)
+        let folder = ReferenceStore.folder(for: reference.id)
+        let context = ciContext
+        writeQueue.async { shot.write(keyframe, to: folder, context: context) }
+        return Snapshot(label: label, taken: Date(), frame: keyframe)
     }
 
     /// Keep showing one reference view instead of following the camera to the closest one.

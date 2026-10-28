@@ -13,6 +13,8 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     @Published var trackingNormal = false
     @Published var saving = false
     @Published var error: String?
+    /// Off for a quick snapshot: keyframes are only kept when the shutter is tapped.
+    @Published var autoCapture = true
 
     let session = ARSession()
     private var reference: Reference?
@@ -20,6 +22,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     private let writeQueue = DispatchQueue(label: "keyframe-writer")
     private let ciContext = CIContext()
     private var pendingWrites = 0
+    private var captureNext = false
 
     /// A new keyframe is kept after the camera moves this far or turns this much.
     private let minMove: Float = 0.2  // metres
@@ -78,6 +81,11 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
+    /// Keeps the next camera frame as a keyframe, wherever the camera is.
+    func captureNow() {
+        captureNext = true
+    }
+
     func cancel() {
         session.pause()
         if let reference { ReferenceStore.delete(reference) }
@@ -99,27 +107,25 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         let transform = frame.camera.transform
         let position = transform.columns.3.xyz
         let forward = -transform.columns.2.xyz
-        if let last = lastSaved {
-            let moved = simd_distance(position, last.position)
-            let turned = acos(min(1, max(-1, simd_dot(forward, last.forward))))
-            if moved < minMove && turned < minTurn { return }
+        if captureNext {
+            captureNext = false
+        } else {
+            guard autoCapture else { return }
+            if let last = lastSaved {
+                let moved = simd_distance(position, last.position)
+                let turned = acos(min(1, max(-1, simd_dot(forward, last.forward))))
+                if moved < minMove && turned < minTurn { return }
+            }
         }
         lastSaved = (position, forward)
         // Copy what the keyframe needs now; never keep the frame itself.
         let snapshot = FrameSnapshot(frame)
 
         let index = reference.keyframes.count
-        let imageFile = String(format: "frame_%04d.jpg", index)
-        let depthFile = snapshot.depth == nil ? nil : String(format: "depth_%04d.bin", index)
-        let keyframe = Keyframe(
-            imageFile: imageFile,
-            depthFile: depthFile,
-            transform: flatten(transform),
-            intrinsics: flatten(snapshot.intrinsics),
-            imageWidth: snapshot.imageWidth,
-            imageHeight: snapshot.imageHeight,
-            depthWidth: snapshot.depthWidth,
-            depthHeight: snapshot.depthHeight)
+        let keyframe = snapshot.keyframe(
+            imageFile: String(format: "frame_%04d.jpg", index),
+            depthFile: String(format: "depth_%04d.bin", index),
+            transform: transform)
         reference.keyframes.append(keyframe)
         self.reference = reference
         keyframeCount = reference.keyframes.count
@@ -128,15 +134,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         let context = ciContext
         pendingWrites += 1
         writeQueue.async {
-            if let jpeg = context.jpegRepresentation(
-                of: snapshot.image, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-                options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.85])
-            {
-                try? jpeg.write(to: folder.appendingPathComponent(imageFile))
-            }
-            if let depthFile, let depth = snapshot.depth {
-                try? depth.write(to: folder.appendingPathComponent(depthFile))
-            }
+            snapshot.write(keyframe, to: folder, context: context)
             Task { @MainActor in self.pendingWrites -= 1 }
         }
     }
@@ -167,6 +165,34 @@ struct FrameSnapshot: @unchecked Sendable {
             depth = nil
             depthWidth = 0
             depthHeight = 0
+        }
+    }
+}
+
+extension FrameSnapshot {
+    /// Describes this frame as a keyframe; `depthFile` is dropped when there is no LiDAR depth.
+    func keyframe(imageFile: String, depthFile: String, transform: simd_float4x4) -> Keyframe {
+        Keyframe(
+            imageFile: imageFile,
+            depthFile: depth == nil ? nil : depthFile,
+            transform: flatten(transform),
+            intrinsics: flatten(intrinsics),
+            imageWidth: imageWidth,
+            imageHeight: imageHeight,
+            depthWidth: depthWidth,
+            depthHeight: depthHeight)
+    }
+
+    /// Saves the photo (and depth) under the keyframe's file names. Slow: call off the main thread.
+    func write(_ keyframe: Keyframe, to folder: URL, context: CIContext) {
+        if let jpeg = context.jpegRepresentation(
+            of: image, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+            options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.85])
+        {
+            try? jpeg.write(to: folder.appendingPathComponent(keyframe.imageFile))
+        }
+        if let depthFile = keyframe.depthFile, let depth {
+            try? depth.write(to: folder.appendingPathComponent(depthFile))
         }
     }
 }

@@ -30,6 +30,8 @@ struct Reference: Codable, Identifiable {
     let created: Date
     var keyframes: [Keyframe]
     var takes: [Take] = []
+    /// Photos (and depth) taken later from the reset screen, in the same room coordinates.
+    var snapshots: [Snapshot] = []
 
     var hasDepth: Bool { keyframes.contains { $0.depthFile != nil } }
     var slate: String { scene + setup }
@@ -51,7 +53,16 @@ extension Reference {
         created = try c.decode(Date.self, forKey: .created)
         keyframes = try c.decode([Keyframe].self, forKey: .keyframes)
         takes = try c.decodeIfPresent([Take].self, forKey: .takes) ?? []
+        snapshots = try c.decodeIfPresent([Snapshot].self, forKey: .snapshots) ?? []
     }
+}
+
+/// A photo of the set taken during a reset, for example just before take 3, to compare later.
+struct Snapshot: Codable, Identifiable {
+    var id = UUID()
+    var label: String
+    var taken: Date
+    var frame: Keyframe
 }
 
 /// Stores references in the app's Documents folder, one folder per reference.

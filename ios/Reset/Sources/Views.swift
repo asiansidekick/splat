@@ -91,6 +91,7 @@ struct RecordView: View {
     @State private var name = ""
     @State private var useLiDAR = Recorder.lidarAvailable
     @State private var started = false
+    @State private var snapshotMode = false
 
     /// Carries on in the latest scene with the next free setup letter.
     init(existing: [Reference]) {
@@ -123,6 +124,18 @@ struct RecordView: View {
                     }
                     .buttonStyle(.bordered)
                     Spacer()
+                    if started && snapshotMode {
+                        Button {
+                            recorder.captureNow()
+                        } label: {
+                            Image(systemName: "camera.circle.fill")
+                                .font(.system(size: 64))
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(.black, .white)
+                        }
+                        .accessibilityLabel("Take snapshot")
+                        Spacer()
+                    }
                     if started {
                         Button(recorder.saving ? "Saving…" : "Save reference") {
                             Task {
@@ -130,7 +143,7 @@ struct RecordView: View {
                             }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(recorder.saving || recorder.keyframeCount < 5)
+                        .disabled(recorder.saving || recorder.keyframeCount < (snapshotMode ? 1 : 5))
                     }
                 }
             }
@@ -153,12 +166,20 @@ struct RecordView: View {
             .onChange(of: scene) { _, newScene in
                 setupLetter = Slate.nextSetup(scene: newScene, in: existing)
             }
+            Picker("Capture", selection: $snapshotMode) {
+                Text("Walk around").tag(false)
+                Text("Quick snapshot").tag(true)
+            }
+            .pickerStyle(.segmented)
             if Recorder.lidarAvailable {
                 Toggle("Use LiDAR (adds depth, highlights what moved)", isOn: $useLiDAR)
             }
-            Text("Walk slowly around the area, pointing at the props. Cover each spot from a couple of angles.")
+            Text(snapshotMode
+                ? "Stand where you can see the props. Sway the phone gently side to side for a couple of seconds so it can map the spot, then tap the shutter. Take more from other angles if you like."
+                : "Walk slowly around the area, pointing at the props. Cover each spot from a couple of angles.")
                 .font(.callout)
             Button("Start") {
+                recorder.autoCapture = !snapshotMode
                 recorder.start(scene: scene, setup: setupLetter, name: name, useLiDAR: useLiDAR)
                 started = true
             }
@@ -177,7 +198,9 @@ struct RecordView: View {
         default: mapping = "Starting"
         }
         let slate = scene + setupLetter
-        return "\(slate.isEmpty ? "" : "\(slate) · ")\(recorder.keyframeCount) views · \(mapping)"
+        let count = recorder.keyframeCount
+        let shots = snapshotMode ? (count == 1 ? "1 photo" : "\(count) photos") : "\(count) views"
+        return "\(slate.isEmpty ? "" : "\(slate) · ")\(shots) · \(mapping)"
     }
 }
 
@@ -189,6 +212,8 @@ struct RestoreView: View {
     @State private var ghostOpacity = 0.5
     @State private var loggingTake: Take?
     @State private var showingLog = false
+    @State private var showingCompare = false
+    @State private var snapshotNote: String?
 
     init(reference: Reference) {
         _restorer = StateObject(wrappedValue: Restorer(reference: reference))
@@ -236,7 +261,13 @@ struct RestoreView: View {
         .navigationTitle(reference.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            Button("Take log") { showingLog = true }
+            ToolbarItemGroup {
+                Button("Compare") { showingCompare = true }
+                Button("Take log") { showingLog = true }
+            }
+        }
+        .sheet(isPresented: $showingCompare) {
+            CompareView(reference: reference)
         }
         .sheet(item: $loggingTake) { take in
             TakeEditor(take: take, slate: reference.slate) { logged in
@@ -269,10 +300,20 @@ struct RestoreView: View {
                     Text("Take \(reference.nextTakeNumber)").font(.title3.bold().monospacedDigit())
                 }
                 Spacer()
+                Button {
+                    snapshot()
+                } label: {
+                    Label("Snapshot", systemImage: "camera")
+                }
+                .buttonStyle(.bordered)
+                .disabled(restorer.status != .ready)
                 Button("Log take \(reference.nextTakeNumber)") {
                     loggingTake = Take(number: reference.nextTakeNumber, logged: Date(), resetChecked: restorer.matched)
                 }
                 .buttonStyle(.borderedProminent)
+            }
+            if let snapshotNote {
+                Text(snapshotNote).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
                 Image(systemName: "circle.lefthalf.filled")
@@ -296,5 +337,15 @@ struct RestoreView: View {
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// Saves the set as it looks now, labelled for the take it comes before, to compare later.
+    private func snapshot() {
+        let label = "Before take \(reference.nextTakeNumber)"
+        let count = reference.snapshots.filter { $0.label.hasPrefix(label) }.count
+        guard let shot = restorer.takeSnapshot(label: count == 0 ? label : "\(label) (\(count + 1))") else { return }
+        reference.snapshots.append(shot)
+        try? ReferenceStore.save(reference)
+        snapshotNote = "Saved \(shot.label). Tap Compare to check it against the reference."
     }
 }
