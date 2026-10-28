@@ -1421,6 +1421,8 @@ struct AimOverlay: View {
                     }
                     DepthIndicator(forward: offset.forward, colour: colour)
                         .position(centre)
+                    StepIndicator(right: offset.right, up: offset.up, colour: colour)
+                        .position(centre)
                 }
                 .shadow(color: .black.opacity(0.5), radius: 1.5)
                 .animation(.linear(duration: 0.1), value: shown)
@@ -1495,5 +1497,41 @@ struct DepthIndicator: View {
         }
         .frame(width: 130, height: 130)
         .animation(.easeOut(duration: 0.2), value: centimetres)
+    }
+}
+
+/// Outside the cross: a big arrow showing which way to step sideways or to raise or lower the
+/// phone, so standing in the wrong place does not pass for lined up when only the aim matches.
+struct StepIndicator: View {
+    let right: Float
+    let up: Float
+    let colour: Color
+
+    private var centimetres: Int { Int((simd_length(SIMD2(right, up)) * 100).rounded()) }
+
+    var body: some View {
+        let strength = CGFloat(min(1, (simd_length(SIMD2(right, up)) / 0.5).squareRoot()))
+        ZStack {
+            if centimetres >= 5 {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14 + 10 * strength, weight: .heavy))
+                    .foregroundStyle(colour)
+                    .offset(y: -66)
+                    .rotationEffect(.radians(Double(atan2(right, up))))
+                Text("\(direction) \(centimetres) cm")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(colour)
+                    .offset(y: 74)
+            }
+        }
+        .frame(width: 170, height: 170)
+        .animation(.easeOut(duration: 0.2), value: centimetres)
+    }
+
+    private var direction: String {
+        var parts: [String] = []
+        if abs(right) >= 0.03 { parts.append(right > 0 ? "RIGHT" : "LEFT") }
+        if abs(up) >= 0.03 { parts.append(up > 0 ? "UP" : "DOWN") }
+        return parts.joined(separator: "+")
     }
 }
