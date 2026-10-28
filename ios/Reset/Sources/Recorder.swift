@@ -49,6 +49,8 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     @Published var pendingSave = false
     /// How far ARKit has got mapping the room, 0 to 1, for the scanning overlay.
     @Published var scanProgress = 0.0
+    /// Points of the room ARKit is tracking now, shown on the scanning overlay.
+    @Published var pointCount = 0
     /// Whether a reference is being captured (the shutter was tapped and it is not saved yet).
     @Published var capturing = false
 
@@ -184,7 +186,9 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
 
     /// Mapping status in steps, filled in between by how many points of the room ARKit has found.
     private func updateScanProgress(_ frame: ARFrame) {
-        let points = Double(frame.rawFeaturePoints?.points.count ?? 0)
+        let count = frame.rawFeaturePoints?.points.count ?? 0
+        if abs(count - pointCount) > 20 { pointCount = count }
+        let points = Double(count)
         let progress: Double
         switch frame.worldMappingStatus {
         case .mapped: progress = 1

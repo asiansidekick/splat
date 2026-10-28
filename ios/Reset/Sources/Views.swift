@@ -899,8 +899,12 @@ struct CaptureStage: View {
                 }
                 ModelSizeBadge(placer: recorder.placer)
                 if mode == .snapshot && (recorder.pendingSave || recorder.saving || justSaved) {
-                    ScanProgressOverlay(progress: justSaved ? 1 : recorder.scanProgress, saved: justSaved)
+                    ScanProgressOverlay(
+                        progress: justSaved ? 1 : recorder.scanProgress, saved: justSaved,
+                        mapping: recorder.mappingStatus, points: recorder.pointCount)
                         .transition(.opacity)
+                        .onAppear { holder.view?.debugOptions = [.showFeaturePoints] }
+                        .onDisappear { holder.view?.debugOptions = [] }
                 }
                 VStack {
                     Banner(text: status, tint: recorder.capturing ? .red : .black)
@@ -1262,34 +1266,89 @@ struct ResetStage: View {
     }
 }
 
-/// After the shutter in Reference mode: a ring filling as the room is mapped, then a tick when the
-/// reference is saved.
+/// After the shutter in Reference mode: a machine-vision style scanning display (red tint, scan
+/// lines, a sweeping bar and readouts) while the room is mapped, then MAP SAVED.
 struct ScanProgressOverlay: View {
     let progress: Double
     let saved: Bool
+    let mapping: ARFrame.WorldMappingStatus
+    let points: Int
+
+    private var tint: Color { saved ? .green : .red }
 
     var body: some View {
-        VStack(spacing: 10) {
-            ZStack {
-                Circle().stroke(Color.white.opacity(0.25), lineWidth: 8)
-                Circle()
-                    .trim(from: 0, to: max(0.02, progress))
-                    .stroke(saved ? Color.green : Color.yellow, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(.easeOut(duration: 0.3), value: progress)
-                if saved {
-                    Image(systemName: "checkmark").font(.title.bold()).foregroundStyle(.green)
-                } else {
-                    Text("\(Int(progress * 100))%").font(.title3.bold().monospacedDigit()).foregroundStyle(.white)
+        ZStack {
+            tint.opacity(0.22)
+            // Fine horizontal scan lines.
+            Canvas { context, size in
+                var y: CGFloat = 0
+                while y < size.height {
+                    context.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1)), with: .color(.black.opacity(0.25)))
+                    y += 4
                 }
             }
-            .frame(width: 90, height: 90)
-            Text(saved ? "Saved" : "Scanning. Move gently side to side")
-                .font(.subheadline.bold())
-                .foregroundStyle(.white)
+            // A bright bar sweeping down the screen.
+            TimelineView(.animation) { timeline in
+                GeometryReader { geometry in
+                    let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
+                    LinearGradient(colors: [tint.opacity(0), tint.opacity(0.6), tint.opacity(0)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 60)
+                        .offset(y: geometry.size.height * phase - 30)
+                }
+            }
+            .opacity(saved ? 0 : 1)
+            brackets
+            VStack(alignment: .leading, spacing: 3) {
+                Text(saved ? "MAP SAVED" : "SCANNING ROOM").font(.system(.title3, design: .monospaced).bold())
+                Text("STATUS   \(statusText)")
+                Text("POINTS   \(points)")
+                Text("PROGRESS \(Int(progress * 100))%")
+                ProgressView(value: progress)
+                    .tint(saved ? .green : .white)
+                    .frame(width: 180)
+                    .animation(.easeOut(duration: 0.3), value: progress)
+                if !saved {
+                    Text("MOVE GENTLY SIDE TO SIDE").padding(.top, 4)
+                }
+            }
+            .font(.system(.caption, design: .monospaced).bold())
+            .foregroundStyle(.white)
+            .shadow(color: tint, radius: 4)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.top, 70)
+            .padding(.leading, 28)
         }
-        .padding(18)
-        .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 18))
         .allowsHitTesting(false)
+    }
+
+    private var statusText: String {
+        if saved { return "LOCKED" }
+        switch mapping {
+        case .mapped: return "MAPPED"
+        case .extending: return "EXTENDING"
+        case .limited: return "ACQUIRING"
+        default: return "INITIALISING"
+        }
+    }
+
+    /// Corner brackets around a target box in the middle of the screen.
+    private var brackets: some View {
+        GeometryReader { geometry in
+            let side = min(geometry.size.width, geometry.size.height) * 0.55
+            let rect = CGRect(x: (geometry.size.width - side) / 2, y: (geometry.size.height - side) / 2, width: side, height: side)
+            Path { path in
+                let arm: CGFloat = 26
+                let corners: [(CGPoint, CGFloat, CGFloat)] = [
+                    (CGPoint(x: rect.minX, y: rect.minY), 1, 1), (CGPoint(x: rect.maxX, y: rect.minY), -1, 1),
+                    (CGPoint(x: rect.minX, y: rect.maxY), 1, -1), (CGPoint(x: rect.maxX, y: rect.maxY), -1, -1),
+                ]
+                for (corner, dx, dy) in corners {
+                    path.move(to: CGPoint(x: corner.x + arm * dx, y: corner.y))
+                    path.addLine(to: corner)
+                    path.addLine(to: CGPoint(x: corner.x, y: corner.y + arm * dy))
+                }
+            }
+            .stroke(Color.white.opacity(0.9), lineWidth: 2)
+        }
     }
 }
