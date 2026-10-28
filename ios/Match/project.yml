@@ -1,0 +1,31 @@
+# Generate the Xcode project with XcodeGen: `brew install xcodegen && xcodegen`
+name: Match
+options:
+  bundleIdPrefix: com.asiansidekick
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  Match:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    scheme: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.asiansidekick.match
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: Match
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        # Split View allowed on iPad, so the app can sit next to a QTake monitor app.
+        INFOPLIST_KEY_UIRequiresFullScreen: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSCameraUsageDescription: "The camera takes continuity photos and shows the reference photo over the live view."
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        SWIFT_VERSION: "5.9"
