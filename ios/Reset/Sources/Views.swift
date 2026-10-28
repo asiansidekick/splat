@@ -83,6 +83,11 @@ struct HomeView: View {
                         }
                     }
                 }
+                Section {
+                } footer: {
+                    Text(Self.buildLabel)
+                        .frame(maxWidth: .infinity)
+                }
             }
             .navigationTitle("References")
             .navigationDestination(for: UUID.self) { id in
@@ -110,6 +115,12 @@ struct HomeView: View {
             .onAppear { references = ReferenceStore.all() }
         }
     }
+
+    /// Matches the number in the downloaded file's name, Reset-build-N.ipa.
+    static let buildLabel: String = {
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "Reset build \(build)"
+    }()
 
     private func summary(_ reference: Reference) -> String {
         let takes = reference.takes.count == 1 ? "1 take" : "\(reference.takes.count) takes"
