@@ -10,7 +10,9 @@ Photo-only continuity for hair, makeup, costume, props and set: take or import a
 6. **Compare** any two photos on a board: **Side** (side by side, both zoom together), **Wipe**, **Blend**, **Flicker**, and **Changes**, which lines the photos up automatically and marks in red what looks different (the slider sets sensitivity). Changes works best when both photos were taken from about the same spot. Share sends the pair as one picture.
 7. **Share PDF sheet** (board menu) makes an A4 continuity sheet with notes and every photo grouped by take. AirDrop works without signal.
 
-Photos are stored in the app's Documents folder (visible in the Files app).
+8. **Home menu (•••)**: **How to use Match** (also shown on first launch), **Tester notes** (jot bugs as they happen, then share them with the build number and device model), and **Back up all boards** (one zip of every photo and note, to AirDrop or save to Files).
+
+Photos are stored in the app's Documents folder (visible in the Files app). Re-sideloading over the top keeps them; deleting the app deletes them, so back up first.
 
 ## Install without a Mac
 

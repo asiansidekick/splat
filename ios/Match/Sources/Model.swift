@@ -43,6 +43,25 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
     var isReference = false
     var source: Source = .camera
 
+    init(taken: Date, take: Int, angle: String = "", source: Source = .camera) {
+        self.taken = taken
+        self.take = take
+        self.angle = angle
+        self.source = source
+    }
+
+    /// Missing fields fall back to defaults, so boards saved by an older build still open after an update.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        taken = (try? c.decode(Date.self, forKey: .taken)) ?? .now
+        take = (try? c.decode(Int.self, forKey: .take)) ?? 0
+        angle = (try? c.decode(String.self, forKey: .angle)) ?? ""
+        note = (try? c.decode(String.self, forKey: .note)) ?? ""
+        isReference = (try? c.decode(Bool.self, forKey: .isReference)) ?? false
+        source = (try? c.decode(Source.self, forKey: .source)) ?? .camera
+    }
+
     var file: String { "\(id.uuidString).jpg" }
     var thumbnailFile: String { "\(id.uuidString)-thumb.jpg" }
 
@@ -62,6 +81,26 @@ struct Board: Codable, Identifiable, Equatable {
     var notes = ""
     var created: Date
     var shots: [Shot] = []
+
+    init(scene: String, subject: String, department: Department, created: Date) {
+        self.scene = scene
+        self.subject = subject
+        self.department = department
+        self.created = created
+    }
+
+    /// Missing or unknown fields fall back to defaults, so an update never hides saved boards.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        scene = (try? c.decode(String.self, forKey: .scene)) ?? ""
+        subject = (try? c.decode(String.self, forKey: .subject)) ?? ""
+        department = (try? c.decode(Department.self, forKey: .department)) ?? .other
+        notes = (try? c.decode(String.self, forKey: .notes)) ?? ""
+        created = (try? c.decode(Date.self, forKey: .created)) ?? .now
+        // A damaged photo entry is skipped rather than losing the whole board.
+        shots = ((try? c.decode([Failable<Shot>].self, forKey: .shots)) ?? []).compactMap(\.value)
+    }
 
     var title: String { subject.isEmpty ? department.name : "\(subject) · \(department.name)" }
     var references: [Shot] { shots.filter(\.isReference).sorted { $0.taken < $1.taken } }
@@ -88,9 +127,21 @@ struct Board: Codable, Identifiable, Equatable {
     }
 }
 
+/// Decodes an element if it can, so one bad entry does not fail a whole list.
+struct Failable<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws { value = try? T(from: decoder) }
+}
+
 /// Scene and take numbering.
 enum Slate {
     static let angles = ["Front", "Left", "Right", "Back", "Detail", "Wide"]
+
+    /// Text safe to use in a file name.
+    static func fileSafe(_ text: String) -> String {
+        let bad = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        return text.components(separatedBy: bad).joined(separator: "-")
+    }
 
     static func takeName(_ take: Int) -> String { take == 0 ? "Prep" : "Take \(take)" }
     static func shortTake(_ take: Int) -> String { take == 0 ? "Prep" : "Tk \(take)" }
@@ -182,17 +233,17 @@ final class BoardStore: ObservableObject {
 
     // MARK: Photos
 
-    /// Saves a photo to the board at the scene's current take. The first photo from each angle
-    /// becomes that angle's reference.
+    /// Saves a photo (JPEG, HEIC, PNG or RAW data) to the board at the scene's current take.
+    /// The first photo from each angle becomes that angle's reference. Nil if it could not be read or saved.
     @discardableResult
-    func addShot(_ image: UIImage, to boardID: UUID, angle: String, source: Shot.Source) async -> Shot? {
+    func addShot(_ data: Data, to boardID: UUID, angle: String, source: Shot.Source) async -> Shot? {
         guard let board = board(boardID) else { return nil }
         var shot = Shot(taken: .now, take: take(for: board.scene), angle: angle, source: source)
         let folder = Self.folder(for: boardID)
         let file = shot.file
         let thumbnail = shot.thumbnailFile
         let saved = await Task.detached(priority: .userInitiated) {
-            ImageFile.write(image, to: folder, file: file, thumbnail: thumbnail)
+            ImageFile.write(data, to: folder, file: file, thumbnail: thumbnail)
         }.value
         guard saved, var latest = self.board(boardID) else { return nil }
         if !latest.shots.contains(where: { $0.isReference && $0.angle == angle }) {
@@ -235,44 +286,41 @@ final class BoardStore: ObservableObject {
 }
 
 enum ImageFile {
-    static let maxPixels: CGFloat = 3024
+    static let maxPixels = 3024
 
-    /// Writes the photo upright as a JPEG, plus a small thumbnail for the grids.
-    static func write(_ image: UIImage, to folder: URL, file: String, thumbnail: String) -> Bool {
+    /// Writes the photo upright as a JPEG, plus a small thumbnail for the grids. Decodes straight
+    /// to the reduced size, so a 48 MP or RAW photo never sits in memory at full size.
+    static func write(_ data: Data, to folder: URL, file: String, thumbnail: String) -> Bool {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+            let full = downsample(source, maxPixels: maxPixels),
+            let small = downsample(source, maxPixels: 480),
+            let fullData = UIImage(cgImage: full).jpegData(compressionQuality: 0.85),
+            let smallData = UIImage(cgImage: small).jpegData(compressionQuality: 0.8)
+        else { return false }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            guard let full = resized(image, maxSide: maxPixels).jpegData(compressionQuality: 0.85),
-                let small = resized(image, maxSide: 480).jpegData(compressionQuality: 0.8)
-            else { return false }
-            try full.write(to: folder.appending(path: file), options: .atomic)
-            try small.write(to: folder.appending(path: thumbnail), options: .atomic)
+            try fullData.write(to: folder.appending(path: file), options: .atomic)
+            try smallData.write(to: folder.appending(path: thumbnail), options: .atomic)
             return true
         } catch {
             return false
         }
     }
 
-    /// Redraws the image upright with its longest side at most `maxSide` pixels.
-    static func resized(_ image: UIImage, maxSide: CGFloat) -> UIImage {
-        let pixels = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
-        let factor = min(1, maxSide / max(pixels.width, pixels.height, 1))
-        let size = CGSize(width: (pixels.width * factor).rounded(), height: (pixels.height * factor).rounded())
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        format.opaque = true
-        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
-        }
-    }
-
-    static func load(_ url: URL, maxPixels: Int) -> UIImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    static func downsample(_ source: CGImageSource, maxPixels: Int) -> CGImage? {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixels,
         ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    static func load(_ url: URL, maxPixels: Int) -> UIImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+            let image = downsample(source, maxPixels: maxPixels)
+        else { return nil }
         return UIImage(cgImage: image)
     }
 }

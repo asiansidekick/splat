@@ -20,6 +20,12 @@ struct HomeView: View {
     @State private var path: [UUID] = []
     @State private var creating: Board?
     @State private var search = ""
+    @State private var deletingBoards: [Board] = []
+    @State private var showingHelp = false
+    @State private var showingNotes = false
+    @State private var sharing: SharedFile?
+    @State private var backupError: String?
+    @AppStorage("seenHelp") private var seenHelp = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -37,7 +43,7 @@ struct HomeView: View {
                             ForEach(boards) { board in
                                 NavigationLink(value: board.id) { BoardRow(board: board) }
                             }
-                            .onDelete { offsets in offsets.map { boards[$0] }.forEach { store.delete($0) } }
+                            .onDelete { offsets in deletingBoards = offsets.map { boards[$0] } }
                         } header: {
                             HStack {
                                 Text(scene.isEmpty ? "No scene" : "Scene \(scene)")
@@ -52,18 +58,58 @@ struct HomeView: View {
             .navigationTitle("Continuity")
             .navigationDestination(for: UUID.self) { id in BoardView(boardID: id) }
             .toolbar {
-                Button {
-                    creating = store.newBoard()
-                } label: {
-                    Label("New board", systemImage: "plus")
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button { showingHelp = true } label: { Label("How to use Match", systemImage: "questionmark.circle") }
+                        Button { showingNotes = true } label: { Label("Tester notes", systemImage: "note.text") }
+                        Button(action: backUp) { Label("Back up all boards", systemImage: "externaldrive") }
+                    } label: {
+                        Label("More", systemImage: "ellipsis.circle")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        creating = store.newBoard()
+                    } label: {
+                        Label("New board", systemImage: "plus")
+                    }
                 }
             }
+            .confirmationDialog(
+                deletingBoards.count == 1 ? "Delete \(deletingBoards[0].title) and all its photos?" : "Delete \(deletingBoards.count) boards and all their photos?",
+                isPresented: Binding(get: { !deletingBoards.isEmpty }, set: { if !$0 { deletingBoards = [] } }),
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    deletingBoards.forEach { store.delete($0) }
+                    deletingBoards = []
+                }
+            }
+            .sheet(isPresented: $showingHelp, onDismiss: { seenHelp = true }) { HelpView() }
+            .sheet(isPresented: $showingNotes) { TesterNotesView() }
+            .sheet(item: $sharing) { file in ShareSheet(items: [file.url]) }
+            .alert("Backup", isPresented: Binding(get: { backupError != nil }, set: { if !$0 { backupError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(backupError ?? "")
+            }
+            .onAppear { if !seenHelp { showingHelp = true } }
             .sheet(item: $creating) { board in
                 BoardEditor(board: board, isNew: true) { saved in
                     store.save(saved)
                     path.append(saved.id)
                 }
             }
+        }
+    }
+}
+
+extension HomeView {
+    private func backUp() {
+        do {
+            sharing = SharedFile(url: try Backup.make())
+        } catch {
+            backupError = "Could not make the backup: \(error.localizedDescription)"
         }
     }
 }
@@ -168,6 +214,7 @@ struct BoardView: View {
     @State private var importing = 0
     @State private var sharing: SharedFile?
     @State private var message: String?
+    @State private var deleting: Shot?
 
     private let grid = [GridItem(.adaptive(minimum: 104), spacing: 6)]
 
@@ -241,6 +288,13 @@ struct BoardView: View {
             BoardEditor(board: board, isNew: false) { store.save($0) }
         }
         .sheet(item: $sharing) { file in ShareSheet(items: [file.url]) }
+        .confirmationDialog("Delete this photo?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete photo", role: .destructive) {
+                if let deleting { store.delete(deleting, from: boardID) }
+                deleting = nil
+            }
+        }
         .alert("Import", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -306,7 +360,7 @@ struct BoardView: View {
                         } label: {
                             Label(shot.isReference ? "Not a reference" : "Make reference", systemImage: shot.isReference ? "star.slash" : "star")
                         }
-                        Button(role: .destructive) { store.delete(shot, from: board.id) } label: { Label("Delete", systemImage: "trash") }
+                        Button(role: .destructive) { deleting = shot } label: { Label("Delete", systemImage: "trash") }
                     }
                 }
             }
@@ -320,46 +374,59 @@ struct BoardView: View {
         pickerItems = []
         importing += items.count
         Task {
+            var failed = 0
             for item in items {
-                if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) {
-                    await store.addShot(image, to: boardID, angle: "", source: .imported)
-                }
+                // Fails for photos kept only in iCloud when there is no signal.
+                let data = try? await item.loadTransferable(type: Data.self)
+                if data == nil { failed += 1 }
+                if let data, await store.addShot(data, to: boardID, angle: "", source: .imported) == nil { failed += 1 }
                 importing -= 1
             }
+            report(failed: failed, of: items.count)
         }
     }
 
     private func importFiles(_ result: Result<[URL], Error>) {
         guard case .success(let urls) = result else { return }
-        let images = urls.compactMap { url -> UIImage? in
+        let files = urls.compactMap { url -> Data? in
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
-            return (try? Data(contentsOf: url)).flatMap(UIImage.init(data:))
+            return try? Data(contentsOf: url)
         }
-        add(images)
+        add(files, expected: urls.count)
     }
 
     private func importData(_ items: [Data]) {
-        add(items.compactMap(UIImage.init(data:)))
+        add(items, expected: items.count)
     }
 
     private func paste() {
         let images = UIPasteboard.general.images ?? []
         if images.isEmpty {
             message = "There is no picture on the clipboard. Copy a screenshot or photo first."
+            return
         }
-        add(images)
+        add(images.compactMap { $0.jpegData(compressionQuality: 0.95) }, expected: images.count)
     }
 
-    private func add(_ images: [UIImage]) {
-        guard !images.isEmpty else { return }
-        importing += images.count
+    private func add(_ files: [Data], expected: Int) {
+        guard expected > 0 else { return }
+        importing += files.count
         Task {
-            for image in images {
-                await store.addShot(image, to: boardID, angle: "", source: .imported)
+            var failed = expected - files.count
+            for data in files {
+                if await store.addShot(data, to: boardID, angle: "", source: .imported) == nil { failed += 1 }
                 importing -= 1
             }
+            report(failed: failed, of: expected)
         }
+    }
+
+    private func report(failed: Int, of total: Int) {
+        guard failed > 0 else { return }
+        message = failed == total && total == 1
+            ? "That photo could not be imported. If it is only in iCloud, it needs signal to download first."
+            : "\(failed) of \(total) photos could not be imported. Photos kept only in iCloud need signal to download; also check the device has free storage."
     }
 
     private func sharePDF(_ board: Board) {
@@ -385,7 +452,7 @@ struct TakeBar: View {
         let take = store.take(for: scene)
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Scene \(scene)").font(.caption).foregroundStyle(.secondary)
+                Text(scene.isEmpty ? "No scene" : "Scene \(scene)").font(.caption).foregroundStyle(.secondary)
                 Text(Slate.takeName(take)).font(.title2.weight(.semibold).monospacedDigit())
             }
             Spacer()
@@ -461,6 +528,7 @@ struct ShotView: View {
     @State private var editing = false
     @State private var matching: MatchRequest?
     @State private var comparing: ComparePair?
+    @State private var confirmingDelete = false
 
     private var board: Board? { store.board(boardID) }
     private var shot: Shot? { board?.shots.first { $0.id == shotID } }
@@ -519,10 +587,7 @@ struct ShotView: View {
                         Spacer()
                         ShareLink(item: BoardStore.url(of: shot, in: boardID)) { Label("Share", systemImage: "square.and.arrow.up") }
                         Spacer()
-                        Button(role: .destructive) {
-                            store.delete(shot, from: boardID)
-                            dismiss()
-                        } label: { Label("Delete", systemImage: "trash") }
+                        Button(role: .destructive) { confirmingDelete = true } label: { Label("Delete", systemImage: "trash") }
                     }
                 }
             }
@@ -530,6 +595,12 @@ struct ShotView: View {
                 guard let shot else { return }
                 let boardID = self.boardID
                 image = await Task.detached(priority: .userInitiated) { BoardStore.image(shot, in: boardID, maxPixels: 3024) }.value
+            }
+            .confirmationDialog("Delete this photo?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+                Button("Delete photo", role: .destructive) {
+                    if let shot { store.delete(shot, from: boardID) }
+                    dismiss()
+                }
             }
             .sheet(isPresented: $editing) {
                 if let shot {

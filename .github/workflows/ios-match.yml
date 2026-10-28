@@ -27,7 +27,8 @@ jobs:
         run: |
           # Compiler errors become annotations, so they show on the run summary and in the PR.
           if ! xcodebuild -project Match.xcodeproj -target Match -configuration Release \
-            -sdk iphoneos SYMROOT="$PWD/build" CODE_SIGNING_ALLOWED=NO build > build.log 2>&1; then
+            -sdk iphoneos SYMROOT="$PWD/build" CODE_SIGNING_ALLOWED=NO \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} build > build.log 2>&1; then
             grep -E ": error: " build.log | sort -u | head -10 \
               | sed -E 's#^.*/(Sources/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\2,col=\3::\4#'
             tail -60 build.log

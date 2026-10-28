@@ -52,8 +52,7 @@ enum BoardPDF {
         let page = CGRect(x: 0, y: 0, width: 595, height: 842)  // A4 in points
         let margin: CGFloat = 36
         let width = page.width - 2 * margin
-        let safe = board.title.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
-        let url = FileManager.default.temporaryDirectory.appending(path: "Scene \(board.scene) \(safe).pdf")
+        let url = FileManager.default.temporaryDirectory.appending(path: Slate.fileSafe("Scene \(board.scene) \(board.title).pdf"))
 
         try UIGraphicsPDFRenderer(bounds: page).writePDF(to: url) { context in
             context.beginPage()

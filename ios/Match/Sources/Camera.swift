@@ -17,25 +17,42 @@ final class Camera: NSObject, ObservableObject {
     private var input: AVCaptureDeviceInput?
     private var configured = false
     private var coordinator: AVCaptureDevice.RotationCoordinator?
-    private var rotationObservation: NSKeyValueObservation?
+    private var previewObservation: NSKeyValueObservation?
+    private var captureObservation: NSKeyValueObservation?
     private weak var previewLayer: AVCaptureVideoPreviewLayer?
-    private var pending: [Int64: (UIImage?) -> Void] = [:]
+    private var pending: [Int64: (Data?) -> Void] = [:]
+
+    private var observers: [NSObjectProtocol] = []
 
     override init() {
         super.init()
         let center = NotificationCenter.default
-        center.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: .main) { [weak self] _ in
-            self?.paused = true
-        }
-        center.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: .main) { [weak self] _ in
-            self?.paused = false
-        }
+        observers = [
+            center.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: .main) { [weak self] _ in
+                self?.paused = true
+            },
+            center.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: .main) { [weak self] _ in
+                self?.paused = false
+            },
+        ]
+    }
+
+    deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
     }
 
     func start() {
         Task {
-            guard await AVCaptureDevice.requestAccess(for: .video) else {
-                await MainActor.run { self.error = "Camera access is off. Turn it on in Settings, Match, Camera." }
+            let allowed: Bool
+            switch AVCaptureDevice.authorizationStatus(for: .video) {
+            case .authorized: allowed = true
+            case .notDetermined: allowed = await AVCaptureDevice.requestAccess(for: .video)
+            default: allowed = false
+            }
+            guard allowed else {
+                await MainActor.run {
+                    self.error = "Camera access is off. Turn it on in Settings, Match, Camera. You can still import photos."
+                }
                 return
             }
             queue.async {
@@ -60,11 +77,21 @@ final class Camera: NSObject, ObservableObject {
         if let device = input?.device { makeCoordinator(for: device) }
     }
 
-    func capture(_ completion: @escaping (UIImage?) -> Void) {
-        let angle = coordinator?.videoRotationAngleForHorizonLevelCapture
+    /// Re-applies the preview angle, for when the preview's connection appears after the coordinator.
+    func levelPreview() {
+        guard let coordinator, let connection = previewLayer?.connection else { return }
+        let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+        if connection.videoRotationAngle != angle, connection.isVideoRotationAngleSupported(angle) {
+            connection.videoRotationAngle = angle
+        }
+    }
+
+    /// Takes a photo and hands back its file data (HEIC or JPEG), or nil if it failed.
+    func capture(_ completion: @escaping (Data?) -> Void) {
         queue.async {
-            if let angle, let connection = self.output.connection(with: .video), connection.isVideoRotationAngleSupported(angle) {
-                connection.videoRotationAngle = angle
+            guard self.session.isRunning, self.output.connection(with: .video)?.isActive == true else {
+                DispatchQueue.main.async { completion(nil) }
+                return
             }
             let settings = AVCapturePhotoSettings()
             settings.photoQualityPrioritization = .balanced
@@ -83,7 +110,7 @@ final class Camera: NSObject, ObservableObject {
             }
         }
         guard let device = Self.device(front: front), let newInput = try? AVCaptureDeviceInput(device: device) else {
-            DispatchQueue.main.async { self.error = "No camera available." }
+            DispatchQueue.main.async { self.error = "No camera available. You can still import photos." }
             return
         }
         if let input { session.removeInput(input) }
@@ -98,6 +125,7 @@ final class Camera: NSObject, ObservableObject {
             output.maxPhotoQualityPrioritization = .balanced
             configured = true
         }
+        // Runs after commitConfiguration (deferred above), once the preview connection exists.
         DispatchQueue.main.async {
             self.isFront = front
             self.makeCoordinator(for: device)
@@ -117,21 +145,30 @@ final class Camera: NSObject, ObservableObject {
         guard let layer = previewLayer else { return }
         let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: layer)
         self.coordinator = coordinator
-        layer.connection?.videoRotationAngle = coordinator.videoRotationAngleForHorizonLevelPreview
-        rotationObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.new]) { [weak layer] coordinator, _ in
-            let angle = coordinator.videoRotationAngleForHorizonLevelPreview
-            DispatchQueue.main.async { layer?.connection?.videoRotationAngle = angle }
+        previewObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.levelPreview() }
+        }
+        // Kept up to date as the device turns, not set at the moment of capture: setting it then
+        // makes the first photo after each rotation fail on some devices.
+        captureObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) { [weak self] coordinator, _ in
+            let angle = coordinator.videoRotationAngleForHorizonLevelCapture
+            self?.queue.async {
+                guard let self, let connection = self.output.connection(with: .video),
+                    connection.isVideoRotationAngleSupported(angle)
+                else { return }
+                connection.videoRotationAngle = angle
+            }
         }
     }
 }
 
 extension Camera: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        let image = photo.fileDataRepresentation().flatMap(UIImage.init(data:))
+        let data = error == nil ? photo.fileDataRepresentation() : nil
         let id = photo.resolvedSettings.uniqueID
         queue.async {
             let completion = self.pending.removeValue(forKey: id)
-            DispatchQueue.main.async { completion?(image) }
+            DispatchQueue.main.async { completion?(data) }
         }
     }
 }
@@ -139,6 +176,12 @@ extension Camera: AVCapturePhotoCaptureDelegate {
 final class PreviewView: UIView {
     override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
     var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+    var onLayout: (() -> Void)?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout?()
+    }
 }
 
 /// The live camera, fitted (not cropped) so the reference ghost lines up with what gets saved.
@@ -151,6 +194,7 @@ struct CameraPreview: UIViewRepresentable {
         view.previewLayer.session = camera.session
         view.previewLayer.videoGravity = .resizeAspect
         camera.attach(view.previewLayer)
+        view.onLayout = { [weak camera] in camera?.levelPreview() }
         return view
     }
 
@@ -199,6 +243,7 @@ struct MatchCameraView: View {
     @State private var lastShot: Shot?
     @State private var comparing: ComparePair?
     @State private var flash = false
+    @State private var saveError: String?
 
     init(boardID: UUID, ghost: Shot?) {
         self.boardID = boardID
@@ -252,6 +297,7 @@ struct MatchCameraView: View {
                     banner("Camera paused. On iPad it stops while another app uses it.")
                 }
                 if let error = camera.error { banner(error) }
+                if let saveError { banner(saveError) }
             }
             .padding(8)
         }
@@ -494,11 +540,17 @@ struct MatchCameraView: View {
         withAnimation(.easeOut(duration: 0.15)) { flash = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { withAnimation { flash = false } }
         let angle = self.angle
-        camera.capture { image in
-            guard let image else { return }
+        camera.capture { data in
+            guard let data else {
+                saveError = "The photo did not take. Try again."
+                return
+            }
             Task {
-                if let shot = await store.addShot(image, to: boardID, angle: angle, source: .camera) {
+                if let shot = await store.addShot(data, to: boardID, angle: angle, source: .camera) {
                     lastShot = shot
+                    saveError = nil
+                } else {
+                    saveError = "Could not save the photo. The iPhone or iPad may be out of storage."
                 }
             }
         }

@@ -25,7 +25,7 @@ struct CompareView: View {
     @State private var before: UIImage?
     @State private var after: UIImage?
     @State private var aligned: Aligned?
-    @State private var aligning = false
+    @State private var alignFailed = false
     @State private var lineUp = true
     @State private var wipe = 0.5
     @State private var blend = 0.5
@@ -165,6 +165,10 @@ struct CompareView: View {
                     .aspectRatio(aligned.after.size, contentMode: .fit)
                     .scaleEffect(zoom.scale)
                     .offset(zoom.offset)
+                } else if alignFailed {
+                    ContentUnavailableView("Could not compare these photos", systemImage: "exclamationmark.triangle",
+                                           description: Text("Try Side, Wipe or Blend instead."))
+                        .foregroundStyle(.white)
                 } else {
                     ProgressView("Lining up the photos")
                         .tint(.white)
@@ -218,6 +222,7 @@ struct CompareView: View {
         before = nil
         after = nil
         aligned = nil
+        alignFailed = false
         changes = nil
         zoom = ZoomState()
         guard let beforeShot, let afterShot else { return }
@@ -231,6 +236,7 @@ struct CompareView: View {
         let result = await Task.detached(priority: .userInitiated) { Differ.align(before: first, after: second) }.value
         guard !Task.isCancelled else { return }
         aligned = result
+        alignFailed = result == nil
     }
 
     private func updateChanges() async {
@@ -251,7 +257,7 @@ struct CompareView: View {
         let image = PairImage.make(
             before: before, after: after, title: "Scene \(board.scene) · \(board.title)",
             beforeLabel: beforeShot?.label ?? "Before", afterLabel: afterShot?.label ?? "After")
-        let url = FileManager.default.temporaryDirectory.appending(path: "Scene \(board.scene) compare.jpg")
+        let url = FileManager.default.temporaryDirectory.appending(path: Slate.fileSafe("Scene \(board.scene) compare.jpg"))
         guard let data = image.jpegData(compressionQuality: 0.9), (try? data.write(to: url, options: .atomic)) != nil else { return }
         sharing = SharedFile(url: url)
     }
