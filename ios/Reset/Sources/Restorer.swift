@@ -27,6 +27,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         didSet { cloudNode.isHidden = !show3D }
     }
     @Published var cloudReady = false
+    /// How many points of the 3D ghost the live LiDAR finds gone from where they were.
+    @Published var missingPoints = 0
     /// Added to the AR scene; sits in the reference's room coordinates once relocalised.
     let cloudNode = SCNNode()
     /// Placed USDZ models, shown once the room is recognised so they appear in the right place.
@@ -59,6 +61,12 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Set after 20 seconds without finding the room, to show tips.
     @Published var slowToFind = false
     private var depthCache: [String: [Float]] = [:]
+    private var ghostDisplay: Ghost3D.Display?
+    private var checker: Ghost3D.Checker?
+    private var checkBusy = false
+    private var lastCheck = Date.distantPast
+    private let checkQueue = DispatchQueue(label: "ghost-check")
+    private var faintOpacity: CGFloat = 0.5
 
     var usesDepth: Bool { reference.hasDepth && Recorder.lidarAvailable }
 
@@ -66,7 +74,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         self.reference = reference
         super.init()
         cloudNode.isHidden = true
-        cloudNode.opacity = 0.5
         modelsNode.isHidden = true
         sceneContent.addChildNode(cloudNode)
         sceneContent.addChildNode(modelsNode)
@@ -77,16 +84,27 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     var can3D: Bool { reference.hasDepth }
 
     func setGhostOpacity(_ value: Double) {
-        cloudNode.opacity = CGFloat(value)
+        faintOpacity = CGFloat(value)
+        ghostDisplay?.faintOpacity = faintOpacity
     }
 
     private func buildCloud() {
         guard can3D, !cloudReady else { return }
         let saved = reference
+        let check = usesDepth
         Task {
-            let cloud = await Task.detached(priority: .utility) { Ghost3D.build(reference: saved) }.value
-            cloudNode.addChildNode(Ghost3D.node(for: cloud))
-            cloudReady = !cloud.positions.isEmpty
+            let (cloud, checker) = await Task.detached(priority: .utility) {
+                let cloud = Ghost3D.build(reference: saved)
+                return (cloud, check ? Ghost3D.Checker(cloud: cloud) : nil)
+            }.value
+            guard !cloud.positions.isEmpty else { return }
+            let display = Ghost3D.Display(cloud: cloud)
+            display.faintOpacity = faintOpacity
+            cloudNode.addChildNode(display.node)
+            ghostDisplay = display
+            self.checker = checker
+            cloudReady = true
+            Diagnostics.log("3D ghost: \(cloud.positions.count) points, live check \(checker != nil)")
         }
     }
 
@@ -220,7 +238,11 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let keyframe = lockedKeyframe ?? Guidance.closest(to: camera, in: reference.keyframes)
         guard let keyframe else { return }
         current = keyframe
-        updateGhost(keyframe, frame: frame)
+        if show3D {
+            checkCloud(frame: frame)
+        } else {
+            updateGhost(keyframe, frame: frame)
+        }
         // Less often when the phone is hot, so it does not throttle or shut the camera down.
         let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
         if usesDepth && showDifferences && (!hot || now.timeIntervalSince(lastDiff) > 0.5) {
@@ -376,19 +398,53 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         return UIImage(cgImage: cg)
     }
 
+    // MARK: 3D ghost
+
+    /// A few times a second: which parts of the 3D ghost the live LiDAR still finds in place
+    /// (hidden), and which are gone (shown solid, ringed in blue), from wherever the phone is.
+    private func checkCloud(frame: ARFrame) {
+        guard let checker, let display = ghostDisplay, !checkBusy, Date().timeIntervalSince(lastCheck) > 0.25,
+            let live = liveDepth(frame)
+        else { return }
+        lastCheck = Date()
+        checkBusy = true
+        checkQueue.async {
+            let result = checker.update(live: live)
+            Task { @MainActor in
+                self.checkBusy = false
+                guard let result else { return }
+                display.show(faint: result.faint, missing: result.missing)
+                if self.missingPoints != result.missing.count { self.missingPoints = result.missing.count }
+            }
+        }
+    }
+
+    /// The live LiDAR depth and the camera that took it.
+    private func liveDepth(_ frame: ARFrame) -> DepthView? {
+        guard let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth else { return nil }
+        let depthMap = depthData.depthMap
+        return DepthView(
+            depth: DepthMap.floats(DepthMap.copy(depthMap)),
+            width: CVPixelBufferGetWidth(depthMap),
+            height: CVPixelBufferGetHeight(depthMap),
+            cameraToWorld: frame.camera.transform,
+            intrinsics: frame.camera.intrinsics,
+            imageWidth: CVPixelBufferGetWidth(frame.capturedImage),
+            confidence: depthData.confidenceMap.map(DepthMap.bytes))
+    }
+
     // MARK: LiDAR differences
 
     private func updateDifferences(frame: ARFrame, around camera: simd_float4x4) {
-        guard !diffBusy, let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth else { return }
-        let depthMap = depthData.depthMap
-        let liveDepth = DepthMap.floats(DepthMap.copy(depthMap))
-        let width = CVPixelBufferGetWidth(depthMap)
-        let height = CVPixelBufferGetHeight(depthMap)
+        guard !diffBusy, let live = liveDepth(frame) else { return }
+        let liveValues = live.depth
+        let width = live.width
+        let height = live.height
         // Use the reference views that saw what the camera is pointing at, from the most similar
         // direction, so the check works from off camera and from other distances too.
         let withDepth = reference.keyframes.filter { $0.depthFile != nil }
         let nearby: [Keyframe]
-        if let target = Guidance.target(camera: camera, depth: liveDepth, width: width, height: height) {
+        if let target = Guidance.target(camera: camera, depth: liveValues, width: width, height: height) {
             let seeing = Guidance.views(seeing: target, from: camera.columns.3.xyz, in: withDepth, count: 3)
             nearby = seeing.isEmpty ? Guidance.closest(to: camera, in: withDepth, count: 3) : seeing
         } else {
@@ -399,14 +455,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             return (keyframe, depth)
         }
         guard !references.isEmpty else { return }
-        let live = DepthView(
-            depth: liveDepth,
-            width: CVPixelBufferGetWidth(depthMap),
-            height: CVPixelBufferGetHeight(depthMap),
-            cameraToWorld: camera,
-            intrinsics: frame.camera.intrinsics,
-            imageWidth: CVPixelBufferGetWidth(frame.capturedImage),
-            confidence: depthData.confidenceMap.map(DepthMap.bytes))
         let refs = references.map { keyframe, depth in
             DepthView(
                 depth: depth, width: keyframe.depthWidth, height: keyframe.depthHeight,
