@@ -223,6 +223,22 @@ enum DepthMap {
         return data
     }
 
+    /// Copies an 8-bit buffer, such as ARKit's depth confidence map, row by row.
+    static func bytes(_ buffer: CVPixelBuffer) -> [UInt8] {
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return [] }
+        var out = [UInt8](repeating: 0, count: width * height)
+        for row in 0..<height {
+            let source = base.advanced(by: row * rowBytes).assumingMemoryBound(to: UInt8.self)
+            for column in 0..<width { out[row * width + column] = source[column] }
+        }
+        return out
+    }
+
     static func floats(_ data: Data) -> [Float] {
         data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
     }

@@ -10,6 +10,8 @@ struct DepthView: @unchecked Sendable {
     let cameraToWorld: simd_float4x4
     let intrinsics: simd_float3x3  // in camera image pixels
     let imageWidth: Int  // camera image width the intrinsics refer to
+    /// ARKit's per-pixel confidence (0 low, 1 medium, 2 high), when known.
+    var confidence: [UInt8]? = nil
 
     /// Intrinsics scaled down to the depth map's resolution.
     var depthIntrinsics: (fx: Float, fy: Float, cx: Float, cy: Float) {
@@ -19,8 +21,12 @@ struct DepthView: @unchecked Sendable {
 }
 
 enum DepthDiff {
-    /// Changes smaller than this (plus 1 cm per metre of distance) are LiDAR noise.
-    static let threshold: Float = 0.04
+    /// Changes smaller than this (plus 2 cm per metre of distance) are LiDAR or tracking noise.
+    /// Tuned up after the first device test showed the whole table flagged with nothing moved.
+    static let threshold: Float = 0.06
+    static let perMetre: Float = 0.02
+    /// A flagged pixel needs this many flagged neighbours (of 8) to count, so only solid areas show.
+    static let minNeighbours = 6
     static let maxRange: Float = 5
 
     /// A colour mask at the live depth map's resolution: red where something is now nearer than
@@ -67,7 +73,8 @@ enum DepthDiff {
             let e = expected[i]
             let d = live.depth[i]
             guard e.isFinite, d > 0.1, d < maxRange else { continue }
-            let limit = threshold + 0.01 * e
+            if let confidence = live.confidence, confidence[i] < 2 { continue }
+            let limit = threshold + perMetre * e
             let o = i * 4
             if d < e - limit {
                 pixels[o] = 135; pixels[o + 1] = 24; pixels[o + 2] = 24; pixels[o + 3] = 150  // premultiplied red
@@ -100,7 +107,7 @@ enum DepthDiff {
                         if nx >= 0, nx < w, ny >= 0, ny < h, pixels[(ny * w + nx) * 4 + 3] > 0 { neighbours += 1 }
                     }
                 }
-                if neighbours < 3 { out.replaceSubrange(o..<(o + 4), with: [0, 0, 0, 0]) }
+                if neighbours < minNeighbours { out.replaceSubrange(o..<(o + 4), with: [0, 0, 0, 0]) }
             }
         }
         return out

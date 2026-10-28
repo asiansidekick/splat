@@ -228,6 +228,7 @@ struct RestoreView: View {
     @State private var showingLog = false
     @State private var showingCompare = false
     @State private var snapshotNote: String?
+    @State private var showingMore = false
 
     init(reference: Reference) {
         _restorer = StateObject(wrappedValue: Restorer(reference: reference))
@@ -253,9 +254,14 @@ struct RestoreView: View {
                 }
                 VStack {
                     Text(headline)
-                        .font(.headline)
+                        .font(.subheadline.bold())
                         .multilineTextAlignment(.center)
-                        .padding(10)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                        .dynamicTypeSize(...DynamicTypeSize.large)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: 480)
                         .background(
                             (restorer.matched ? Color.green : Color.black).opacity(0.6),
                             in: RoundedRectangle(cornerRadius: 10))
@@ -263,7 +269,9 @@ struct RestoreView: View {
                     Spacer()
                     controls
                 }
-                .padding()
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
+                .padding(.bottom, 20)
             }
             .onAppear {
                 restorer.viewport = geometry.size
@@ -310,62 +318,77 @@ struct RestoreView: View {
         }
     }
 
+    /// A slim bar over the camera; the rest opens on demand so the set stays visible.
     private var controls: some View {
-        VStack(spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(reference.slate.isEmpty ? "Next take" : "Scene \(reference.slate)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("Take \(reference.nextTakeNumber)").font(.title3.bold().monospacedDigit())
+        VStack(spacing: 8) {
+            if showingMore {
+                VStack(spacing: 8) {
+                    if restorer.can3D {
+                        Picker("Ghost", selection: $restorer.show3D) {
+                            Text("Photo ghost").tag(false)
+                            Text(restorer.cloudReady ? "3D ghost" : "3D (building…)").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    HStack {
+                        Button(restorer.lockedKeyframe == nil ? "Hold view" : "Follow camera") {
+                            restorer.toggleLock()
+                        }
+                        .buttonStyle(.bordered)
+                        Spacer()
+                        if restorer.usesDepth {
+                            Toggle("Changes", isOn: $restorer.showDifferences)
+                                .fixedSize()
+                        }
+                    }
+                    if restorer.usesDepth && restorer.showDifferences {
+                        HStack(spacing: 12) {
+                            Label("In front of where it was", systemImage: "square.fill").foregroundStyle(.red)
+                            Label("Missing", systemImage: "square.fill").foregroundStyle(.blue)
+                        }
+                        .font(.caption2)
+                        .labelStyle(.titleAndIcon)
+                    }
                 }
-                Spacer()
+            }
+            if let snapshotNote {
+                Text(snapshotNote).font(.caption2).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(spacing: 8) {
+                Text(reference.slate.isEmpty ? "T\(reference.nextTakeNumber)" : "\(reference.slate) T\(reference.nextTakeNumber)")
+                    .font(.subheadline.bold().monospacedDigit())
+                Image(systemName: "circle.lefthalf.filled").font(.caption)
+                Slider(value: $ghostOpacity, in: 0...1)
+                    .onChange(of: ghostOpacity) { _, value in restorer.setGhostOpacity(value) }
+                    .accessibilityLabel("Ghost strength")
                 Button {
                     snapshot()
                 } label: {
-                    Label("Snapshot", systemImage: "camera")
+                    Image(systemName: "camera")
                 }
+                .accessibilityLabel("Snapshot")
                 .buttonStyle(.bordered)
                 .disabled(restorer.status != .ready)
-                Button("Log take \(reference.nextTakeNumber)") {
+                Button("Log") {
                     loggingTake = Take(number: reference.nextTakeNumber, logged: Date(), resetChecked: restorer.matched)
                 }
+                .accessibilityLabel("Log take \(reference.nextTakeNumber)")
                 .buttonStyle(.borderedProminent)
-            }
-            if let snapshotNote {
-                Text(snapshotNote).font(.caption).frame(maxWidth: .infinity, alignment: .leading)
-            }
-            if restorer.can3D {
-                Picker("Ghost", selection: $restorer.show3D) {
-                    Text("Photo ghost").tag(false)
-                    Text(restorer.cloudReady ? "3D ghost" : "3D ghost (building…)").tag(true)
+                Button {
+                    withAnimation(.snappy) { showingMore.toggle() }
+                } label: {
+                    Image(systemName: showingMore ? "chevron.down" : "chevron.up")
                 }
-                .pickerStyle(.segmented)
-            }
-            HStack {
-                Image(systemName: "circle.lefthalf.filled")
-                Slider(value: $ghostOpacity, in: 0...1)
-                    .onChange(of: ghostOpacity) { _, value in restorer.setGhostOpacity(value) }
-            }
-            HStack {
-                Button(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow camera") {
-                    restorer.toggleLock()
-                }
+                .accessibilityLabel(showingMore ? "Fewer controls" : "More controls")
                 .buttonStyle(.bordered)
-                Spacer()
-                if restorer.usesDepth {
-                    Toggle("Highlight changes", isOn: $restorer.showDifferences)
-                        .fixedSize()
-                }
             }
-            if restorer.usesDepth && restorer.showDifferences {
-                Text("Red: something is in front of where it was. Blue: something is missing.")
-                    .font(.caption)
-            }
+            .controlSize(.small)
         }
-        .padding()
+        .font(.subheadline)
+        .padding(10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .frame(maxWidth: 560)  // keeps panels narrow when the device is held landscape
+        .frame(maxWidth: 480)  // keeps the bar narrow when the device is held landscape
+        .dynamicTypeSize(...DynamicTypeSize.large)  // large accessibility text would cover the set
     }
 
     /// Saves the set as it looks now, labelled for the take it comes before, to compare later.
@@ -375,6 +398,10 @@ struct RestoreView: View {
         guard let shot = restorer.takeSnapshot(label: count == 0 ? label : "\(label) (\(count + 1))") else { return }
         reference.snapshots.append(shot)
         try? ReferenceStore.save(reference)
-        snapshotNote = "Saved \(shot.label). Tap Compare to check it against the reference."
+        snapshotNote = "Saved \(shot.label). Tap Compare to check it."
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            snapshotNote = nil
+        }
     }
 }

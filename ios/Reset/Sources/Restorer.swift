@@ -200,7 +200,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             height: CVPixelBufferGetHeight(depthMap),
             cameraToWorld: camera,
             intrinsics: frame.camera.intrinsics,
-            imageWidth: CVPixelBufferGetWidth(frame.capturedImage))
+            imageWidth: CVPixelBufferGetWidth(frame.capturedImage),
+            confidence: frame.sceneDepth?.confidenceMap.map(DepthMap.bytes))
         let refs = references.map { keyframe, depth in
             DepthView(
                 depth: depth, width: keyframe.depthWidth, height: keyframe.depthHeight,
