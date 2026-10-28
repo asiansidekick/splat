@@ -903,8 +903,6 @@ struct CaptureStage: View {
                         progress: justSaved ? 1 : recorder.scanProgress, saved: justSaved,
                         mapping: recorder.mappingStatus, points: recorder.pointCount)
                         .transition(.opacity)
-                        .onAppear { holder.view?.debugOptions = [.showFeaturePoints] }
-                        .onDisappear { holder.view?.debugOptions = [] }
                 }
                 VStack {
                     Banner(text: status, tint: recorder.capturing ? .red : .black)
@@ -954,10 +952,18 @@ struct CaptureStage: View {
             recorder.prepare(useLiDAR: useLiDAR)
         }
         .onDisappear { recorder.stop() }
+        .onChange(of: showPoints) { _, show in
+            holder.view?.debugOptions = show ? [.showFeaturePoints] : []
+        }
         .onChange(of: useLiDAR) { _, on in
             recorder.stop()
             recorder.prepare(useLiDAR: on)
         }
+    }
+
+    /// The points ARKit is locking onto, shown while scanning a reference or walking around.
+    private var showPoints: Bool {
+        (mode == .snapshot && (recorder.pendingSave || recorder.saving)) || (mode == .walk && recorder.capturing)
     }
 
     private var shutterLabel: String {
