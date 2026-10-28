@@ -11,6 +11,12 @@ final class Camera: NSObject, ObservableObject {
     @Published var error: String?
     @Published var paused = false
     @Published private(set) var isFront = false
+    /// How far (degrees clockwise) a saved photo must turn to sit on the live preview. Zero when the
+    /// screen turns with the phone; 90 either way when rotation lock keeps the screen upright while
+    /// the phone is on its side.
+    @Published private(set) var photoToPreview: Double = 0
+    private var previewAngle: CGFloat = 90
+    private var captureAngle: CGFloat = 90
 
     private let output = AVCapturePhotoOutput()
     private let queue = DispatchQueue(label: "camera.session")
@@ -145,13 +151,22 @@ final class Camera: NSObject, ObservableObject {
         guard let layer = previewLayer else { return }
         let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: layer)
         self.coordinator = coordinator
-        previewObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { [weak self] _, _ in
-            DispatchQueue.main.async { self?.levelPreview() }
+        previewObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { [weak self] coordinator, _ in
+            let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+            DispatchQueue.main.async {
+                self?.previewAngle = angle
+                self?.updatePhotoToPreview()
+                self?.levelPreview()
+            }
         }
         // Kept up to date as the device turns, not set at the moment of capture: setting it then
         // makes the first photo after each rotation fail on some devices.
         captureObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) { [weak self] coordinator, _ in
             let angle = coordinator.videoRotationAngleForHorizonLevelCapture
+            DispatchQueue.main.async {
+                self?.captureAngle = angle
+                self?.updatePhotoToPreview()
+            }
             self?.queue.async {
                 guard let self, let connection = self.output.connection(with: .video),
                     connection.isVideoRotationAngleSupported(angle)
@@ -159,6 +174,15 @@ final class Camera: NSObject, ObservableObject {
                 connection.videoRotationAngle = angle
             }
         }
+    }
+}
+
+extension Camera {
+    private func updatePhotoToPreview() {
+        var degrees = Double(previewAngle - captureAngle).truncatingRemainder(dividingBy: 360)
+        if degrees > 180 { degrees -= 360 }
+        if degrees <= -180 { degrees += 360 }
+        if photoToPreview != degrees { photoToPreview = degrees }
     }
 }
 

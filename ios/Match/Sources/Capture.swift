@@ -164,16 +164,48 @@ struct CaptureView: View {
 
     @ViewBuilder
     private var ghostLayer: some View {
-        if let image = outlines ? ghostEdges : ghost {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .colorMultiply(outlines ? .cyan : .white)
-                .blendMode(outlines ? .screen : .normal)
-                .opacity(outlines ? max(opacity, 0.6) : opacity)
-                .scaleEffect(x: camera.isFront ? -ghostScale : ghostScale, y: ghostScale)
-                .offset(ghostOffset)
-                .allowsHitTesting(false)
+        GeometryReader { geometry in
+            if let image = outlines ? ghostEdges : ghost {
+                let size = geometry.size
+                let turn = camera.photoToPreview
+                let sideways = abs(abs(turn) - 90) < 1
+                // Fit the photo as it will look once turned, so a sideways photo still fills the view.
+                let box = sideways ? CGSize(width: size.height, height: size.width) : size
+                ZStack(alignment: .bottom) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: box.width, height: box.height)
+                        .rotationEffect(.degrees(turn))
+                        .frame(width: size.width, height: size.height)
+                        .colorMultiply(outlines ? .cyan : .white)
+                        .blendMode(outlines ? .screen : .normal)
+                        .opacity(outlines ? max(opacity, 0.6) : opacity)
+                        .scaleEffect(x: camera.isFront ? -ghostScale : ghostScale, y: ghostScale)
+                        .offset(ghostOffset)
+                        .allowsHitTesting(false)
+                    turnHint(image: image.size, sideways: sideways, view: size)
+                        .allowsHitTesting(false)
+                }
+                .frame(width: size.width, height: size.height)
+            }
+        }
+    }
+
+    /// When the reference was shot the other way round from how the phone is held, say which way to turn.
+    @ViewBuilder
+    private func turnHint(image: CGSize, sideways: Bool, view: CGSize) -> some View {
+        let photoWide = (image.width > image.height) != sideways
+        let viewWide = view.width > view.height
+        if image.width != image.height, photoWide != viewWide {
+            Label(photoWide ? "Reference is landscape: turn the phone sideways" : "Reference is portrait: turn the phone upright",
+                  systemImage: photoWide ? "rotate.right" : "rotate.left")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.black)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.yellow, in: Capsule())
+                .padding(.bottom, 10)
         }
     }
 
