@@ -1177,7 +1177,10 @@ struct ResetStage: View {
                     if restorer.status == .relocalizing, !reference.photoOnly, let photo = restorer.startPhoto {
                         findingHint(photo)
                     }
-                    Banner(text: headline, tint: restorer.matched ? .green : .black)
+                    // While the cross and ring are guiding, the set stays clear of text.
+                    if !guiding {
+                        Banner(text: headline, tint: restorer.matched ? .green : .black)
+                    }
                     Spacer()
                     ModelOverlay(placer: restorer.placer)
                     HStack(spacing: 8) {
@@ -1228,6 +1231,10 @@ struct ResetStage: View {
         .dynamicTypeSize(...DynamicTypeSize.large)
     }
 
+    private var guiding: Bool {
+        restorer.status == .ready && !restorer.show3D && !reference.photoOnly && !restorer.matched
+    }
+
     private var headline: String {
         switch restorer.status {
         case .loading: return "Loading…"
@@ -1238,7 +1245,7 @@ struct ResetStage: View {
             if restorer.show3D { return "3D ghost: check the props from anywhere" }
             return restorer.matched
                 ? "Matched. Line the props up with the ghost"
-                : "Put the ring on the cross, then step towards the dot"
+                : "Put the ring on the cross"
         }
     }
 
@@ -1399,8 +1406,8 @@ struct AimOverlay: View {
                             .frame(width: 48, height: 48)
                             .position(shown)
                     }
-                    PositionGauge(offset: offset, colour: colour)
-                        .position(x: 50, y: size.height - 110)
+                    DepthIndicator(forward: offset.forward, colour: colour)
+                        .position(centre)
                 }
                 .shadow(color: .black.opacity(0.5), radius: 1.5)
                 .animation(.linear(duration: 0.1), value: shown)
@@ -1448,47 +1455,32 @@ struct AimRing: Shape {
     }
 }
 
-/// Where to stand: the dot is the spot the photo was taken from, seen from above the phone (step
-/// towards it until it is in the middle); the bar shows forward and back.
-struct PositionGauge: View {
-    let offset: Offset
+/// Around the cross: arrows pointing in to step forward, pointing out to step back, bigger the
+/// further there is to go, with the distance underneath.
+struct DepthIndicator: View {
+    let forward: Float
     let colour: Color
 
-    private let radius: CGFloat = 24
+    private var centimetres: Int { Int((abs(forward) * 100).rounded()) }
 
     var body: some View {
-        HStack(spacing: 8) {
-            ZStack {
-                Circle().stroke(Color.white.opacity(0.6), lineWidth: 1.5)
-                Circle().stroke(Color.white.opacity(0.35), lineWidth: 1).frame(width: 18, height: 18)
-                Circle().fill(colour).frame(width: 10, height: 10).offset(dot)
+        let strength = CGFloat(min(1, (abs(forward) / 0.5).squareRoot()))
+        ZStack {
+            if centimetres >= 5 {
+                ForEach(0..<4, id: \.self) { k in
+                    Image(systemName: forward > 0 ? "arrowtriangle.down.fill" : "arrowtriangle.up.fill")
+                        .font(.system(size: 8 + 8 * strength))
+                        .foregroundStyle(colour)
+                        .offset(y: -40)
+                        .rotationEffect(.degrees(Double(k) * 90))
+                }
+                Text("\(forward > 0 ? "FORWARD" : "BACK") \(centimetres) cm")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(colour)
+                    .offset(y: 58)
             }
-            .frame(width: 2 * radius + 12, height: 2 * radius + 12)
-            ZStack {
-                Capsule().fill(Color.white.opacity(0.3)).frame(width: 6)
-                Rectangle().fill(Color.white).frame(width: 16, height: 2)
-                Capsule().fill(colour).frame(width: 14, height: 6).offset(y: bar)
-            }
-            .frame(width: 16, height: 2 * radius + 12)
         }
-        .padding(6)
-        .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    /// Far moves fill the pad gently, near ones move the dot a lot, so the last few centimetres show.
-    private func scaled(_ metres: Float) -> CGFloat {
-        radius * CGFloat(min(1, (abs(metres) / 0.6).squareRoot()))
-    }
-
-    private var dot: CGSize {
-        let length = hypot(offset.right, offset.up)
-        guard length > 0.001 else { return .zero }
-        let r = scaled(length)
-        return CGSize(width: CGFloat(offset.right / length) * r, height: CGFloat(-offset.up / length) * r)
-    }
-
-    private var bar: CGFloat {
-        let r = scaled(offset.forward)
-        return offset.forward > 0 ? -r : r
+        .frame(width: 130, height: 130)
+        .animation(.easeOut(duration: 0.2), value: centimetres)
     }
 }
