@@ -27,6 +27,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         didSet { cloudNode.isHidden = !show3D }
     }
     @Published var cloudReady = false
+    /// Set when the reference has nothing to build the 3D ghost from.
+    @Published var cloudFailed = false
     /// How many points of the 3D ghost the live LiDAR finds gone from where they were.
     @Published var missingPoints = 0
     /// Added to the AR scene; sits in the reference's room coordinates once relocalised.
@@ -94,10 +96,18 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let check = usesDepth
         Task {
             let (cloud, checker) = await Task.detached(priority: .utility) {
-                let cloud = Ghost3D.build(reference: saved)
-                return (cloud, check ? Ghost3D.Checker(cloud: cloud) : nil)
+                var cloud = Ghost3D.build(reference: saved)
+                Diagnostics.log("3D ghost from depth: \(cloud.note)")
+                if cloud.positions.isEmpty {
+                    cloud = Ghost3D.mapPoints(reference: saved)
+                    Diagnostics.log("3D ghost from the room map: \(cloud.note)")
+                }
+                return (cloud, check && !cloud.positions.isEmpty ? Ghost3D.Checker(cloud: cloud) : nil)
             }.value
-            guard !cloud.positions.isEmpty else { return }
+            guard !cloud.positions.isEmpty else {
+                cloudFailed = true
+                return
+            }
             let display = Ghost3D.Display(cloud: cloud)
             display.faintOpacity = faintOpacity
             cloudNode.addChildNode(display.node)

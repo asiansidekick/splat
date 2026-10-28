@@ -1072,7 +1072,7 @@ struct ResetStage: View {
         } modes: { vertical in
             if restorer.can3D {
                 ModePicker(
-                    modes: [false, true], label: { $0 ? (restorer.cloudReady ? "3D GHOST" : "3D (BUILDING)") : "PHOTO GHOST" },
+                    modes: [false, true], label: { $0 ? (restorer.cloudReady || restorer.cloudFailed ? "3D GHOST" : "3D (BUILDING)") : "PHOTO GHOST" },
                     selection: $restorer.show3D, vertical: vertical)
             } else {
                 Text("PHOTO GHOST").font(.footnote.weight(.semibold)).foregroundStyle(Color.yellow)
@@ -1249,6 +1249,7 @@ struct ResetStage: View {
         case .ready:
             if reference.photoOnly { return "Line the set up with the photo" }
             if restorer.show3D {
+                if restorer.cloudFailed { return "No 3D points in this reference. Send the feedback log from ? please" }
                 if !restorer.cloudReady { return "Building the 3D ghost…" }
                 if !restorer.usesDepth { return "3D ghost: line the props up with the dots" }
                 return restorer.missingPoints > 0

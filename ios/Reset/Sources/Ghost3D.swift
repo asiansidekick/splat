@@ -18,6 +18,8 @@ enum Ghost3D {
     struct Cloud: @unchecked Sendable {
         var positions: [SIMD3<Float>] = []
         var colors: [SIMD4<Float>] = []
+        /// What happened while building, for the feedback log.
+        var note = ""
     }
 
     static func build(reference: Reference) -> Cloud {
@@ -26,18 +28,19 @@ enum Ghost3D {
         let keyframes = ReportPDF.spread(withDepth, count: maxKeyframes)
         var cloud = Cloud()
         var filled = Set<SIMD3<Int32>>()
+        var noFile = 0, wrongSize = 0, noPhoto = 0, readings = 0
 
         for keyframe in keyframes {
-            guard cloud.positions.count < maxPoints,
-                let depthFile = keyframe.depthFile,
+            guard cloud.positions.count < maxPoints else { break }
+            guard let depthFile = keyframe.depthFile,
                 let data = try? Data(contentsOf: folder.appendingPathComponent(depthFile))
-            else { continue }
+            else { noFile += 1; continue }
             let depth = DepthMap.floats(data)
             let w = keyframe.depthWidth
             let h = keyframe.depthHeight
-            guard depth.count == w * h,
-                let rgba = pixels(of: folder.appendingPathComponent(keyframe.imageFile), width: w, height: h)
-            else { continue }
+            guard w > 0, depth.count == w * h else { wrongSize += 1; continue }
+            guard let rgba = pixels(of: folder.appendingPathComponent(keyframe.imageFile), width: w, height: h)
+            else { noPhoto += 1; continue }
 
             let scale = Float(w) / Float(keyframe.imageWidth)
             let k = keyframe.cameraIntrinsics
@@ -48,6 +51,7 @@ enum Ghost3D {
                 for u in stride(from: 0, to: w, by: 2) {
                     let d = depth[v * w + u]
                     guard d > 0.1, d < maxRange else { continue }
+                    readings += 1
                     // ARKit camera space: x right, y up, looking down -z (same as DepthDiff).
                     let local = SIMD4<Float>((Float(u) - cx) / fx * d, -(Float(v) - cy) / fy * d, -d, 1)
                     let world = toWorld * local
@@ -60,6 +64,22 @@ enum Ghost3D {
                 }
             }
         }
+        cloud.note = "\(keyframes.count) depth views (of \(reference.keyframes.count)), missing \(noFile), wrong size \(wrongSize), "
+            + "no photo \(noPhoto), \(readings) readings, \(cloud.positions.count) points"
+        return cloud
+    }
+
+    /// The tracked points ARKit kept in the saved room map, in one colour: sparser than LiDAR,
+    /// but there for every reference, so the 3D ghost still shows when depth is missing.
+    static func mapPoints(reference: Reference) -> Cloud {
+        var cloud = Cloud()
+        guard let map = try? ReferenceStore.loadWorldMap(for: reference.id) else {
+            cloud.note = "no room map"
+            return cloud
+        }
+        cloud.positions = Array(map.rawFeaturePoints.points.prefix(maxPoints))
+        cloud.colors = Array(repeating: SIMD4(0.55, 0.85, 1, 1), count: cloud.positions.count)
+        cloud.note = "\(cloud.positions.count) room map points"
         return cloud
     }
 
