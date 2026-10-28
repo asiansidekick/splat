@@ -486,6 +486,25 @@ struct TakeBar: View {
     }
 }
 
+/// When a photo was taken, small enough to sit on a thumbnail: the time today, else day and time.
+struct TimeStamp: View {
+    let date: Date
+    var size: CGFloat = 10
+
+    var body: some View {
+        Text(Calendar.current.isDateInToday(date)
+             ? date.formatted(date: .omitted, time: .shortened)
+             : date.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
+            .font(.system(size: size, weight: .semibold).monospacedDigit())
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(.black.opacity(0.6), in: Capsule())
+    }
+}
+
 struct ShotThumbnail: View {
     @EnvironmentObject private var store: BoardStore
     let shot: Shot
@@ -510,7 +529,10 @@ struct ShotThumbnail: View {
                         .padding(4)
                 }
             }
-            .overlay(alignment: .bottomLeading) {
+            .overlay(alignment: .bottomTrailing) {
+                TimeStamp(date: shot.taken).padding(4)
+            }
+            .overlay(alignment: .topTrailing) {
                 let parts = [shot.angle, shot.note.isEmpty ? "" : "✎"].filter { !$0.isEmpty }
                 if !parts.isEmpty {
                     Text(parts.joined(separator: " "))

@@ -435,6 +435,9 @@ struct CaptureView: View {
             .frame(width: 52, height: 52)
             .background(.white.opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(alignment: .bottom) {
+                if let shot { TimeStamp(date: shot.taken, size: 8).offset(y: 9) }
+            }
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(shown != nil ? Color.yellow : .white, lineWidth: 2))
         }
         .disabled(board?.shots.isEmpty ?? true)
@@ -640,6 +643,15 @@ struct GalleryView: View {
                             }
                             .frame(width: shot.id == selection ? 46 : 34, height: 46)
                             .clipped()
+                            .overlay(alignment: .bottom) {
+                                Text(shot.taken.formatted(date: .omitted, time: .shortened))
+                                    .font(.system(size: 7, weight: .semibold).monospacedDigit())
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.6)
+                                    .frame(maxWidth: .infinity)
+                                    .background(.black.opacity(0.6))
+                            }
                             .overlay(alignment: .topLeading) {
                                 if shot.isReference {
                                     Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.yellow).padding(2)
