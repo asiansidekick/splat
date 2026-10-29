@@ -1164,8 +1164,6 @@ struct ResetStage: View {
     /// Compare by wiping across instead of fading.
     @AppStorage("compareWipe") private var wipe = false
     @State private var ghostShown = true
-    @State private var showingStrength = false
-    @State private var strengthTask: Task<Void, Never>?
     /// While paused: 0 shows the reference, 1 the frozen live picture.
     @State private var toNow = 1.0
     @State private var importingModel = false
@@ -1276,8 +1274,6 @@ struct ResetStage: View {
                 }
                 .accessibilityLabel(wipe ? "Wiping. Switch to fade" : "Fading. Switch to wipe")
             } else {
-                Button { showStrength() } label: { Image(systemName: "circle.lefthalf.filled").font(.title3) }
-                    .accessibilityLabel("Ghost strength")
                 if restorer.usesDepth {
                     Button { restorer.showDifferences.toggle() } label: {
                         Image(systemName: "square.2.layers.3d").font(.title3)
@@ -1368,16 +1364,6 @@ struct ResetStage: View {
                     if let headline, !restorer.paused {
                         Banner(text: headline)
                     }
-                    if showingStrength, !restorer.paused {
-                        Slider(value: $ghostOpacity, in: 0...1, onEditingChanged: { _ in showStrength() })
-                            .accessibilityLabel("Ghost strength")
-                            .tint(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 4)
-                            .background(Color.black.opacity(0.45), in: Capsule())
-                            .frame(maxWidth: 320)
-                            .transition(.opacity)
-                    }
                     Spacer()
                     if restorer.paused {
                         CompareSlider(toNow: $toNow)
@@ -1385,6 +1371,19 @@ struct ResetStage: View {
                             .padding(.horizontal, 12)
                     } else {
                         ModelOverlay(placer: restorer.placer)
+                        // Always there, small and off to the side, clear of the bottom edge guide.
+                        HStack(spacing: 6) {
+                            Image(systemName: "circle.lefthalf.filled").font(.caption)
+                            Slider(value: $ghostOpacity, in: 0...1)
+                                .accessibilityLabel("Ghost strength")
+                                .tint(.white)
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 2)
+                        .background(Color.black.opacity(0.3), in: Capsule())
+                        .frame(width: 150)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .padding(8)
@@ -1409,19 +1408,7 @@ struct ResetStage: View {
             }
             .onChange(of: ghostOpacity) { _, value in
                 restorer.setGhostOpacity(value)
-                if showingStrength { showStrength() }
             }
-        }
-    }
-
-    /// Shows the ghost strength slider for two and a half seconds after the last touch.
-    private func showStrength() {
-        withAnimation(.easeOut(duration: 0.2)) { showingStrength = true }
-        strengthTask?.cancel()
-        strengthTask = Task {
-            try? await Task.sleep(for: .seconds(2.5))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.3)) { showingStrength = false }
         }
     }
 
