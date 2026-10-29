@@ -94,7 +94,7 @@ struct CameraHome: View {
         Group {
             if let id = selectedID, let reference = binding(for: id) {
                 ResetStage(
-                    reference: reference, thumbnail: thumbnail, open: { panel = $0 },
+                    reference: reference, thumbnails: thumbnails, open: { panel = $0 },
                     close: { selectedID = nil }, showToast: show, onPhoto: took)
                     .id(id)
             } else {
@@ -343,6 +343,8 @@ struct NextSlateSheet: View {
 /// not restart the camera. Things drawn over the preview keep clear of the controls with
 /// `chromeInsets`.
 struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutter: View, Trailing: View>: View {
+    /// Dark bars behind the controls. Without them the controls float straight on the picture.
+    var bars = true
     @ViewBuilder let top: () -> Top
     @ViewBuilder let preview: () -> Preview
     @ViewBuilder let modes: (_ vertical: Bool) -> Modes
@@ -365,7 +367,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                 VStack(spacing: 0) {
                     top()
                         .frame(height: Self.topHeight)
-                        .background(Color.black.opacity(0.35).ignoresSafeArea(edges: .top))
+                        .background(Color.black.opacity(bars ? 0.35 : 0).ignoresSafeArea(edges: .top))
                     Spacer(minLength: 0)
                     if !landscape {
                         VStack(spacing: 10) {
@@ -382,7 +384,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .padding(.top, 12)
                         .padding(.bottom, 16)
                         .frame(maxWidth: .infinity, minHeight: Self.bottomHeight)
-                        .background(Color.black.opacity(0.35).ignoresSafeArea(edges: .bottom))
+                        .background(Color.black.opacity(bars ? 0.35 : 0).ignoresSafeArea(edges: .bottom))
                     }
                 }
                 .padding(.trailing, landscape ? max(0, Self.sideWidth - safe.trailing) : 0)
@@ -400,7 +402,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .padding(.vertical, 8)
                         .frame(width: Self.sideWidth)
                         .frame(maxHeight: .infinity)
-                        .background(Color.black.opacity(0.35).ignoresSafeArea(edges: [.top, .bottom]))
+                        .background(Color.black.opacity(bars ? 0.35 : 0).ignoresSafeArea(edges: [.top, .bottom]))
                     }
                     // Right against the edge of the screen, like the Camera app, not inset by the
                     // safe area, which only leaves an empty strip.
@@ -487,6 +489,8 @@ struct ShutterButton: View {
     enum Style { case photo, record, stop }
     let style: Style
     var busy = false
+    /// The outer ring: green when the ghost is lined up.
+    var ring: Color = .white
     let action: () -> Void
 
     var body: some View {
@@ -495,7 +499,7 @@ struct ShutterButton: View {
             action()
         } label: {
             ZStack {
-                Circle().stroke(Color.white, lineWidth: 4).frame(width: 74, height: 74)
+                Circle().stroke(ring, lineWidth: 4).frame(width: 74, height: 74)
                 switch style {
                 case .photo: Circle().fill(Color.white).frame(width: 60, height: 60)
                 case .record: Circle().fill(Color.red).frame(width: 60, height: 60)
@@ -1115,29 +1119,39 @@ struct CaptureStage: View {
 
 // MARK: - Reset
 
-/// Putting a set back: the reference's ghost over the live camera. The shutter saves a snapshot,
-/// the button beside it logs the take.
+/// Putting a set back: the reference's ghost over the live camera, with edge guides to line it
+/// up. The shutter saves a snapshot, Log logs the take, and Pause freezes the picture to fade or
+/// wipe between the reference and now.
 struct ResetStage: View {
     @StateObject private var restorer: Restorer
     @Binding var reference: Reference
-    let thumbnail: AnyView
+    @ObservedObject var thumbnails: Thumbnails
     let open: (CameraHome.Panel) -> Void
     let close: () -> Void
     let showToast: (String) -> Void
     let onPhoto: (UIImage) -> Void
     @AppStorage("ghostOpacity") private var ghostOpacity = 0.5
+    /// Pause on the left and Log on the right, for the left hand.
+    @AppStorage("leftHanded") private var leftHanded = false
+    /// Compare by wiping across instead of fading.
+    @AppStorage("compareWipe") private var wipe = false
+    @State private var ghostShown = true
+    @State private var showingStrength = false
+    @State private var strengthTask: Task<Void, Never>?
+    /// While paused: 0 shows the reference, 1 the frozen live picture.
+    @State private var toNow = 1.0
     @State private var importingModel = false
     @State private var notingTake: Take?
     @State private var holder = CameraViewHolder()
 
     init(
-        reference: Binding<Reference>, thumbnail: AnyView,
+        reference: Binding<Reference>, thumbnails: Thumbnails,
         open: @escaping (CameraHome.Panel) -> Void, close: @escaping () -> Void,
         showToast: @escaping (String) -> Void, onPhoto: @escaping (UIImage) -> Void
     ) {
         _reference = reference
         _restorer = StateObject(wrappedValue: Restorer(reference: reference.wrappedValue))
-        self.thumbnail = thumbnail
+        self.thumbnails = thumbnails
         self.open = open
         self.close = close
         self.showToast = showToast
@@ -1145,35 +1159,28 @@ struct ResetStage: View {
     }
 
     var body: some View {
-        CameraLayout {
+        CameraLayout(bars: false) {
             topBar
         } preview: {
             preview
         } modes: { vertical in
-            if restorer.can3D && Restorer.offers3D {
+            if restorer.can3D && Restorer.offers3D && !restorer.paused {
                 ModePicker(
                     modes: [false, true], label: { $0 ? (restorer.cloudReady || restorer.cloudFailed ? "3D GHOST" : "3D (BUILDING)") : "PHOTO GHOST" },
                     selection: $restorer.show3D, vertical: vertical)
-            } else {
-                Text("PHOTO GHOST").font(.footnote.weight(.semibold)).foregroundStyle(Color.yellow)
             }
         } leading: {
-            thumbnail
+            if leftHanded { pauseButton } else { logButton }
         } shutter: {
-            ShutterButton(style: .photo) { snapshot() }
-                .disabled(restorer.status != .ready)
-                .opacity(restorer.status == .ready ? 1 : 0.5)
+            ShutterButton(style: .photo, ring: restorer.matched ? .green : .white) { snapshot() }
+                .disabled(restorer.status != .ready || restorer.paused)
+                .opacity(restorer.paused ? 0 : restorer.status == .ready ? 1 : 0.5)
+                .shadow(color: .black.opacity(0.5), radius: 3)
                 .accessibilityLabel("Snapshot")
         } trailing: {
-            SideButton(title: "Log T\(reference.nextTakeNumber)", systemImage: "checkmark.circle", tint: .yellow) {
-                logTake()
-            }
-            .contextMenu {
-                Button { notingTake = newTake() } label: { Label("Log with a note", systemImage: "square.and.pencil") }
-                Button { open(.takeLog(reference.id)) } label: { Label("Take log", systemImage: "list.number") }
-            }
-            .accessibilityLabel("Log take \(reference.nextTakeNumber)")
+            if leftHanded { logButton } else { pauseButton }
         }
+        .modifier(CaptureButtonAction { togglePause() })
         .sheet(item: $notingTake) { take in
             TakeEditor(take: take, slate: reference.slate) { logged in
                 reference.takes.append(logged)
@@ -1187,37 +1194,83 @@ struct ResetStage: View {
             reference.models = models
             save()
         }
+        .onChange(of: restorer.matched) { _, matched in
+            if matched { Diagnostics.log("Edge guides all seated") }
+        }
         .onDisappear { restorer.stop() }
     }
 
+    private var logButton: some View {
+        SideButton(title: "Log T\(reference.nextTakeNumber)", systemImage: "checkmark.circle", tint: .yellow) {
+            logTake()
+        }
+        .shadow(color: .black.opacity(0.6), radius: 3)
+        .contextMenu {
+            Button { notingTake = newTake() } label: { Label("Log with a note", systemImage: "square.and.pencil") }
+            Button { open(.takeLog(reference.id)) } label: { Label("Take log", systemImage: "list.number") }
+        }
+        .accessibilityLabel("Log take \(reference.nextTakeNumber)")
+        .opacity(restorer.paused ? 0 : 1)
+        .disabled(restorer.paused)
+    }
+
+    private var pauseButton: some View {
+        PauseButton(paused: restorer.paused) { togglePause() }
+            .disabled(restorer.status != .ready && !restorer.paused)
+    }
+
     private var topBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Button { close() } label: { Image(systemName: "xmark").font(.title3) }
                 .accessibilityLabel("Back to recording")
+            // This reference: tap to hide or show the ghost, press and hold for all references.
+            ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 34, selected: ghostShown)
+                .opacity(ghostShown ? 1 : 0.5)
+                .onTapGesture {
+                    Haptics.tap()
+                    ghostShown.toggle()
+                }
+                .onLongPressGesture { open(.gallery) }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel(ghostShown ? "Hide the ghost" : "Show the ghost")
             TopPill(text: reference.slate.isEmpty ? "Take \(reference.nextTakeNumber)" : "\(reference.slate) · T\(reference.nextTakeNumber)") {
                 open(.takeLog(reference.id))
             }
-            Spacer()
-            if restorer.usesDepth {
-                TopPill(text: "Changes", systemImage: "square.2.layers.3d", highlighted: restorer.showDifferences) {
-                    restorer.showDifferences.toggle()
+            Spacer(minLength: 0)
+            if restorer.paused {
+                TopPill(text: wipe ? "Wipe" : "Fade", systemImage: wipe ? "rectangle.split.2x1" : "square.on.square") {
+                    Haptics.tap()
+                    wipe.toggle()
                 }
-            }
-            if !reference.photoOnly {
-                Button { restorer.toggleLock() } label: {
-                    Image(systemName: restorer.lockedKeyframe == nil ? "lock.open" : "lock.fill")
-                        .font(.title3)
-                        .foregroundStyle(restorer.lockedKeyframe == nil ? Color.white : Color.yellow)
+                .accessibilityLabel(wipe ? "Wiping. Switch to fade" : "Fading. Switch to wipe")
+            } else {
+                Button { showStrength() } label: { Image(systemName: "circle.lefthalf.filled").font(.title3) }
+                    .accessibilityLabel("Ghost strength")
+                if restorer.usesDepth {
+                    Button { restorer.showDifferences.toggle() } label: {
+                        Image(systemName: "square.2.layers.3d").font(.title3)
+                            .foregroundStyle(restorer.showDifferences ? Color.yellow : Color.white)
+                    }
+                    .accessibilityLabel(restorer.showDifferences ? "Hide LiDAR changes" : "Show LiDAR changes")
                 }
-                .accessibilityLabel(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow the camera")
+                if !reference.photoOnly {
+                    Button { restorer.toggleLock() } label: {
+                        Image(systemName: restorer.lockedKeyframe == nil ? "lock.open" : "lock.fill")
+                            .font(.title3)
+                            .foregroundStyle(restorer.lockedKeyframe == nil ? Color.white : Color.yellow)
+                    }
+                    .accessibilityLabel(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow the camera")
+                }
             }
             Menu {
+                Button { open(.gallery) } label: { Label("References", systemImage: "photo.on.rectangle") }
                 Button { importingModel = true } label: { Label("Add 3D models (USDZ)", systemImage: "cube") }
                     .disabled(restorer.status != .ready)
                 Button { open(.compare(reference.id)) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
                 Button { open(.takeLog(reference.id)) } label: { Label("Take log", systemImage: "list.number") }
                 Button { open(.pdf(reference.id)) } label: { Label("Share PDF report", systemImage: "square.and.arrow.up") }
                 Button { open(.slate(reference.id)) } label: { Label("Edit slate", systemImage: "pencil") }
+                Toggle(isOn: $leftHanded) { Label("Left-handed controls", systemImage: "hand.raised") }
                 Button { open(.help) } label: { Label("Help", systemImage: "questionmark.circle") }
             } label: {
                 Image(systemName: "ellipsis.circle").font(.title3)
@@ -1226,6 +1279,7 @@ struct ResetStage: View {
         }
         .padding(.horizontal, 12)
         .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.6), radius: 3)
     }
 
     private var preview: some View {
@@ -1235,28 +1289,30 @@ struct ResetStage: View {
                     restorer.placer.attachGestures(to: view)
                     holder.view = view
                 }
-                if reference.photoOnly, let photo = restorer.startPhoto {
-                    Image(uiImage: photo)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .clipped()
-                        .opacity(ghostOpacity)
-                        .allowsHitTesting(false)
-                } else if restorer.show3D {
-                    // Drawn at the ghost strength already, dots in the photos' colours, gone parts blue.
-                    if let ghost = restorer.ghost3D {
+                if ghostShown {
+                    if reference.photoOnly, let photo = restorer.startPhoto {
+                        Image(uiImage: photo)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped()
+                            .opacity(ghostOpacity)
+                            .allowsHitTesting(false)
+                    } else if restorer.show3D {
+                        // Drawn at the ghost strength already, dots in the photos' colours, gone parts blue.
+                        if let ghost = restorer.ghost3D {
+                            Image(uiImage: ghost)
+                                .resizable()
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                                .allowsHitTesting(false)
+                        }
+                    } else if let ghost = restorer.ghost {
                         Image(uiImage: ghost)
                             .resizable()
                             .frame(width: geometry.size.width, height: geometry.size.height)
+                            .opacity(ghostOpacity)
                             .allowsHitTesting(false)
                     }
-                } else if let ghost = restorer.ghost {
-                    Image(uiImage: ghost)
-                        .resizable()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .opacity(ghostOpacity)
-                        .allowsHitTesting(false)
                 }
                 if let differences = restorer.differences {
                     Image(uiImage: differences)
@@ -1264,33 +1320,55 @@ struct ResetStage: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .allowsHitTesting(false)
                 }
-                if restorer.status == .ready, !restorer.show3D, !reference.photoOnly {
+                if restorer.status == .ready, !restorer.show3D, !reference.photoOnly, !restorer.paused {
                     AimOverlay(state: restorer.aim)
+                    EdgeGuideOverlay(state: restorer.edges)
+                }
+                if restorer.paused {
+                    HeldCompare(
+                        held: restorer.held, plainReference: reference.photoOnly ? restorer.startPhoto : nil,
+                        toNow: $toNow, wipe: wipe)
                 }
                 VStack(spacing: 8) {
-                    if restorer.status == .relocalizing, !reference.photoOnly, let photo = restorer.startPhoto {
+                    if restorer.status == .relocalizing, !reference.photoOnly, let photo = restorer.startPhoto, !restorer.paused {
                         findingHint(photo)
                     }
-                    // While the cross and ring are guiding, the set stays clear of text.
-                    if !guiding {
-                        Banner(text: headline, tint: restorer.matched ? .green : .black)
+                    if let headline, !restorer.paused {
+                        Banner(text: headline)
+                    }
+                    if restorer.paused, let held = restorer.held {
+                        pausedChip(since: held.since)
+                    }
+                    if showingStrength, !restorer.paused {
+                        Slider(value: $ghostOpacity, in: 0...1, onEditingChanged: { _ in showStrength() })
+                            .accessibilityLabel("Ghost strength")
+                            .tint(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 4)
+                            .background(Color.black.opacity(0.45), in: Capsule())
+                            .frame(maxWidth: 320)
+                            .transition(.opacity)
                     }
                     Spacer()
-                    ModelOverlay(placer: restorer.placer)
-                    HStack(spacing: 8) {
-                        Image(systemName: "circle.lefthalf.filled").font(.caption)
-                        Slider(value: $ghostOpacity, in: 0...1)
-                            .accessibilityLabel("Ghost strength")
+                    if restorer.paused {
+                        CompareSlider(toNow: $toNow)
+                            .frame(maxWidth: 420)
+                            .padding(.horizontal, 12)
+                    } else {
+                        ModelOverlay(placer: restorer.placer)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.4), in: Capsule())
-                    .frame(maxWidth: 320)
-                    .foregroundStyle(.white)
                 }
                 .padding(8)
                 .clearOfControls()
                 ModelSizeBadge(placer: restorer.placer)
+            }
+            .overlay {
+                // Amber while paused; green once all four edge guides are in.
+                if restorer.paused {
+                    Rectangle().strokeBorder(Color.orange, lineWidth: 5).ignoresSafeArea().allowsHitTesting(false)
+                } else if restorer.matched {
+                    Rectangle().strokeBorder(Color.green, lineWidth: 4).ignoresSafeArea().allowsHitTesting(false)
+                }
             }
             .onAppear {
                 restorer.viewport = geometry.size
@@ -1302,7 +1380,44 @@ struct ResetStage: View {
                 restorer.viewport = size
                 restorer.orientation = Screen.orientation
             }
-            .onChange(of: ghostOpacity) { _, value in restorer.setGhostOpacity(value) }
+            .onChange(of: ghostOpacity) { _, value in
+                restorer.setGhostOpacity(value)
+                if showingStrength { showStrength() }
+            }
+        }
+    }
+
+    /// How long the picture has been paused, large, so it is never mistaken for live.
+    private func pausedChip(since: Date) -> some View {
+        TimelineView(.periodic(from: since, by: 1)) { timeline in
+            Text("PAUSED \(max(0, Int(timeline.date.timeIntervalSince(since))))s")
+                .font(.system(size: 26, weight: .heavy).monospacedDigit())
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.orange, in: Capsule())
+                .foregroundStyle(.black)
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// Shows the ghost strength slider for two and a half seconds after the last touch.
+    private func showStrength() {
+        withAnimation(.easeOut(duration: 0.2)) { showingStrength = true }
+        strengthTask?.cancel()
+        strengthTask = Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.3)) { showingStrength = false }
+        }
+    }
+
+    private func togglePause() {
+        if restorer.paused {
+            restorer.resume()
+        } else {
+            guard restorer.status == .ready else { return }
+            toNow = 1
+            restorer.pause()
         }
     }
 
@@ -1326,29 +1441,21 @@ struct ResetStage: View {
         .dynamicTypeSize(...DynamicTypeSize.large)
     }
 
-    private var guiding: Bool {
-        restorer.status == .ready && !restorer.show3D && !reference.photoOnly && !restorer.matched && !restorer.holding
-    }
-
-    private var headline: String {
+    /// Only while there is no ghost to line up: loading, finding the room, a problem, or the 3D
+    /// ghost's state. Lining up itself is shown by the edge guides alone.
+    private var headline: String? {
         switch restorer.status {
         case .loading: return "Loading…"
         case .relocalizing: return "Point at the set and move slowly to find \(reference.slate.isEmpty ? "the reference" : reference.slate)"
         case .failed(let message): return message
         case .ready:
-            if reference.photoOnly { return "Line the set up with the photo" }
-            if restorer.show3D {
-                if restorer.cloudFailed { return "No 3D points in this reference. Send the feedback log from ? please" }
-                if !restorer.cloudReady { return "Building the 3D ghost…" }
-                if !restorer.usesDepth { return "3D ghost: line the props up with the dots" }
-                return restorer.missingPoints > 0
-                    ? "Blue dots: something has gone from there"
-                    : "3D ghost: dots on the props as they were"
-            }
-            if restorer.holding { return "Hold still…" }
-            return restorer.matched
-                ? "Matched. Line the props up with the ghost"
-                : "Line up the two spheres"
+            guard restorer.show3D else { return nil }
+            if restorer.cloudFailed { return "No 3D points in this reference. Send the feedback log from ? please" }
+            if !restorer.cloudReady { return "Building the 3D ghost…" }
+            if !restorer.usesDepth { return "3D ghost: line the props up with the dots" }
+            return restorer.missingPoints > 0
+                ? "Blue dots: something has gone from there"
+                : "3D ghost: dots on the props as they were"
         }
     }
 
@@ -1470,11 +1577,7 @@ struct ScanProgressOverlay: View {
 
 // MARK: - Guidance graphic
 
-/// Live guidance over the camera, from ARKit's tracking: a ring where the reference camera was
-/// aiming (put it on the cross, ticks level), and a pad and bar showing where to step to stand
-/// where the photo was taken. It fades away once everything lines up.
-/// The guide itself is two balls (`GuideSpheres`, drawn by `GuideBall`). When the reference spot is off screen,
-/// this points the way to turn to find it.
+/// When the reference is off screen, a yellow arrow at the edge points the way to turn.
 struct AimOverlay: View {
     @ObservedObject var state: AimState
 
@@ -1482,18 +1585,6 @@ struct AimOverlay: View {
         GeometryReader { geometry in
             let size = geometry.size
             let centre = CGPoint(x: size.width / 2, y: size.height / 2)
-            // The two guide balls, on top of the photo ghost: the room's ball solid and turned
-            // the way the reference was held, the phone's own ball at half strength, tipping to
-            // show tilt.
-            if let balls = state.balls {
-                GuideBall(roll: state.roll, tip: 0)
-                    .frame(width: balls.targetRadius * 2, height: balls.targetRadius * 2)
-                    .position(balls.target)
-                GuideBall(roll: 0, tip: balls.tip)
-                    .frame(width: balls.liveRadius * 2, height: balls.liveRadius * 2)
-                    .opacity(0.5)
-                    .position(balls.live)
-            }
             if let point = state.point, let offset = state.offset, !offset.isMatched {
                 let inset: CGFloat = 50
                 let shown = CGPoint(
@@ -1509,50 +1600,6 @@ struct AimOverlay: View {
                         .animation(.linear(duration: 0.1), value: shown)
                 }
             }
-        }
-        .allowsHitTesting(false)
-    }
-}
-
-
-/// A guide ball: yellow on top, dark underneath, a black line between, shaded to look round.
-/// `roll` turns it (radians, clockwise); `tip` leans its top towards you (radians), which moves
-/// the line down and shows more yellow.
-struct GuideBall: View {
-    let roll: Double
-    let tip: Double
-
-    var body: some View {
-        Canvas { context, size in
-            let r = min(size.width, size.height) / 2
-            let disc = Path(ellipseIn: CGRect(x: size.width / 2 - r, y: size.height / 2 - r, width: r * 2, height: r * 2))
-            context.clip(to: disc)
-            context.translateBy(x: size.width / 2, y: size.height / 2)
-            context.rotate(by: .radians(roll))
-            // The line round the middle, seen tipped: the near half of a circle on the ball,
-            // which bows down (more yellow showing) as the top leans towards you.
-            let bow = CGFloat(sin(tip))
-            var line = Path()
-            for step in 0...48 {
-                let x = -r + r * 2 * CGFloat(step) / 48
-                let point = CGPoint(x: x, y: bow * (r * r - x * x).squareRoot())
-                if step == 0 { line.move(to: point) } else { line.addLine(to: point) }
-            }
-            var dark = line
-            dark.addLine(to: CGPoint(x: r, y: r * 2))
-            dark.addLine(to: CGPoint(x: -r, y: r * 2))
-            dark.closeSubpath()
-            context.fill(Path(CGRect(x: -r * 2, y: -r * 2, width: r * 4, height: r * 4)), with: .color(.yellow))
-            context.fill(dark, with: .color(Color(white: 0.12)))
-            context.stroke(line, with: .color(.black), lineWidth: max(2, r * 0.08))
-            context.rotate(by: .radians(-roll))
-            context.translateBy(x: -size.width / 2, y: -size.height / 2)
-            // Light from the top left, darker towards the rim, so it reads as a ball.
-            context.fill(
-                disc,
-                with: .radialGradient(
-                    Gradient(colors: [.white.opacity(0.35), .clear, .black.opacity(0.35)]),
-                    center: CGPoint(x: size.width * 0.35, y: size.height * 0.3), startRadius: 0, endRadius: r * 2.1))
         }
         .allowsHitTesting(false)
     }

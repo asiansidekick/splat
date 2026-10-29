@@ -12,6 +12,9 @@ enum ImageMatch {
     static let tolerance: CGFloat = 0.03
     /// The ghost photo snaps onto the live picture when no corner needs to move more than this.
     static let snapLimit: CGFloat = 0.12
+    /// The edge guides follow a picture check when no corner needs to move more than this; a
+    /// bigger answer is more likely Vision pairing the wrong things.
+    static let guideLimit: CGFloat = 0.3
     /// Pictures are compared this wide, which is quick and plenty for the check.
     static let width: CGFloat = 480
 
@@ -43,6 +46,17 @@ enum ImageMatch {
                 out.append(CGPoint(x: CGFloat(p.x / p.z * toLive), y: CGFloat(p.y / p.z * toLive)))
             }
             return out
+        }
+
+        /// Where one point of the reference photo shows in the live picture, both in their own
+        /// pixels counted from the top left (like ARKit's). The edge guides use it.
+        func toLive(_ point: CGPoint, reference full: CGSize, live fullLive: CGSize) -> CGPoint? {
+            guard abs(warp.determinant) > 1e-9, full.width > 0, liveSize.width > 0 else { return nil }
+            let toCompared = referenceSize.width / full.width
+            let toLive = fullLive.width / liveSize.width
+            let p = warp.inverse * SIMD3<Float>(Float(point.x * toCompared), Float((full.height - point.y) * toCompared), 1)
+            guard abs(p.z) > 1e-6 else { return nil }
+            return CGPoint(x: CGFloat(p.x / p.z) * toLive, y: fullLive.height - CGFloat(p.y / p.z) * toLive)
         }
 
         /// The reference photo stretched onto the live picture, the live picture's size.

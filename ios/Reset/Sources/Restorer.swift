@@ -17,19 +17,19 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     @Published var status: Status = .loading
     @Published var ghost: UIImage?
     @Published var differences: UIImage?
+    /// All four edge guides are in their slots.
     @Published var matched = false
-    /// Lined up but not yet held still long enough to count: the banner says hold still.
-    @Published var holding = false
-    /// The phone must be held this still (per second) and lined up this long before it counts as
-    /// matched, so a wobble passing through the right spot never gives a false match.
-    static let steadyTurn: Float = 3 * .pi / 180
-    static let steadyMove: Float = 0.03
-    static let steadyTime: TimeInterval = 0.5
-    private var steadySince: Date?
-    private var lastSteadyPose: (pose: simd_float4x4, time: TimeInterval)?
-    private var isSteady = false
-    /// Where to aim and move, updated every frame for the guidance graphic.
+    /// Where to aim and move, updated every frame: the arrow when the reference is off screen.
     let aim = AimState()
+    /// The edge guides, updated every frame.
+    let edges = EdgeGuideState()
+    /// The last picture check, while it is fresh: the edge guides follow it, carried on between
+    /// checks by how the phone has turned since.
+    private var lastMatch: (id: String, result: ImageMatch.Result, reference: CGSize, camera: simd_float4x4, time: TimeInterval)?
+    /// Paused: the live picture frozen, with the reference stretched onto that same frame.
+    @Published private(set) var paused = false
+    @Published private(set) var held: HeldFrame?
+    private let holdQueue = DispatchQueue(label: "held-frame")
     /// The two-sphere alignment guide, in 3D.
     @Published var lockedKeyframe: Keyframe?
     /// The LiDAR change colours over the photo ghost. Off at first: on device they flickered and
@@ -95,19 +95,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Set after 20 seconds without finding the room, to show tips.
     @Published var slowToFind = false
     private var depthCache: [String: [Float]] = [:]
-    /// Whether the live picture lines up with the reference photo, checked a few times a second
-    /// once the phone is close. Nil when not close or when the pictures could not be paired.
-    private var imageAligned: Bool?
-    /// How far the room's guide ball must move on screen so the balls meet when the pictures
-    /// do: ARKit's position can be a few centimetres out after finding the room, which the photo
-    /// ghost hides (it only turns) but the balls show. Set from each picture check, eased in.
-    private var ballShiftGoal: CGVector = .zero
-    private var ballShift: CGVector = .zero
-    /// The last few picture checks' answers: the middle one is used, since a single check can
-    /// pair the wrong things and would make the ball jump.
-    private var ballShiftSamples: [CGVector] = []
-    private var ballShiftKeyframe: String?
-    private var lastBallEase = Date()
     /// When the ghost last moved to another reference view.
     private var lastSwitch = Date.distantPast
     private var imageBusy = false
@@ -295,7 +282,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let camera = frame.camera.transform
         let keyframe = lockedKeyframe ?? steadyClosest(to: camera, now: now)
         guard let keyframe else { return }
-        if current?.id != keyframe.id { imageAligned = nil }
+        if current?.id != keyframe.id { lastMatch = nil }
         current = keyframe
         if !show3D { updateGhost(keyframe, frame: frame) }
         // Less often when the phone is hot, so it does not throttle or shut the camera down.
@@ -309,49 +296,25 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     /// From ARKit's tracking (camera plus motion sensors): where the reference camera was aiming,
-    /// on screen; how far to turn the phone about its own axis; and how far to step.
+    /// on screen, for the arrow when it is off screen; and the edge guides, from the pictures
+    /// once close.
     private func updateAim(frame: ARFrame, target: Keyframe) {
         guard viewport != .zero else { return }
         let camera = frame.camera.transform
         let move = Guidance.offset(from: camera, to: target, orientation: orientation)
         let (right, up) = Guidance.screenAxes(camera, orientation: orientation)
-        // Where the guide's solid ball hangs, in front of where the reference photo was taken.
-        let spot = GuideSpheres.position(for: target, orientation: orientation)
-        // Close: within 25 cm and 10°. Then the pictures decide, since the position ARKit found
-        // the room at can be a few centimetres out; without a picture check, the position does.
-        let close = simd_length(move.vector) < 0.25 && move.turn < 10 * .pi / 180
-        let local = camera.inverse * SIMD4<Float>(spot, 1)
-        func ball(_ centre: SIMD3<Float>) -> (CGPoint, CGFloat) {
-            let middle = frame.camera.projectPoint(centre, orientation: orientation, viewportSize: viewport)
-            let edge = frame.camera.projectPoint(
-                centre + up * GuideSpheres.radius, orientation: orientation, viewportSize: viewport)
-            return (middle, hypot(edge.x - middle.x, edge.y - middle.y))
-        }
-        let (targetPoint, targetRadius) = ball(spot)
-        let (livePoint, liveRadius) = ball(GuideSpheres.livePosition(camera: camera, orientation: orientation))
-        // A new reference view has its own correction: start that one afresh.
-        if ballShiftKeyframe != target.id {
-            ballShiftKeyframe = target.id
-            ballShiftSamples.removeAll()
-        }
+        // Close: within 35 cm and 20°. Then the pictures decide, since the position ARKit found
+        // the room at can be a few centimetres out.
+        let close = simd_length(move.vector) < 0.35 && move.turn < 20 * .pi / 180
         if close {
-            let gap: CGVector? = local.z < -0.05
-                ? CGVector(dx: targetPoint.x - livePoint.x, dy: targetPoint.y - livePoint.y) : nil
-            checkImage(frame: frame, keyframe: target, ballGap: gap)
+            checkImage(frame: frame, keyframe: target)
         } else {
-            imageAligned = nil
+            lastMatch = nil
             snap = nil
             snapSmoother = ImageMatch.SnapSmoother()
-            ballShiftGoal = .zero
-            ballShiftSamples.removeAll()
         }
-        // Eased over about half a second, however fast frames come, so the ball glides.
-        let now = Date()
-        let ease = CGFloat(min(1, now.timeIntervalSince(lastBallEase) / 0.5))
-        lastBallEase = now
-        ballShift.dx += (ballShiftGoal.dx - ballShift.dx) * ease
-        ballShift.dy += (ballShiftGoal.dy - ballShift.dy) * ease
-        let lined = close && (imageAligned ?? move.isMatched)
+        let spot = (target.cameraToWorld * SIMD4<Float>(0, 0, -1, 1)).xyz
+        let local = camera.inverse * SIMD4<Float>(spot, 1)
         let point: CGPoint
         if local.z < -0.05 {
             point = frame.camera.projectPoint(spot, orientation: orientation, viewportSize: viewport)
@@ -365,42 +328,57 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
         let (_, targetUp) = Guidance.screenAxes(target.cameraToWorld, orientation: orientation)
         let roll = atan2(simd_dot(targetUp, right), simd_dot(targetUp, up))
-        // The guide balls, drawn flat over the photo ghost so the strength slider never fades
-        // them: where each is on screen and how big. Gone once lined up.
-        var balls: AimState.Balls?
-        if !lined, local.z < -0.05 {
-            let shifted = CGPoint(x: targetPoint.x + ballShift.dx, y: targetPoint.y + ballShift.dy)
-            balls = AimState.Balls(
-                target: shifted, targetRadius: targetRadius, live: livePoint, liveRadius: liveRadius,
-                tip: Double(GuideSpheres.tip(camera: camera, keyframe: target, orientation: orientation)))
-        }
-        aim.update(point: point, roll: Double(roll), offset: move, balls: balls)
-        // Steady: how fast the phone turns and moves, measured over a tenth of a second (single
-        // frames are too close together to measure small turns).
-        let time = frame.timestamp
-        if let last = lastSteadyPose {
-            if time - last.time >= 0.1 {
-                let dt = Float(time - last.time)
-                let turnRate = Restorer.angle(between: last.pose, and: camera) / dt
-                let moveRate = simd_distance(last.pose.columns.3.xyz, camera.columns.3.xyz) / dt
-                isSteady = turnRate < Restorer.steadyTurn && moveRate < Restorer.steadyMove
-                lastSteadyPose = (camera, time)
+        aim.update(point: point, roll: Double(roll), offset: move)
+        guard !paused else { return }
+        let found = alignment(frame: frame, target: target)
+        // Only the pictures can say it is lined up: the phone's attitude alone knows nothing of
+        // where it stands, so a stroke can seat only while a picture check is fresh.
+        edges.update(found.alignment, canSeat: close && found.fromPictures, time: frame.timestamp)
+        if matched != edges.all { matched = edges.all }
+    }
+
+    /// Where the reference's crosshair shows on screen now. From the last picture check (Vision's
+    /// homography, reference onto live) carried on by how the phone has turned since; without a
+    /// fresh check, from the phone's attitude alone.
+    private func alignment(frame: ARFrame, target: Keyframe) -> (alignment: GhostAlignment?, fromPictures: Bool) {
+        let display = frame.displayTransform(for: orientation, viewportSize: viewport)
+        let toImage = display.inverted()
+        let resolution = frame.camera.imageResolution
+        let referenceSize = CGSize(width: target.imageWidth, height: target.imageHeight)
+        let camera = frame.camera.transform
+        let intrinsics = frame.camera.intrinsics
+        var match = lastMatch
+        if let m = match, m.id != target.id || frame.timestamp - m.time > 1.5 { match = nil }
+        let size = viewport
+        func land(_ screen: CGPoint) -> CGPoint? {
+            // The reference point that would show here if it were laid out like the live picture.
+            let unit = CGPoint(x: screen.x / size.width, y: screen.y / size.height).applying(toImage)
+            let live: SIMD2<Float>?
+            if let match {
+                // In the photo's own pixels, which may be stored at another size.
+                let pixel = CGPoint(x: unit.x * match.reference.width, y: unit.y * match.reference.height)
+                guard let then = match.result.toLive(pixel, reference: match.reference, live: resolution) else { return nil }
+                let turned = Warp(
+                    reference: match.camera, referenceIntrinsics: intrinsics, referenceSize: resolution,
+                    live: camera, liveIntrinsics: intrinsics, liveSize: resolution)
+                live = turned.project(SIMD2(Float(then.x), Float(then.y)))
+            } else {
+                let turned = Warp(
+                    reference: target.cameraToWorld, referenceIntrinsics: target.cameraIntrinsics, referenceSize: referenceSize,
+                    live: camera, liveIntrinsics: intrinsics, liveSize: resolution)
+                live = turned.project(SIMD2(Float(unit.x * referenceSize.width), Float(unit.y * referenceSize.height)))
             }
-        } else {
-            lastSteadyPose = (camera, time)
+            guard let live else { return nil }
+            let shown = CGPoint(x: CGFloat(live.x) / resolution.width, y: CGFloat(live.y) / resolution.height).applying(display)
+            return CGPoint(x: shown.x * size.width, y: shown.y * size.height)
         }
-        let steady = isSteady
-        let nowDate = Date()
-        if lined && (steady || matched) {
-            if steadySince == nil { steadySince = nowDate }
-        } else {
-            steadySince = nil
-        }
-        // Once matched it stays matched while lined up, so small movements do not flicker it.
-        let isMatched = lined && (matched || steadySince.map { nowDate.timeIntervalSince($0) >= Restorer.steadyTime } ?? false)
-        let isHolding = lined && !isMatched
-        if matched != isMatched { matched = isMatched }
-        if holding != isHolding { holding = isHolding }
+        let middle = CGPoint(x: size.width / 2, y: size.height / 2)
+        let arm = size.width * 0.25
+        guard let c = land(middle),
+            let l = land(CGPoint(x: middle.x - arm, y: middle.y)),
+            let r = land(CGPoint(x: middle.x + arm, y: middle.y))
+        else { return (nil, false) }
+        return (GhostAlignment(centre: c, left: l, right: r, arm: arm), match != nil)
     }
 
     /// The closest reference view, but sticky: small adjustments of the phone between two views
@@ -418,10 +396,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         return best
     }
 
-    /// Compares the live picture with the reference photo on a background queue. `ballGap` is
-    /// how far apart ARKit's position puts the guide balls on screen; the picture says how far
-    /// apart they should be (where the reference's middle shows, from the middle of the screen).
-    private func checkImage(frame: ARFrame, keyframe: Keyframe, ballGap: CGVector?) {
+    /// Compares the live picture with the reference photo on a background queue, a few times a
+    /// second: the edge guides and the snapped ghost follow the answer.
+    private func checkImage(frame: ARFrame, keyframe: Keyframe) {
         guard !imageBusy, Date().timeIntervalSince(lastImageCheck) > 0.3,
             let source = ghostSource, source.id == keyframe.id
         else { return }
@@ -430,31 +407,58 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let live = CIImage(cvPixelBuffer: frame.capturedImage)
         let liveSize = live.extent.size
         let reference = source.image
-        let display = frame.displayTransform(for: orientation, viewportSize: viewport)
-        let size = viewport
+        let camera = frame.camera.transform
+        let time = frame.timestamp
         imageQueue.async {
             let result = ImageMatch.compare(live: live, reference: reference)
             Task { @MainActor in
                 self.imageBusy = false
-                self.imageAligned = result?.aligned
-                if let result { self.updateSnap(result, keyframe: keyframe, reference: reference.extent.size, live: liveSize) }
-                guard let ballGap, let centre = result?.centre else { return }
-                let shown = centre.applying(display)
-                let gap = CGVector(dx: (shown.x - 0.5) * size.width, dy: (shown.y - 0.5) * size.height)
-                let goal = CGVector(dx: gap.dx - ballGap.dx, dy: gap.dy - ballGap.dy)
-                // A wild answer means Vision paired the wrong things: keep the last one.
-                guard hypot(goal.dx, goal.dy) < 0.2 * max(size.width, size.height),
-                    self.ballShiftKeyframe == keyframe.id
-                else { return }
-                self.ballShiftSamples.append(goal)
-                if self.ballShiftSamples.count > 5 { self.ballShiftSamples.removeFirst() }
-                // Needs a few checks that agree before the ball moves.
-                guard self.ballShiftSamples.count >= 3 else { return }
-                func median(_ values: [CGFloat]) -> CGFloat { values.sorted()[values.count / 2] }
-                self.ballShiftGoal = CGVector(
-                    dx: median(self.ballShiftSamples.map(\.dx)), dy: median(self.ballShiftSamples.map(\.dy)))
+                guard let result, self.current?.id == keyframe.id else { return }
+                self.updateSnap(result, keyframe: keyframe, reference: reference.extent.size, live: liveSize)
+                // A wild answer means Vision paired the wrong things: carry on from the last one.
+                if result.error < ImageMatch.guideLimit {
+                    self.lastMatch = (keyframe.id, result, reference.extent.size, camera, time)
+                }
             }
         }
+    }
+
+    // MARK: Pause and compare
+
+    /// Freezes the live picture and stretches the reference onto that same frame (from its own
+    /// picture check, or by the phone's turn when the pictures cannot be paired).
+    func pause() {
+        guard !paused, let frame = session.currentFrame, viewport != .zero else { return }
+        paused = true
+        held = nil
+        edges.update(nil, canSeat: false, time: frame.timestamp)
+        let live = CIImage(cvPixelBuffer: frame.capturedImage)
+        let placement = Placement(display: frame.displayTransform(for: orientation, viewportSize: viewport), viewport: viewport)
+        let keyframe = lockedKeyframe ?? current
+        var source: CIImage?
+        var warp: Warp?
+        if let keyframe, let ghostSource, ghostSource.id == keyframe.id {
+            source = ghostSource.image
+            warp = Warp(
+                reference: keyframe.cameraToWorld, referenceIntrinsics: keyframe.cameraIntrinsics,
+                referenceSize: CGSize(width: keyframe.imageWidth, height: keyframe.imageHeight),
+                live: frame.camera.transform, liveIntrinsics: frame.camera.intrinsics, liveSize: frame.camera.imageResolution)
+        }
+        let context = ciContext
+        let since = Date()
+        holdQueue.async {
+            let built = HeldFrame.build(live: live, reference: source, fallback: warp, placement: placement, context: context, since: since)
+            Task { @MainActor in
+                guard self.paused else { return }
+                self.held = built
+                Diagnostics.log("Paused: reference \(built.registered ? "stretched by the pictures" : source == nil ? "none" : "turned by the phone")")
+            }
+        }
+    }
+
+    func resume() {
+        paused = false
+        held = nil
     }
 
     // MARK: Ghost photo
@@ -463,7 +467,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// the phone is held and pointed (a rotation re-projection, exact for anything more than a
     /// few metres away and close for nearer props), then laid out like the live camera.
     private func updateGhost(_ keyframe: Keyframe, frame: ARFrame) {
-        guard !ghostBusy else { return }
+        guard !ghostBusy, !paused else { return }
         let camera = frame.camera.transform
         // Held still within 25 cm and 10°, turning again past 35 cm or 15°, so it does not flip.
         let distance = simd_distance(camera.columns.3.xyz, keyframe.position)
@@ -531,7 +535,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         return snap
     }
 
-    private static func angle(between a: simd_float4x4, and b: simd_float4x4) -> Float {
+    static func angle(between a: simd_float4x4, and b: simd_float4x4) -> Float {
         let forward = simd_dot(simd_normalize(a.columns.2.xyz), simd_normalize(b.columns.2.xyz))
         let side = simd_dot(simd_normalize(a.columns.0.xyz), simd_normalize(b.columns.0.xyz))
         return acos(min(1, max(-1, min(forward, side))))
@@ -571,7 +575,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             return warped.cropped(to: canvas).composited(over: CIImage(color: .clear).cropped(to: canvas))
         }
 
-        private func project(_ pixel: SIMD2<Float>) -> SIMD2<Float>? {
+        /// Where a reference pixel shows in the live picture, both counted from the top left.
+        func project(_ pixel: SIMD2<Float>) -> SIMD2<Float>? {
             let k = referenceIntrinsics
             // ARKit camera space: x right, y up, looking down -z.
             let ray = SIMD3<Float>((pixel.x - k[2][0]) / k[0][0], -(pixel.y - k[2][1]) / k[1][1], -1)

@@ -1,0 +1,244 @@
+import AVKit
+import SwiftUI
+import UIKit
+
+/// The edge guides' numbers, kept apart from the rest of the screen so updating them every frame
+/// redraws only the guides. Smoothed (low-pass), with the seating and its haptics.
+@MainActor
+final class EdgeGuideState: ObservableObject {
+    @Published private(set) var alignment: GhostAlignment?
+    @Published private(set) var seated = [Bool](repeating: false, count: EdgeGuide.Edge.allCases.count)
+    /// Set by the overlay: the screen and the part of it clear of the controls.
+    var layout: EdgeGuide.Layout?
+    private var seater = EdgeGuide.Seater()
+    private var smoothed: GhostAlignment?
+    private var lastTime: TimeInterval?
+    private let impact = UIImpactFeedbackGenerator(style: .light)
+    private let success = UINotificationFeedbackGenerator()
+
+    var all: Bool { seated.allSatisfy { $0 } }
+
+    /// One frame's measurement (nil when there is none), at the frame's time in seconds. Strokes
+    /// are drawn either way but seat only when `canSeat`.
+    func update(_ measured: GhostAlignment?, canSeat: Bool, time: TimeInterval) {
+        defer { lastTime = measured == nil ? nil : time }
+        guard let measured, let layout else {
+            smoothed = nil
+            if alignment != nil { alignment = nil }
+            seater.reset()
+            if seated != seater.seated { seated = seater.seated }
+            return
+        }
+        if let previous = smoothed, let lastTime {
+            smoothed = previous.blended(toward: measured, alpha: EdgeGuide.alpha(dt: time - lastTime))
+        } else {
+            smoothed = measured
+        }
+        guard let smoothed else { return }
+        let wasAll = seater.all
+        let newly = seater.update(canSeat ? smoothed : nil, layout: layout)
+        if seater.all && !wasAll {
+            success.notificationOccurred(.success)
+        } else if !newly.isEmpty {
+            impact.impactOccurred()
+        }
+        if seated != seater.seated { seated = seater.seated }
+        // Redraw only for a visible change.
+        if let shown = alignment, hypot(shown.centre.x - smoothed.centre.x, shown.centre.y - smoothed.centre.y) < 0.3,
+            abs(shown.roll - smoothed.roll) < 0.0005, abs(shown.scale - smoothed.scale) < 0.0005
+        { return }
+        alignment = smoothed
+    }
+}
+
+/// The reference crosshair, shown only where it crosses the four edges of the picture: a white
+/// stroke beside a fixed hollow slot on each edge. A stroke turns green in its slot; with all four
+/// in, the slots go and a green border shows.
+struct EdgeGuideOverlay: View {
+    @ObservedObject var state: EdgeGuideState
+    @Environment(\.chromeInsets) private var insets
+
+    var body: some View {
+        GeometryReader { geometry in
+            let layout = EdgeGuide.Layout(
+                size: geometry.size,
+                clear: CGRect(
+                    x: insets.leading, y: insets.top,
+                    width: max(1, geometry.size.width - insets.leading - insets.trailing),
+                    height: max(1, geometry.size.height - insets.top - insets.bottom)))
+            ZStack {
+                if !state.all {
+                    ForEach(EdgeGuide.Edge.allCases, id: \.rawValue) { edge in
+                        Capsule()
+                            .stroke(Color.white.opacity(0.85), lineWidth: 1.5)
+                            .frame(width: EdgeGuide.slotLength + 6, height: EdgeGuide.strokeWidth + 6)
+                            .rotationEffect(.degrees(edge.isSide ? 0 : 90))
+                            .shadow(color: .black.opacity(0.6), radius: 2)
+                            .position(layout.slot(edge))
+                    }
+                }
+                if let alignment = state.alignment {
+                    ForEach(EdgeGuide.Edge.allCases, id: \.rawValue) { edge in
+                        let green = state.seated[edge.rawValue]
+                        Capsule()
+                            .fill(green ? Color.green : Color.white)
+                            .frame(width: EdgeGuide.slotLength * CGFloat(min(max(alignment.scale, 0.3), 3)), height: EdgeGuide.strokeWidth)
+                            .rotationEffect(.radians(alignment.roll + (edge.isSide ? 0 : .pi / 2)))
+                            .shadow(color: .black.opacity(0.8), radius: 2.5)
+                            .position(layout.stroke(edge, alignment))
+                    }
+                }
+            }
+            .onAppear { state.layout = layout }
+            .onChange(of: layout) { _, value in state.layout = value }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// Pause and play, the same size and in the same spot.
+struct PauseButton: View {
+    let paused: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            Haptics.tap()
+            action()
+        } label: {
+            Image(systemName: paused ? "play.fill" : "pause.fill")
+                .font(.system(size: 26, weight: .bold))
+                .foregroundStyle(paused ? Color.orange : Color.white)
+                .frame(width: 66, height: 66)
+                .overlay(Circle().stroke(paused ? Color.orange : Color.white, lineWidth: 3))
+                .contentShape(Circle())
+                .shadow(color: .black.opacity(0.6), radius: 3)
+        }
+        .buttonStyle(PressScale())
+        .accessibilityLabel(paused ? "Back to live" : "Pause and compare")
+    }
+}
+
+/// Paused: the frozen live picture and the reference stretched onto it. The whole screen is the
+/// scrubber: drag across to fade (or wipe) between them, tap to jump to the other end. The
+/// slider along the bottom does the same.
+struct HeldCompare: View {
+    let held: HeldFrame?
+    /// For a reference with no photo to stretch: drawn filling the screen as it is.
+    let plainReference: UIImage?
+    /// 0 shows the reference, 1 the live picture.
+    @Binding var toNow: Double
+    let wipe: Bool
+    @State private var dragStart: Double?
+    private let selection = UISelectionFeedbackGenerator()
+
+    var body: some View {
+        GeometryReader { geometry in
+            let size = geometry.size
+            ZStack {
+                Color.black
+                if let held {
+                    Image(uiImage: held.now).resizable().frame(width: size.width, height: size.height)
+                    reference(size)
+                        .opacity(wipe ? 1 : 1 - toNow)
+                        .mask(alignment: .leading) {
+                            Rectangle().frame(width: wipe ? size.width * (1 - toNow) : size.width)
+                        }
+                    if wipe {
+                        Rectangle()
+                            .fill(Color.white)
+                            .frame(width: 2)
+                            .shadow(color: .black.opacity(0.8), radius: 2)
+                            .position(x: size.width * (1 - toNow), y: size.height / 2)
+                    }
+                } else {
+                    ProgressView().tint(.white)
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selection.selectionChanged()
+                withAnimation(.snappy(duration: 0.2)) { toNow = toNow < 0.5 ? 1 : 0 }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { drag in
+                        let start = dragStart ?? toNow
+                        if dragStart == nil { dragStart = start }
+                        // In a wipe the line follows the finger.
+                        let share = Double(drag.translation.width / max(size.width, 1))
+                        toNow = min(1, max(0, start + (wipe ? -share : share)))
+                    }
+                    .onEnded { _ in dragStart = nil })
+        }
+        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private func reference(_ size: CGSize) -> some View {
+        if let image = held?.reference {
+            Image(uiImage: image).resizable().frame(width: size.width, height: size.height)
+        } else if let plainReference {
+            Image(uiImage: plainReference).resizable().scaledToFill().frame(width: size.width, height: size.height).clipped()
+        }
+    }
+}
+
+/// REF … NOW along the bottom while paused, with a big knob.
+struct CompareSlider: View {
+    @Binding var toNow: Double
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("REF")
+            GeometryReader { geometry in
+                let width = geometry.size.width
+                let knob: CGFloat = 38
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.35)).frame(height: 4)
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: knob, height: knob)
+                        .shadow(color: .black.opacity(0.5), radius: 3)
+                        .offset(x: (width - knob) * toNow)
+                }
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
+                    toNow = min(1, max(0, Double((drag.location.x - knob / 2) / max(width - knob, 1))))
+                })
+            }
+            .frame(height: 44)
+            Text("NOW")
+        }
+        .font(.footnote.bold())
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.7), radius: 2)
+        .accessibilityElement()
+        .accessibilityLabel("Reference to now")
+        .accessibilityValue("\(Int(toNow * 100)) percent now")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: toNow = min(1, toNow + 0.1)
+            case .decrement: toNow = max(0, toNow - 0.1)
+            @unknown default: break
+            }
+        }
+    }
+}
+
+/// The volume buttons (and Camera Control) pause and play, on iOS 18 and later.
+struct CaptureButtonAction: ViewModifier {
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onCameraCaptureEvent { event in
+                if event.phase == .ended { action() }
+            }
+        } else {
+            content
+        }
+    }
+}

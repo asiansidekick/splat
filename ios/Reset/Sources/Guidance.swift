@@ -48,41 +48,19 @@ final class AimState: ObservableObject {
     /// How far to turn the phone about its own axis, radians, clockwise positive.
     @Published private(set) var roll: Double = 0
     @Published private(set) var offset: Offset?
-    /// The two guide balls on screen, while they are not lined up.
-    @Published private(set) var balls: Balls?
 
-    struct Balls: Equatable {
-        /// The room's ball: where the reference camera was looking.
-        var target: CGPoint
-        var targetRadius: CGFloat
-        /// The phone's own ball.
-        var live: CGPoint
-        var liveRadius: CGFloat
-        /// How far the phone's ball tips, radians: forward (more top showing) means tilt up.
-        var tip: Double
-    }
-
-    func update(point: CGPoint, roll: Double, offset: Offset, balls: Balls? = nil) {
+    func update(point: CGPoint, roll: Double, offset: Offset) {
         if let old = self.point, hypot(old.x - point.x, old.y - point.y) < 1.5, abs(self.roll - roll) < 0.01,
-            let previous = self.offset, simd_distance(previous.vector, offset.vector) < 0.003,
-            (self.balls == nil) == (balls == nil), abs((self.balls?.tip ?? 0) - (balls?.tip ?? 0)) < 0.02,
-            Self.near(self.balls?.target, balls?.target), Self.near(self.balls?.live, balls?.live)
+            let previous = self.offset, simd_distance(previous.vector, offset.vector) < 0.003
         { return }
         self.point = point
         self.roll = roll
         self.offset = offset
-        if self.balls != balls { self.balls = balls }
-    }
-
-    private static func near(_ a: CGPoint?, _ b: CGPoint?) -> Bool {
-        guard let a, let b else { return a == nil && b == nil }
-        return hypot(a.x - b.x, a.y - b.y) < 1.5
     }
 
     func clear() {
         point = nil
         offset = nil
-        balls = nil
     }
 }
 

@@ -665,6 +665,16 @@ func testImageMatch() {
         expect(
             abs(centre.x - x) < 0.01 && abs(centre.y - y) < 0.01,
             String(format: "%@: reference middle shows at %.3f, %.3f (should be %.3f, %.3f)", name, centre.x, centre.y, x, y))
+        // The same through `toLive`, which the edge guides use, in full pixels from the top left.
+        let size = CGSize(width: liveCamera.width, height: liveCamera.height)
+        let middle = CGPoint(x: size.width / 2, y: size.height / 2)
+        if let shown = result.toLive(middle, reference: reference.extent.size, live: size) {
+            expect(
+                abs(shown.x - CGFloat(expected.u)) < 15 && abs(shown.y - CGFloat(expected.v)) < 15,
+                String(format: "%@: toLive puts the middle at %.0f, %.0f px (should be %.0f, %.0f)", name, shown.x, shown.y, expected.u, expected.v))
+        } else {
+            expect(false, "\(name): toLive gave nothing")
+        }
     }
     // Snapping: the reference stretched onto a slightly turned and stepped live view lies over
     // it far better than the unstretched photo.
@@ -722,6 +732,71 @@ func testImageMatch() {
     }
 }
 
+func testEdgeGuide() {
+    print("Edge guides")
+    // An iPhone screen in portrait with the top bar and the bottom controls.
+    let layout = EdgeGuide.Layout(size: CGSize(width: 393, height: 852), clear: CGRect(x: 0, y: 103, width: 393, height: 609))
+    let middle = CGPoint(x: 196.5, y: 426)
+    func seated(_ a: GhostAlignment?, _ seater: inout EdgeGuide.Seater) -> [Bool] {
+        _ = seater.update(a, layout: layout)
+        return seater.seated
+    }
+    var seater = EdgeGuide.Seater()
+    let lined = GhostAlignment(centre: middle, roll: 0, scale: 1)
+    let newly = seater.update(lined, layout: layout)
+    expect(seater.all && newly.count == 4, "lined up: all four seated (\(newly.count) newly)")
+    for edge in EdgeGuide.Edge.allCases {
+        let p = layout.stroke(edge, lined)
+        let s = layout.slot(edge)
+        expect(hypot(p.x - s.x, p.y - s.y) < 0.01, "lined up: \(edge) stroke in its slot")
+    }
+    // 10 pt low: the side strokes are out, the top and bottom ones still in.
+    var fresh = EdgeGuide.Seater()
+    let low = seated(GhostAlignment(centre: CGPoint(x: middle.x, y: middle.y + 10), roll: 0, scale: 1), &fresh)
+    expect(low == [false, false, true, true], "10 pt low: sides out, top and bottom in (\(low))")
+    // Hysteresis: seated at 0, kept at 9 pt (under 1.6 x 7), let go at 12, not re-seated at 9.
+    var sticky = EdgeGuide.Seater()
+    _ = seated(lined, &sticky)
+    let at9 = seated(GhostAlignment(centre: CGPoint(x: middle.x, y: middle.y + 9), roll: 0, scale: 1), &sticky)
+    expect(at9[0] && at9[1], "hysteresis: still seated 9 pt off once seated")
+    let at12 = seated(GhostAlignment(centre: CGPoint(x: middle.x, y: middle.y + 12), roll: 0, scale: 1), &sticky)
+    expect(!at12[0] && !at12[1], "hysteresis: let go 12 pt off")
+    let back9 = seated(GhostAlignment(centre: CGPoint(x: middle.x, y: middle.y + 9), roll: 0, scale: 1), &sticky)
+    expect(!back9[0] && !back9[1], "hysteresis: not seated again at 9 pt until within 7")
+    // Turn and size.
+    var turned = EdgeGuide.Seater()
+    expect(seated(GhostAlignment(centre: middle, roll: 2 * .pi / 180, scale: 1), &turned) == [false, false, false, false], "turned 2°: none seated")
+    var bigger = EdgeGuide.Seater()
+    expect(seated(GhostAlignment(centre: middle, roll: 0, scale: 1.03), &bigger) == [false, false, false, false], "3% too big: none seated")
+    var nearly = EdgeGuide.Seater()
+    expect(seated(GhostAlignment(centre: middle, roll: 0.0003, scale: 1.01), &nearly).allSatisfy { $0 }, "within tolerance: all seated")
+    var none = EdgeGuide.Seater()
+    expect(seated(nil, &none) == [false, false, false, false], "no alignment: none seated")
+    // A turned crosshair crosses the two sides on opposite sides of their slots.
+    let tilted = GhostAlignment(centre: middle, roll: 3 * .pi / 180, scale: 1)
+    let left = layout.offset(.left, tilted), right = layout.offset(.right, tilted)
+    expect(left < -5 && right > 5, String(format: "turned clockwise: left stroke %.1f pt, right %.1f pt", left, right))
+    // From three landed points: a 2° turn and 5% smaller come back out.
+    let arm: CGFloat = 98
+    let angle = 2 * Double.pi / 180
+    let reach = arm * 0.95
+    let measured = GhostAlignment(
+        centre: middle,
+        left: CGPoint(x: middle.x - reach * CGFloat(cos(angle)), y: middle.y - reach * CGFloat(sin(angle))),
+        right: CGPoint(x: middle.x + reach * CGFloat(cos(angle)), y: middle.y + reach * CGFloat(sin(angle))),
+        arm: arm)
+    expect(
+        measured.map { abs($0.roll - angle) < 1e-6 && abs($0.scale - 0.95) < 1e-6 } ?? false,
+        String(format: "from points: turn %.3f° size %.3f", (measured?.roll ?? 0) * 180 / .pi, measured?.scale ?? 0))
+    // The low-pass filter: 0.3 of the way per 1/30 s, the same over two 1/60 s steps.
+    expect(abs(EdgeGuide.alpha(dt: 1.0 / 30) - 0.3) < 1e-9, "filter: 0.3 per 1/30 s")
+    let far = GhostAlignment(centre: CGPoint(x: middle.x + 100, y: middle.y), roll: 0.1, scale: 1.2)
+    let one = lined.blended(toward: far, alpha: EdgeGuide.alpha(dt: 1.0 / 30))
+    let half = EdgeGuide.alpha(dt: 1.0 / 60)
+    let two = lined.blended(toward: far, alpha: half).blended(toward: far, alpha: half)
+    expect(abs(one.centre.x - two.centre.x) < 0.01 && abs(one.centre.x - middle.x - 30) < 0.01, String(format: "filter: same at any frame rate (%.2f, %.2f)", one.centre.x, two.centre.x))
+}
+
 func testDots() {
     print("Dots (3D ghost and the scan)")
     let scene = Scene()
@@ -769,5 +844,6 @@ testNoisyGhost()
 testHardCases()
 testImageMatch()
 testDots()
+testEdgeGuide()
 print(failures == 0 ? "All passed" : "\(failures) failed")
 exit(failures == 0 ? 0 : 1)
