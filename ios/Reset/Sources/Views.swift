@@ -1035,7 +1035,6 @@ struct CaptureStage: View {
         .onChange(of: showPoints) { _, show in
             holder.view?.debugOptions = show ? [.showFeaturePoints] : []
         }
-        .onChange(of: showPoints || justSaved) { _, show in recorder.showDots = show }
         .onChange(of: useLiDAR) { _, on in
             recorder.stop()
             recorder.prepare(useLiDAR: on)
@@ -1151,7 +1150,7 @@ struct ResetStage: View {
         } preview: {
             preview
         } modes: { vertical in
-            if restorer.can3D {
+            if restorer.can3D && Restorer.offers3D {
                 ModePicker(
                     modes: [false, true], label: { $0 ? (restorer.cloudReady || restorer.cloudFailed ? "3D GHOST" : "3D (BUILDING)") : "PHOTO GHOST" },
                     selection: $restorer.show3D, vertical: vertical)

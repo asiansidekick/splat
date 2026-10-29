@@ -36,6 +36,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// hid the ghost, and the 3D ghost shows what has gone as outlines instead.
     @Published var showDifferences = false
     /// The 3D ghost, built from the reference's LiDAR depth and photos, instead of the photo ghost.
+    /// The 3D ghost is set aside for now (Phil, 2026-10-29) while the photo ghost is perfected:
+    /// not offered on screen and its cloud not built.
+    static let offers3D = false
     @Published var show3D = false {
         didSet { if !show3D { ghost3D = nil } }
     }
@@ -177,7 +180,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             session.run(config, options: [.resetTracking, .removeExistingAnchors])
             status = .relocalizing
             relocalizingSince = Date()
-            buildCloud()
+            if Restorer.offers3D { buildCloud() }
             placer.load(reference.models)
             loadStartPhoto()
             Diagnostics.log("Reset start: \(reference.title), \(reference.keyframes.count) keyframes, depth \(usesDepth)")
