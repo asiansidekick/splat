@@ -214,15 +214,16 @@ struct ScrubCursor: View {
     }
 }
 
-/// THEN on the left edge and NOW on the right, the one being swiped towards lit up.
+/// THEN on the left edge and NOW on the right, each as bright as the view leans its way.
 struct SwipeTags: View {
-    let towardsNow: Bool
+    /// 0 is all then, 1 all now.
+    let value: Double
 
     var body: some View {
         HStack {
-            tag("THEN", lit: !towardsNow)
+            tag("THEN", weight: 1 - value)
             Spacer()
-            tag("NOW", lit: towardsNow)
+            tag("NOW", weight: value)
         }
         .padding(.horizontal, 6)
         // A little above the middle, clear of the side edge guides.
@@ -232,14 +233,19 @@ struct SwipeTags: View {
         .accessibilityHidden(true)
     }
 
-    private func tag(_ text: String, lit: Bool) -> some View {
-        Text(text)
+    private func tag(_ text: String, weight: Double) -> some View {
+        let w = min(1, max(0, weight))
+        return Text(text)
             .font(.caption.weight(.heavy))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(lit ? Color.white : Color.black.opacity(0.35), in: Capsule())
-            .foregroundStyle(lit ? Color.black : Color.white.opacity(0.7))
-            .scaleEffect(lit ? 1.1 : 1)
+            .foregroundStyle(Color(white: 1 - w * 0.9).opacity(0.6 + 0.4 * w))
+            .background(
+                ZStack {
+                    Capsule().fill(Color.black.opacity(0.35))
+                    Capsule().fill(Color.white.opacity(w))
+                })
+            .scaleEffect(1 + 0.12 * w)
     }
 }
 

@@ -1166,8 +1166,8 @@ struct ResetStage: View {
     @State private var ghostShown = true
     /// While swiping the ghost strength, the cursor shows.
     @State private var swipingStrength = false
-    /// Which way the last swipe went (true: towards now), for the THEN and NOW tags; nil hides them.
-    @State private var towardsNow: Bool?
+    /// While swiping, how far towards now the view is, for the THEN and NOW tags; nil hides them.
+    @State private var tagsValue: Double?
     @State private var tagsTask: Task<Void, Never>?
     /// While paused: 0 shows the reference, 1 the frozen live picture.
     @State private var toNow = 1.0
@@ -1396,8 +1396,8 @@ struct ResetStage: View {
                 ModelSizeBadge(placer: restorer.placer)
             }
             .overlay {
-                if let towardsNow {
-                    SwipeTags(towardsNow: towardsNow)
+                if let tagsValue {
+                    SwipeTags(value: tagsValue)
                         .clearOfControls()
                         .transition(.opacity)
                 }
@@ -1418,25 +1418,29 @@ struct ResetStage: View {
                 restorer.viewport = size
                 restorer.orientation = Screen.orientation
             }
-            .onChange(of: ghostOpacity) { old, value in
+            .onChange(of: ghostOpacity) { _, value in
                 restorer.setGhostOpacity(value)
-                if swipingStrength { showTags(towardsNow: value < old) }
+                if swipingStrength { showTags(1 - value) }
             }
-            .onChange(of: toNow) { old, value in
-                if restorer.paused { showTags(towardsNow: value > old) }
+            .onChange(of: toNow) { _, value in
+                if restorer.paused { showTags(value) }
             }
         }
     }
 
-    /// Shows the THEN and NOW tags, the one being swiped towards lit, until a second after the
-    /// last change.
-    private func showTags(towardsNow now: Bool) {
-        if towardsNow != now { withAnimation(.easeOut(duration: 0.15)) { towardsNow = now } }
+    /// Shows the THEN and NOW tags, shaded by how far towards each the view is, until a second
+    /// after the last change.
+    private func showTags(_ value: Double) {
+        if tagsValue == nil {
+            withAnimation(.easeOut(duration: 0.15)) { tagsValue = value }
+        } else {
+            tagsValue = value
+        }
         tagsTask?.cancel()
         tagsTask = Task {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.3)) { towardsNow = nil }
+            withAnimation(.easeOut(duration: 0.3)) { tagsValue = nil }
         }
     }
 
