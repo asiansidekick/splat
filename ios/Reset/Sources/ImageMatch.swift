@@ -47,20 +47,59 @@ enum ImageMatch {
 
         /// The reference photo stretched onto the live picture, the live picture's size.
         func snapped(_ photo: CIImage, live fullLive: CGSize) -> CIImage? {
-            let extent = photo.extent
-            let origin = photo.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
-            guard let c = corners(reference: extent.size, live: fullLive),
-                let filter = CIFilter(name: "CIPerspectiveTransform")
-            else { return nil }
-            filter.setValue(origin, forKey: kCIInputImageKey)
-            filter.setValue(CIVector(cgPoint: c[0]), forKey: "inputTopLeft")
-            filter.setValue(CIVector(cgPoint: c[1]), forKey: "inputTopRight")
-            filter.setValue(CIVector(cgPoint: c[2]), forKey: "inputBottomRight")
-            filter.setValue(CIVector(cgPoint: c[3]), forKey: "inputBottomLeft")
-            guard let output = filter.outputImage else { return nil }
-            let canvas = CGRect(origin: .zero, size: fullLive)
-            return output.cropped(to: canvas).composited(over: CIImage(color: .clear).cropped(to: canvas))
+            guard let c = corners(reference: photo.extent.size, live: fullLive) else { return nil }
+            return ImageMatch.stretch(photo, corners: c, live: fullLive)
         }
+    }
+
+    /// Steadies the snap: the median of the last five checks' corners, moved only when it shifts
+    /// by more than 0.8% of the picture, and dropped only after three checks in a row
+    /// say the pictures are too far apart. Check-to-check noise never makes the ghost flicker.
+    struct SnapSmoother {
+        private var samples: [[CGPoint]] = []
+        private var misses = 0
+        private(set) var shown: [CGPoint]?
+
+        /// Adds one check's corners (nil when too far apart to snap); true when `shown` changed.
+        mutating func add(_ corners: [CGPoint]?, liveWidth: CGFloat) -> Bool {
+            guard let corners, corners.count == 4 else {
+                misses += 1
+                guard misses >= 3, shown != nil else { return false }
+                samples.removeAll()
+                shown = nil
+                return true
+            }
+            misses = 0
+            samples.append(corners)
+            if samples.count > 5 { samples.removeFirst() }
+            guard samples.count >= 3 else { return false }
+            func median(_ values: [CGFloat]) -> CGFloat { values.sorted()[values.count / 2] }
+            let steady = (0..<4).map { i in
+                CGPoint(x: median(samples.map { $0[i].x }), y: median(samples.map { $0[i].y }))
+            }
+            if let shown {
+                let moved = zip(shown, steady).map { hypot($0.x - $1.x, $0.y - $1.y) }.max() ?? 0
+                guard moved > liveWidth * 0.008 else { return false }
+            }
+            shown = steady
+            return true
+        }
+    }
+
+    /// A photo stretched so its corners land on `c` (top left, top right, bottom right, bottom
+    /// left, Core Image's way up), cut to the live picture's size.
+    static func stretch(_ photo: CIImage, corners c: [CGPoint], live fullLive: CGSize) -> CIImage? {
+        guard c.count == 4, let filter = CIFilter(name: "CIPerspectiveTransform") else { return nil }
+        let extent = photo.extent
+        let origin = photo.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
+        filter.setValue(origin, forKey: kCIInputImageKey)
+        filter.setValue(CIVector(cgPoint: c[0]), forKey: "inputTopLeft")
+        filter.setValue(CIVector(cgPoint: c[1]), forKey: "inputTopRight")
+        filter.setValue(CIVector(cgPoint: c[2]), forKey: "inputBottomRight")
+        filter.setValue(CIVector(cgPoint: c[3]), forKey: "inputBottomLeft")
+        guard let output = filter.outputImage else { return nil }
+        let canvas = CGRect(origin: .zero, size: fullLive)
+        return output.cropped(to: canvas).composited(over: CIImage(color: .clear).cropped(to: canvas))
     }
 
     /// Both pictures in the camera's sensor orientation. Nil when Vision cannot pair them up, for

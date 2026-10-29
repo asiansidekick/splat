@@ -75,8 +75,10 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// The latest picture check, when close enough to snap the ghost photo onto the live view by
     /// stretching it (scale, skew and perspective), so it lies exactly over what is still in
     /// place and only what has moved shows double.
-    private var snap: (id: String, result: ImageMatch.Result, version: Int)?
+    private var snap: (id: String, corners: [CGPoint], version: Int)?
     private var snapVersion = 0
+    private var snapSmoother = ImageMatch.SnapSmoother()
+    private var snapSmootherID: String?
     /// Whether the ghost on screen is snapped on, for the banner.
     @Published private(set) var snapped = false
     private var lastUpdate = Date.distantPast
@@ -339,6 +341,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         } else {
             imageAligned = nil
             snap = nil
+            snapSmoother = ImageMatch.SnapSmoother()
             ballShiftGoal = .zero
             ballShiftSamples.removeAll()
         }
@@ -425,6 +428,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         lastImageCheck = Date()
         imageBusy = true
         let live = CIImage(cvPixelBuffer: frame.capturedImage)
+        let liveSize = live.extent.size
         let reference = source.image
         let display = frame.displayTransform(for: orientation, viewportSize: viewport)
         let size = viewport
@@ -433,10 +437,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             Task { @MainActor in
                 self.imageBusy = false
                 self.imageAligned = result?.aligned
-                if let result {
-                    self.snapVersion += 1
-                    self.snap = result.error < ImageMatch.snapLimit ? (keyframe.id, result, self.snapVersion) : nil
-                }
+                if let result { self.updateSnap(result, keyframe: keyframe, reference: reference.extent.size, live: liveSize) }
                 guard let ballGap, let centre = result?.centre else { return }
                 let shown = centre.applying(display)
                 let gap = CGVector(dx: (shown.x - 0.5) * size.width, dy: (shown.y - 0.5) * size.height)
@@ -501,7 +502,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         pinnedLayout = ghostPinned ? (keyframe.id, orientation, viewport, snapping?.version ?? -1) : nil
         ghostBusy = true
         ghostQueue.async {
-            let placed = snapping.flatMap { $0.result.snapped(source, live: resolution) } ?? warp.apply(to: source)
+            let placed = snapping.flatMap { ImageMatch.stretch(source, corners: $0.corners, live: resolution) } ?? warp.apply(to: source)
             let image = placed.flatMap { Restorer.render($0, placement: placement, context: context) }
             Task { @MainActor in
                 self.ghostBusy = false
@@ -513,7 +514,19 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    private func currentSnap(for keyframe: Keyframe) -> (id: String, result: ImageMatch.Result, version: Int)? {
+    private func updateSnap(_ result: ImageMatch.Result, keyframe: Keyframe, reference: CGSize, live: CGSize) {
+        if snapSmootherID != keyframe.id {
+            snapSmootherID = keyframe.id
+            snapSmoother = ImageMatch.SnapSmoother()
+            snap = nil
+        }
+        let corners = result.error < ImageMatch.snapLimit ? result.corners(reference: reference, live: live) : nil
+        guard snapSmoother.add(corners, liveWidth: live.width) else { return }
+        snapVersion += 1
+        snap = snapSmoother.shown.map { (keyframe.id, $0, snapVersion) }
+    }
+
+    private func currentSnap(for keyframe: Keyframe) -> (id: String, corners: [CGPoint], version: Int)? {
         guard let snap, snap.id == keyframe.id else { return nil }
         return snap
     }

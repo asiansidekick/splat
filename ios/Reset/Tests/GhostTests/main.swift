@@ -695,6 +695,24 @@ func testImageMatch() {
     } else {
         expect(false, "snapped ghost: could not snap")
     }
+    // The snap holds still through check-to-check noise but follows a real move.
+    var smoother = ImageMatch.SnapSmoother()
+    var noise = Random(state: 5)
+    let base = [CGPoint(x: 0, y: 1440), CGPoint(x: 1920, y: 1440), CGPoint(x: 1920, y: 0), .zero]
+    func jittered(_ shift: CGFloat) -> [CGPoint] {
+        base.map { CGPoint(x: $0.x + shift + CGFloat(noise.normal()) * 4, y: $0.y + CGFloat(noise.normal()) * 4) }
+    }
+    var changes = 0
+    for _ in 0..<30 where smoother.add(jittered(0), liveWidth: 1920) { changes += 1 }
+    expect(changes <= 2, "snap with noisy checks: moved \(changes) times in 30 checks (should settle)")
+    for _ in 0..<5 { _ = smoother.add(jittered(60), liveWidth: 1920) }
+    expect(abs((smoother.shown?[0].x ?? 0) - 60) < 8, "snap follows a real 60 px move: now at \(Int(smoother.shown?[0].x ?? 0))")
+    var dropped = smoother
+    _ = dropped.add(nil, liveWidth: 1920)
+    _ = dropped.add(nil, liveWidth: 1920)
+    expect(dropped.shown != nil, "snap kept through two failed checks")
+    _ = dropped.add(nil, liveWidth: 1920)
+    expect(dropped.shown == nil, "snap let go after three failed checks")
     // The photo is stored smaller than the live picture: sizes must not matter.
     let small = reference.transformed(by: CGAffineTransform(scaleX: 0.5, y: 0.5))
     if let result = ImageMatch.compare(live: photo(SIMD3(0, 1, 0)), reference: small) {
