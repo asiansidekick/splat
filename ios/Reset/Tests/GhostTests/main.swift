@@ -1,5 +1,5 @@
 // Tests for the 3D ghost and depth reading, run on a Mac by CI:
-//   swiftc -O Sources/DepthMap.swift Sources/GhostCore.swift Tests/GhostTests.swift -o ghost-tests
+//   swiftc -O Sources/DepthMap.swift Sources/GhostCore.swift Tests/GhostTests/main.swift -o ghost-tests
 //   ./ghost-tests out
 // A synthetic room (a floor and a red box) is "captured" with depth maps like ARKit's, then the
 // ghost is built, checked against live depth and drawn. Pictures of each step go to `out`.

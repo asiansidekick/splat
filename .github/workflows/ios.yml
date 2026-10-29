@@ -14,18 +14,40 @@ jobs:
   test:
     runs-on: macos-15-intel
     timeout-minutes: 20
+    # To push the test pictures to the ci/ghost-test-pictures branch, where they can be looked at.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Ghost tests
         working-directory: ios/Reset
         run: |
-          swiftc -O Sources/DepthMap.swift Sources/GhostCore.swift Tests/GhostTests.swift -o ghost-tests
-          ./ghost-tests test-pictures
-      - uses: actions/upload-artifact@v4
+          # Compiler errors and test results become annotations, so they show on the run summary.
+          if ! swiftc -O Sources/DepthMap.swift Sources/GhostCore.swift Tests/GhostTests/main.swift -o ghost-tests > compile.log 2>&1; then
+            grep -E ": error: " compile.log | sort -u | head -10 \
+              | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Reset/\1,line=\3,col=\4::\5#'
+            tail -40 compile.log
+            exit 1
+          fi
+          set +e
+          ./ghost-tests test-pictures > results.txt 2>&1
+          status=$?
+          set -e
+          cat results.txt
+          sed -nE 's/^FAIL  (.*)$/::error::\1/p; s/^PASS  (.*)$/::notice::\1/p' results.txt
+          cp results.txt test-pictures/ 2>/dev/null || true
+          exit $status
+      - name: Publish test pictures
         if: always()
-        with:
-          name: ghost-test-pictures
-          path: ios/Reset/test-pictures
+        working-directory: ios/Reset
+        run: |
+          [ -d test-pictures ] || exit 0
+          cd test-pictures
+          git init -q
+          git checkout -q -b ci/ghost-test-pictures
+          git add -A
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "Ghost test pictures for ${{ github.sha }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci/ghost-test-pictures
 
   build:
     needs: test

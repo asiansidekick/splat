@@ -1393,6 +1393,8 @@ struct ScanProgressOverlay: View {
 /// where the photo was taken. It fades away once everything lines up.
 struct AimOverlay: View {
     @ObservedObject var state: AimState
+    /// Size of the fixed circle; the aim ring matches it when standing at the right distance.
+    static let circle: CGFloat = 150
 
     var body: some View {
         GeometryReader { geometry in
@@ -1400,7 +1402,7 @@ struct AimOverlay: View {
             let centre = CGPoint(x: size.width / 2, y: size.height / 2)
             if let point = state.point, let offset = state.offset {
                 let colour: Color = offset.isMatched ? .green : .yellow
-                let inset: CGFloat = 40
+                let inset: CGFloat = 50
                 let shown = CGPoint(
                     x: min(max(point.x, inset), size.width - inset),
                     y: min(max(point.y, inset), size.height - inset))
@@ -1410,36 +1412,74 @@ struct AimOverlay: View {
                         path.move(to: centre)
                         path.addLine(to: shown)
                     }
-                    .stroke(colour.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4, 6]))
+                    .stroke(colour.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [6, 8]))
+                    // Fixed: where the ring should end up, the same size.
+                    Circle()
+                        .stroke(Color.white.opacity(0.85), style: StrokeStyle(lineWidth: 3, dash: [10, 8]))
+                        .frame(width: AimOverlay.circle, height: AimOverlay.circle)
+                        .position(centre)
                     Crosshair()
-                        .stroke(Color.white.opacity(0.8), lineWidth: 1.5)
-                        .frame(width: 32, height: 32)
+                        .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .frame(width: 70, height: 70)
                         .position(centre)
                     if offScreen {
                         Image(systemName: "arrowtriangle.up.fill")
-                            .font(.title2)
+                            .font(.system(size: 44))
                             .foregroundStyle(colour)
                             .rotationEffect(.radians(atan2(point.x - centre.x, centre.y - point.y)))
                             .position(shown)
                     } else {
+                        let ring = AimOverlay.circle * state.scale
                         AimRing(roll: state.roll)
-                            .stroke(colour, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                            .frame(width: 48, height: 48)
+                            .stroke(colour, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                            .frame(width: ring, height: ring)
                             .position(shown)
                     }
-                    DepthIndicator(forward: offset.forward, colour: colour)
-                        .position(centre)
                     StepIndicator(right: offset.right, up: offset.up, colour: colour)
                         .position(centre)
+                    GuideLabel(offset: offset, colour: colour)
+                        .position(x: centre.x, y: min(size.height - 40, centre.y + AimOverlay.circle / 2 + 110))
                 }
-                .shadow(color: .black.opacity(0.5), radius: 1.5)
+                .shadow(color: .black.opacity(0.7), radius: 2)
                 .animation(.linear(duration: 0.1), value: shown)
-                // Light enough to see the set through, and gone once everything lines up.
-                .opacity(offset.isMatched ? 0 : 0.75)
+                // Gone once everything lines up.
+                .opacity(offset.isMatched ? 0 : 0.9)
                 .animation(.easeOut(duration: 0.6), value: offset.isMatched)
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+/// Large, plain directions under the guide: how far to step and which way.
+struct GuideLabel: View {
+    let offset: Offset
+    let colour: Color
+
+    var body: some View {
+        let lines = GuideLabel.lines(for: offset)
+        if !lines.isEmpty {
+            VStack(spacing: 2) {
+                ForEach(lines, id: \.self) { line in
+                    Text(line)
+                }
+            }
+            .font(.system(size: 26, weight: .heavy, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(colour)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 14))
+        }
+    }
+
+    static func lines(for offset: Offset) -> [String] {
+        func cm(_ value: Float) -> Int { Int((abs(value) * 100).rounded()) }
+        var lines: [String] = []
+        if cm(offset.forward) >= 5 { lines.append("\(offset.forward > 0 ? "FORWARD" : "BACK") \(cm(offset.forward)) cm") }
+        if cm(offset.right) >= 5 { lines.append("\(offset.right > 0 ? "RIGHT" : "LEFT") \(cm(offset.right)) cm") }
+        if cm(offset.up) >= 5 { lines.append("\(offset.up > 0 ? "UP" : "DOWN") \(cm(offset.up)) cm") }
+        return lines
     }
 }
 
@@ -1478,37 +1518,7 @@ struct AimRing: Shape {
     }
 }
 
-/// Around the cross: arrows pointing in to step forward, pointing out to step back, bigger the
-/// further there is to go, with the distance underneath.
-struct DepthIndicator: View {
-    let forward: Float
-    let colour: Color
-
-    private var centimetres: Int { Int((abs(forward) * 100).rounded()) }
-
-    var body: some View {
-        let strength = CGFloat(min(1, (abs(forward) / 0.5).squareRoot()))
-        ZStack {
-            if centimetres >= 5 {
-                ForEach(0..<4, id: \.self) { k in
-                    Image(systemName: forward > 0 ? "arrowtriangle.down.fill" : "arrowtriangle.up.fill")
-                        .font(.system(size: 8 + 8 * strength))
-                        .foregroundStyle(colour)
-                        .offset(y: -40)
-                        .rotationEffect(.degrees(Double(k) * 90))
-                }
-                Text("\(forward > 0 ? "FORWARD" : "BACK") \(centimetres) cm")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(colour)
-                    .offset(y: 58)
-            }
-        }
-        .frame(width: 130, height: 130)
-        .animation(.easeOut(duration: 0.2), value: centimetres)
-    }
-}
-
-/// Outside the cross: a big arrow showing which way to step sideways or to raise or lower the
+/// Outside the circle: a big arrow showing which way to step sideways or to raise or lower the
 /// phone, so standing in the wrong place does not pass for lined up when only the aim matches.
 struct StepIndicator: View {
     let right: Float
@@ -1522,24 +1532,13 @@ struct StepIndicator: View {
         ZStack {
             if centimetres >= 5 {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 14 + 10 * strength, weight: .heavy))
+                    .font(.system(size: 36 + 20 * strength, weight: .black))
                     .foregroundStyle(colour)
-                    .offset(y: -66)
+                    .offset(y: -(AimOverlay.circle / 2 + 44))
                     .rotationEffect(.radians(Double(atan2(right, up))))
-                Text("\(direction) \(centimetres) cm")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(colour)
-                    .offset(y: 74)
             }
         }
-        .frame(width: 170, height: 170)
+        .frame(width: AimOverlay.circle + 160, height: AimOverlay.circle + 160)
         .animation(.easeOut(duration: 0.2), value: centimetres)
-    }
-
-    private var direction: String {
-        var parts: [String] = []
-        if abs(right) >= 0.03 { parts.append(right > 0 ? "RIGHT" : "LEFT") }
-        if abs(up) >= 0.03 { parts.append(up > 0 ? "UP" : "DOWN") }
-        return parts.joined(separator: "+")
     }
 }

@@ -280,7 +280,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
         let (_, targetUp) = Guidance.screenAxes(target.cameraToWorld, orientation: orientation)
         let roll = atan2(simd_dot(targetUp, right), simd_dot(targetUp, up))
-        aim.update(point: point, roll: Double(roll), offset: move)
+        // The ring is the size the spot would look from here: 1.5 m away is the reference distance.
+        let distance = max(0.2, simd_distance(camera.columns.3.xyz, spot))
+        aim.update(point: point, roll: Double(roll), offset: move, scale: Double(min(2.5, max(0.35, 1.5 / distance))))
         if matched != move.isMatched { matched = move.isMatched }
     }
 
