@@ -8,11 +8,25 @@ enum DepthMap {
     /// dropped nearly every reading on device, leaving the 3D ghost with a handful of dots.
     static let minConfidence: UInt8 = 1
 
-    /// Copies depth, setting readings below `minConfidence` to 0 (no reading).
+    /// ARKit's confidence levels, or nil when they cannot be trusted: on an iPhone 14 Pro with
+    /// iOS 26 every reading came back "low" while the depth itself was good, so trusting it threw
+    /// all the depth away. Confidence that rates nearly everything low is ignored.
+    static func confidence(_ buffer: CVPixelBuffer?) -> [UInt8]? {
+        guard let buffer, CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_OneComponent8 else { return nil }
+        return usable(bytes(buffer))
+    }
+
+    /// The levels if at least 5% are medium or high, else nil.
+    static func usable(_ levels: [UInt8]) -> [UInt8]? {
+        let sure = levels.reduce(0) { $0 + ($1 >= minConfidence ? 1 : 0) }
+        return levels.isEmpty || sure * 20 < levels.count ? nil : levels
+    }
+
+    /// Copies depth, setting readings below `minConfidence` to 0 (no reading) when the
+    /// confidence can be trusted.
     static func copy(_ buffer: CVPixelBuffer, keepingOnly confidence: CVPixelBuffer?) -> Data {
         var data = copy(buffer)
-        guard let confidence else { return data }
-        let levels = bytes(confidence)
+        guard let levels = self.confidence(confidence) else { return data }
         data.withUnsafeMutableBytes { raw in
             let depth = raw.bindMemory(to: Float.self)
             guard depth.count == levels.count else { return }

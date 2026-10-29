@@ -444,7 +444,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             cameraToWorld: frame.camera.transform,
             intrinsics: frame.camera.intrinsics,
             imageWidth: CVPixelBufferGetWidth(frame.capturedImage),
-            confidence: depthData.confidenceMap.map(DepthMap.bytes))
+            confidence: DepthMap.confidence(depthData.confidenceMap))
     }
 
     // MARK: LiDAR differences

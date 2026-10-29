@@ -199,6 +199,8 @@ enum GhostCore {
             out[o + 2] = UInt8(min(255, color.z * a * 255))
             out[o + 3] = UInt8(a * 255)
         }
+        // 1 outline, 2 edge of something gone; drawn after the dots, a pixel wider each way.
+        var edges = [UInt8](repeating: 0, count: w * h)
         func state(_ i: Int) -> State {
             guard let states, owner[i] >= 0 else { return .unchecked }
             return states[Int(owner[i])]
@@ -222,15 +224,33 @@ enum GhostCore {
                     if s == .gone, owner[n] < 0 || state(n) != .gone { goneEdge = true }
                 }
                 if goneEdge {
-                    put(i, goneColor, 1)
+                    edges[i] = 2
                 } else if steps {
-                    put(i, outlineColor, outlineAlpha)
-                } else {
+                    edges[i] = 1
+                }
+                do {
                     let color = cloud.colors[index]
                     switch s {
                     case .unchecked: put(i, color, strength)
                     case .matched: put(i, color, strength * 0.45)
                     case .gone: put(i, color * 0.4 + goneColor * 0.6, 1)
+                    }
+                }
+            }
+        }
+        // Thick enough to see at arm's length: each edge pixel also paints its four neighbours.
+        for y in 0..<h {
+            for x in 0..<w {
+                let kind = edges[y * w + x]
+                guard kind > 0 else { continue }
+                for (dx, dy) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let nx = x + dx
+                    let ny = y + dy
+                    guard nx >= 0, nx < w, ny >= 0, ny < h else { continue }
+                    let n = ny * w + nx
+                    // A gone edge wins over an outline where they meet.
+                    if kind == 2 || edges[n] != 2 {
+                        put(n, kind == 2 ? goneColor : outlineColor, kind == 2 ? 1 : outlineAlpha)
                     }
                 }
             }

@@ -274,7 +274,8 @@ struct FrameSnapshot: @unchecked Sendable {
                 FrameSnapshot.loggedDepth = true
                 let raw = DepthMap.floats(DepthMap.copy(depthMap))
                 let confidence = sceneDepth.confidenceMap.map(DepthMap.bytes)
-                Diagnostics.log("Depth \(DepthMap.describe(depthMap)): raw \(DepthMap.stats(raw, confidence: confidence)); kept \(DepthMap.stats(DepthMap.floats(kept), confidence: nil))")
+                let format = sceneDepth.confidenceMap.map(DepthMap.describe) ?? "none"
+                Diagnostics.log("Depth \(DepthMap.describe(depthMap)): raw \(DepthMap.stats(raw, confidence: confidence)); confidence \(format), trusted \(DepthMap.confidence(sceneDepth.confidenceMap) != nil); kept \(DepthMap.stats(DepthMap.floats(kept), confidence: nil))")
             }
             depth = kept
             depthWidth = CVPixelBufferGetWidth(depthMap)

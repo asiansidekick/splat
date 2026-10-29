@@ -74,7 +74,7 @@ enum DepthDiff {
             let e = expected[i]
             let d = live.depth[i]
             guard e.isFinite, d > 0.1, d < maxRange else { continue }
-            if let confidence = live.confidence, confidence.count == w * h, confidence[i] < 2 { continue }
+            if let confidence = live.confidence, confidence.count == w * h, confidence[i] < DepthMap.minConfidence { continue }
             let limit = threshold + perMetre * e
             let o = i * 4
             if d < e - limit {

@@ -207,6 +207,12 @@ func testDepthBuffers() {
     CVPixelBufferUnlockBaseAddress(confidence!, [])
     let kept = DepthMap.floats(DepthMap.copy(depth!, keepingOnly: confidence!))
     expect(kept == [0, 2, 3, 4], "confidence: low dropped, medium and high kept (\(kept))")
+    // Seen on device: every reading rated low while the depth was good. Then it is ignored.
+    CVPixelBufferLockBaseAddress(confidence!, [])
+    for i in 0..<4 { c[i] = 0 }
+    CVPixelBufferUnlockBaseAddress(confidence!, [])
+    let allLow = DepthMap.floats(DepthMap.copy(depth!, keepingOnly: confidence!))
+    expect(allLow == [1, 2, 3, 4], "confidence all low: ignored, depth kept (\(allLow))")
     print("      " + DepthMap.stats(kept, confidence: DepthMap.bytes(confidence!)))
 }
 
