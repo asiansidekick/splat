@@ -1266,6 +1266,11 @@ struct ResetStage: View {
             }
             Spacer(minLength: 0)
             if restorer.paused {
+                // Small, in the top bar, so it covers none of the picture.
+                Text("PAUSED")
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(Color.orange)
+                    .accessibilityLabel("Paused")
                 TopPill(text: wipe ? "Wipe" : "Fade", systemImage: wipe ? "rectangle.split.2x1" : "square.on.square") {
                     Haptics.tap()
                     wipe.toggle()
@@ -1364,9 +1369,6 @@ struct ResetStage: View {
                     if let headline, !restorer.paused {
                         Banner(text: headline)
                     }
-                    if restorer.paused {
-                        pausedChip
-                    }
                     if showingStrength, !restorer.paused {
                         Slider(value: $ghostOpacity, in: 0...1, onEditingChanged: { _ in showStrength() })
                             .accessibilityLabel("Ghost strength")
@@ -1391,10 +1393,8 @@ struct ResetStage: View {
                 ModelSizeBadge(placer: restorer.placer)
             }
             .overlay {
-                // Amber while paused; green once all four edge guides are in.
-                if restorer.paused {
-                    Rectangle().strokeBorder(Color.orange, lineWidth: 5).ignoresSafeArea().allowsHitTesting(false)
-                } else if restorer.matched {
+                // Green once all four edge guides are in.
+                if restorer.matched && !restorer.paused {
                     Rectangle().strokeBorder(Color.green, lineWidth: 4).ignoresSafeArea().allowsHitTesting(false)
                 }
             }
@@ -1413,17 +1413,6 @@ struct ResetStage: View {
                 if showingStrength { showStrength() }
             }
         }
-    }
-
-    /// Large, so a paused picture is never mistaken for live.
-    private var pausedChip: some View {
-        Text("PAUSED")
-            .font(.system(size: 26, weight: .heavy))
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.orange, in: Capsule())
-            .foregroundStyle(.black)
-            .allowsHitTesting(false)
     }
 
     /// Shows the ghost strength slider for two and a half seconds after the last touch.
