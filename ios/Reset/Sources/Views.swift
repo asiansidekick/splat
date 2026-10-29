@@ -327,8 +327,11 @@ struct NextSlateSheet: View {
 
 // MARK: - Layout
 
-/// The Camera app's layout: the preview, then the mode switch and the shutter row underneath when
-/// upright, or down the side when the phone is turned.
+/// The Camera app's layout: the preview fills the whole screen, with the top bar and the shutter
+/// controls floating over it, along the bottom when upright or down the side when the phone is
+/// turned. The preview stays the same view whichever way the phone is held, so turning it does
+/// not restart the camera. Things drawn over the preview keep clear of the controls with
+/// `chromeInsets`.
 struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutter: View, Trailing: View>: View {
     @ViewBuilder let top: () -> Top
     @ViewBuilder let preview: () -> Preview
@@ -337,47 +340,94 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
     @ViewBuilder let shutter: () -> Shutter
     @ViewBuilder let trailing: () -> Trailing
 
+    static var topHeight: CGFloat { 44 }
+    static var bottomHeight: CGFloat { 140 }
+    static var sideWidth: CGFloat { 110 }
+
     var body: some View {
         GeometryReader { geometry in
-            if geometry.size.width > geometry.size.height {
-                HStack(spacing: 0) {
-                    VStack(spacing: 0) {
-                        top().frame(height: 44)
-                        preview().frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                    }
-                    VStack(spacing: 14) {
-                        trailing()
-                        Spacer(minLength: 0)
-                        modes(true)
-                        shutter()
-                        Spacer(minLength: 0)
-                        leading()
-                    }
-                    .frame(width: 110)
-                    .padding(.vertical, 8)
-                }
-            } else {
+            let landscape = geometry.size.width > geometry.size.height
+            let safe = geometry.safeAreaInsets
+            let insets = landscape
+                ? EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom, trailing: safe.trailing + Self.sideWidth)
+                : EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom + Self.bottomHeight, trailing: safe.trailing)
+            ZStack {
                 VStack(spacing: 0) {
-                    top().frame(height: 44)
-                    preview().frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
-                    VStack(spacing: 10) {
-                        modes(false)
-                        HStack {
-                            leading().frame(width: 84)
-                            Spacer()
-                            shutter()
-                            Spacer()
-                            trailing().frame(width: 84)
+                    top()
+                        .frame(height: Self.topHeight)
+                        .background(Color.black.opacity(0.35).ignoresSafeArea(edges: .top))
+                    Spacer(minLength: 0)
+                    if !landscape {
+                        VStack(spacing: 10) {
+                            modes(false)
+                            HStack {
+                                leading().frame(width: 84)
+                                Spacer()
+                                shutter()
+                                Spacer()
+                                trailing().frame(width: 84)
+                            }
+                            .padding(.horizontal, 16)
                         }
-                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                        .padding(.bottom, 16)
+                        .frame(maxWidth: .infinity, minHeight: Self.bottomHeight)
+                        .background(Color.black.opacity(0.35).ignoresSafeArea(edges: .bottom))
                     }
-                    .padding(.top, 12)
-                    .padding(.bottom, 16)
                 }
+                .padding(.trailing, landscape ? Self.sideWidth : 0)
+                if landscape {
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        VStack(spacing: 14) {
+                            trailing()
+                            Spacer(minLength: 0)
+                            modes(true)
+                            shutter()
+                            Spacer(minLength: 0)
+                            leading()
+                        }
+                        .padding(.vertical, 8)
+                        .frame(width: Self.sideWidth)
+                        .frame(maxHeight: .infinity)
+                        .background(Color.black.opacity(0.35).ignoresSafeArea(edges: [.top, .bottom, .trailing]))
+                    }
+                }
+            }
+            .background {
+                preview()
+                    .environment(\.chromeInsets, insets)
+                    .clipped()
+                    .ignoresSafeArea()
             }
         }
         .background(Color.black)
         .dynamicTypeSize(...DynamicTypeSize.xLarge)  // big accessibility text would push the controls off screen
+    }
+}
+
+/// Keeps things drawn over the full-screen preview clear of the floating controls.
+struct ClearOfControls: ViewModifier {
+    @Environment(\.chromeInsets) private var insets
+
+    func body(content: Content) -> some View {
+        content.padding(insets)
+    }
+}
+
+extension View {
+    func clearOfControls() -> some View { modifier(ClearOfControls()) }
+}
+
+private struct ChromeInsetsKey: EnvironmentKey {
+    static let defaultValue = EdgeInsets()
+}
+
+extension EnvironmentValues {
+    /// How far the floating controls reach in from each edge of the full-screen preview.
+    var chromeInsets: EdgeInsets {
+        get { self[ChromeInsetsKey.self] }
+        set { self[ChromeInsetsKey.self] = newValue }
     }
 }
 
@@ -902,6 +952,7 @@ struct CaptureStage: View {
                     ScanProgressOverlay(
                         progress: justSaved ? 1 : recorder.scanProgress, saved: justSaved,
                         mapping: recorder.mappingStatus, points: recorder.pointCount)
+                        .clearOfControls()
                         .transition(.opacity)
                 }
                 VStack {
@@ -914,6 +965,7 @@ struct CaptureStage: View {
                     }
                 }
                 .padding(8)
+                .clearOfControls()
             }
         } modes: { vertical in
             ModePicker(modes: CaptureMode.allCases, label: \.label, selection: $mode, vertical: vertical)
@@ -1210,6 +1262,7 @@ struct ResetStage: View {
                     .foregroundStyle(.white)
                 }
                 .padding(8)
+                .clearOfControls()
                 ModelSizeBadge(placer: restorer.placer)
             }
             .onAppear {

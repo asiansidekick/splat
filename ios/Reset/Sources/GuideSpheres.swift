@@ -23,6 +23,9 @@ final class GuideSpheres {
     let root = SCNNode()
     private let targetSphere: SCNMaterial
     private var shown = false
+    /// The AR view the glass sphere rides on. Its camera node can appear after the view is made,
+    /// and a new view is made if the screen is rebuilt, so every update checks it.
+    private weak var view: ARSCNView?
     private var wasMatched = false
 
     init() {
@@ -76,6 +79,7 @@ final class GuideSpheres {
 
     /// Puts the glass sphere in front of the AR view's camera, so it moves with the phone exactly.
     func attach(to view: ARSCNView) {
+        self.view = view
         guard let camera = view.pointOfView, fixed.parent !== camera else { return }
         fixed.removeFromParentNode()
         camera.addChildNode(fixed)
@@ -85,6 +89,7 @@ final class GuideSpheres {
     /// `camera` is only used when the glass sphere could not ride on the view's camera node.
     func update(target keyframe: Keyframe, camera: simd_float4x4, matched: Bool) {
         let local = GuideSpheres.local(for: keyframe)
+        if let view, let eye = view.pointOfView, fixed.parent !== eye { attach(to: view) }
         target.simdTransform = keyframe.cameraToWorld * local
         if fixed.parent == nil || fixed.parent === root {
             if fixed.parent == nil { root.addChildNode(fixed) }
