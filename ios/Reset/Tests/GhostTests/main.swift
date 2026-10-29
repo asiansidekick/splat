@@ -225,12 +225,18 @@ func testDepthBuffers() {
 
 // MARK: Ghost
 
-/// The ghost built the way the app builds it: surfaces and edges from each depth view, edges
-/// kept where enough views agree.
+/// The ghost built the way the app builds it: surfaces from all depth views, edges per view.
 struct Built {
     var surface = GhostCore.Cloud()
-    var edges = GhostCore.Cloud()
+    var views: [GhostCore.EdgeView] = []
     var readings = 0
+
+    /// The edges the app draws for a camera here: the nearest reference view's.
+    func edges(for pose: simd_float4x4) -> GhostCore.Cloud {
+        GhostCore.nearestView(views, to: pose, current: nil).map { views[$0].edges } ?? GhostCore.Cloud()
+    }
+
+    var allEdges: [SIMD3<Float>] { views.flatMap(\.edges.positions) }
 }
 
 func build(
@@ -238,8 +244,7 @@ func build(
 ) -> Built {
     var built = Built()
     var filled = [SIMD3<Int32>: Int32]()
-    var edgeCells = [SIMD3<Int32>: Int32]()
-    for (view, pose) in poses.enumerated() {
+    for pose in poses {
         let truth = depthCamera(pose)
         let shot = scene.capture(truth)
         var depth = shot.depth
@@ -249,9 +254,8 @@ func build(
             camera = depthCamera(drifted(pose, random: &random.pointee, metres: drift.metres, degrees: drift.degrees))
         }
         built.readings += GhostCore.add(depth: depth, rgba: shot.rgba, camera: camera, maxPoints: 300_000, to: &built.surface, filled: &filled)
-        GhostCore.addEdges(GhostCore.edgePoints(depth: depth, camera: camera), view: view, maxPoints: 300_000, to: &built.edges, filled: &edgeCells)
+        built.views.append(GhostCore.edgeView(GhostCore.edgePoints(depth: depth, camera: camera), camera: camera))
     }
-    if poses.count >= 4 { built.edges = GhostCore.agreedEdges(built.edges, filled: edgeCells, minViews: 3) }
     return built
 }
 
@@ -309,7 +313,7 @@ func testGhost() {
     let built = build(scene, poses: eyes.map { lookAt(eye: $0, target: boxCentre) })
     let cloud = built.surface
     expect(cloud.positions.count > 5_000, "built \(cloud.positions.count) points from \(built.readings) readings")
-    expect(built.edges.positions.count > 200, "found \(built.edges.positions.count) edge points")
+    expect(built.allEdges.count > 200, "found \(built.allEdges.count) edge points")
 
     // Every point lies on a surface of the scene, and every edge point on a real edge.
     var worst: Float = 0
@@ -324,13 +328,13 @@ func testGhost() {
     }
     expect(worst < 0.01, "points sit on the scene's surfaces (worst \(worst) m)")
     let segments = edgeSegments(scene)
-    let offEdge = built.edges.positions.filter { p in !segments.contains { distance(p, $0) < 0.08 } }.count
-    expect(offEdge < built.edges.positions.count / 10, "edge points off the real edges: \(offEdge) of \(built.edges.positions.count)")
+    let offEdge = built.allEdges.filter { p in !segments.contains { distance(p, $0) < 0.08 } }.count
+    expect(offEdge < built.allEdges.count / 10, "edge points off the real edges: \(offEdge) of \(built.allEdges.count)")
 
     // Drawn from the first reference view: lines round the box, no clutter.
     let frontPose = lookAt(eye: SIMD3(0, 1, 0), target: boxCentre)
     let front = screenCamera(frontPose)
-    let frontGhost = GhostCore.render(surface: cloud, edges: built.edges, states: nil, camera: front, strength: 0.8)
+    let frontGhost = GhostCore.render(surface: cloud, edges: built.edges(for: frontPose), states: nil, camera: front, strength: 0.8)
     let (frontLines, frontStray) = strayLines(frontGhost, scene: scene, camera: front)
     expect(frontLines > 300, "front view: \(frontLines) line pixels")
     expect(frontStray < 40, "front view: \(frontStray) line pixels away from real edges")
@@ -346,7 +350,8 @@ func testGhost() {
     // From the side, somewhere the reference never stood: the lines still sit round the box.
     let sidePose = lookAt(eye: SIMD3(1.2, 0.9, -0.7), target: boxCentre)
     let side = screenCamera(sidePose)
-    let sideGhost = GhostCore.render(surface: cloud, edges: built.edges, states: nil, camera: side, strength: 0.8)
+    let sideEdges = built.edges(for: sidePose)
+    let sideGhost = GhostCore.render(surface: cloud, edges: sideEdges, states: nil, camera: side, strength: 0.8)
     let sideBox = side.project(boxCentre)!
     let nearBox = (0..<(side.width * side.height)).filter { i in
         hypot(Float(i % side.width) - sideBox.u, Float(i / side.width) - sideBox.v) < 140 && isYellow(sideGhost, i)
@@ -378,8 +383,8 @@ func testGhost() {
     let matched = states.filter { $0 == .matched }.count
     expect(goneWhenSame == 0, "unchanged set: \(goneWhenSame) points gone")
     expect(matched > cloud.positions.count / 4, "unchanged set: \(matched) of \(cloud.positions.count) points matched")
-    var edgeStates = GhostCore.edgeStates(edges: built.edges.positions, surfaceStates: states, surfaceCells: cells)
-    let sameGhost = GhostCore.render(surface: cloud, edges: built.edges, states: edgeStates, camera: side, strength: 0.8)
+    var edgeStates = GhostCore.edgeStates(edges: sideEdges.positions, surfaceStates: states, surfaceCells: cells)
+    let sameGhost = GhostCore.render(surface: cloud, edges: sideEdges, states: edgeStates, camera: side, strength: 0.8)
     let blueSame = (0..<(side.width * side.height)).filter { isBlue(sameGhost, $0) }.count
     expect(blueSame == 0, "unchanged set: \(blueSame) blue pixels")
     save("3-side-nothing-moved", ghost: sameGhost, background: scene.capture(side).rgba, width: side.width, height: side.height)
@@ -398,8 +403,8 @@ func testGhost() {
     let goneTotal = states.filter { $0 == .gone }.count
     expect(goneOnBox > boxTotal / 4, "box moved: \(goneOnBox) of \(boxTotal) old box points gone")
     expect(goneTotal - goneOnBox < goneOnBox / 5, "box moved: only \(goneTotal - goneOnBox) gone points away from the box")
-    edgeStates = GhostCore.edgeStates(edges: built.edges.positions, surfaceStates: states, surfaceCells: cells)
-    let movedGhost = GhostCore.render(surface: cloud, edges: built.edges, states: edgeStates, camera: side, strength: 0.8)
+    edgeStates = GhostCore.edgeStates(edges: sideEdges.positions, surfaceStates: states, surfaceCells: cells)
+    let movedGhost = GhostCore.render(surface: cloud, edges: sideEdges, states: edgeStates, camera: side, strength: 0.8)
     let blue = (0..<(side.width * side.height)).filter { isBlue(movedGhost, $0) }.count
     expect(blue > 100, "box moved: \(blue) blue line pixels where it was")
     save("4-side-box-moved", ghost: movedGhost, background: moved.capture(side).rgba, width: side.width, height: side.height)
@@ -482,16 +487,17 @@ func testNoisyGhost() {
     }
     let built = withUnsafeMutablePointer(to: &random) { build(scene, poses: poses, random: $0) }
     let cloud = built.surface
-    expect(cloud.positions.count > 20_000, "noisy: built \(cloud.positions.count) points, \(built.edges.positions.count) edge points")
+    expect(cloud.positions.count > 20_000, "noisy: built \(cloud.positions.count) points, \(built.allEdges.count) edge points")
     let segments = edgeSegments(scene)
-    let offEdge = built.edges.positions.filter { p in !segments.contains { distance(p, $0) < 0.08 } }.count
-    expect(offEdge < built.edges.positions.count / 8, "noisy: edge points off the real edges: \(offEdge) of \(built.edges.positions.count)")
+    let offEdge = built.allEdges.filter { p in !segments.contains { distance(p, $0) < 0.08 } }.count
+    expect(offEdge < built.allEdges.count / 8, "noisy: edge points off the real edges: \(offEdge) of \(built.allEdges.count)")
     let cells = GhostCore.cells(of: cloud.positions)
 
     for (name, eye) in [("front", SIMD3<Float>(-0.2, 1.1, -0.3)), ("close", SIMD3<Float>(0.3, 0.8, -0.9))] {
         let pose = lookAt(eye: eye, target: centre)
         let camera = screenCamera(pose)
-        let ghost = GhostCore.render(surface: cloud, edges: built.edges, states: nil, camera: camera, strength: 0.8)
+        let edges = built.edges(for: pose)
+        let ghost = GhostCore.render(surface: cloud, edges: edges, states: nil, camera: camera, strength: 0.8)
         let total = camera.width * camera.height
         let (lines, stray) = strayLines(ghost, scene: scene, camera: camera)
         expect(lines > 400, "noisy \(name): \(lines) line pixels on the props' edges")
@@ -509,8 +515,8 @@ func testNoisyGhost() {
                 camera: depthCamera(drifted(pose, random: &random, metres: 0.02)), window: 2)
         }
         var states = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
-        var edgeStates = GhostCore.edgeStates(edges: built.edges.positions, surfaceStates: states, surfaceCells: cells)
-        let checked = GhostCore.render(surface: cloud, edges: built.edges, states: edgeStates, camera: camera, strength: 0.8)
+        var edgeStates = GhostCore.edgeStates(edges: edges.positions, surfaceStates: states, surfaceCells: cells)
+        let checked = GhostCore.render(surface: cloud, edges: edges, states: edgeStates, camera: camera, strength: 0.8)
         let falseBlue = (0..<total).filter { isBlue(checked, $0) }.count
         expect(falseBlue == 0, "noisy \(name), nothing moved: \(falseBlue) blue pixels")
         if name == "front" {
@@ -526,8 +532,8 @@ func testNoisyGhost() {
                     camera: depthCamera(drifted(pose, random: &random)), window: 2)
             }
             states = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
-            edgeStates = GhostCore.edgeStates(edges: built.edges.positions, surfaceStates: states, surfaceCells: cells)
-            let goneGhost = GhostCore.render(surface: cloud, edges: built.edges, states: edgeStates, camera: camera, strength: 0.8)
+            edgeStates = GhostCore.edgeStates(edges: edges.positions, surfaceStates: states, surfaceCells: cells)
+            let goneGhost = GhostCore.render(surface: cloud, edges: edges, states: edgeStates, camera: camera, strength: 0.8)
             let shown = (0..<total).filter { isBlue(goneGhost, $0) }.count
             expect(shown > 100, "noisy front, box taken away: \(shown) blue line pixels where it stood")
             save("7-noisy-box-gone", ghost: goneGhost, background: gone.capture(camera).rgba, width: camera.width, height: camera.height)
@@ -551,17 +557,17 @@ func testHardCases() {
     // Tracking drifting 3 cm and a degree between views, worse than the noisy test: the edges
     // must still agree and draw.
     let drifty = withUnsafeMutablePointer(to: &random) { build(scene, poses: poses, random: $0, drift: (0.03, 1.0)) }
-    let ghost = GhostCore.render(surface: drifty.surface, edges: drifty.edges, states: nil, camera: camera, strength: 0.8)
+    let ghost = GhostCore.render(surface: drifty.surface, edges: drifty.edges(for: view), states: nil, camera: camera, strength: 0.8)
     let (lines, stray) = strayLines(ghost, scene: scene, camera: camera)
-    expect(lines > 400, "3 cm drift: \(lines) line pixels drawn (\(drifty.edges.positions.count) edge points)")
+    expect(lines > 400, "3 cm drift: \(lines) line pixels drawn (\(drifty.edges(for: view).positions.count) edge points)")
     expect(stray < lines / 10, "3 cm drift: \(stray) line pixels away from real edges")
     save("8-drift-3cm", ghost: ghost, background: scene.capture(camera).rgba, width: camera.width, height: camera.height)
 
     // A one-shot reference (the shutter): a single depth view still draws the props' edges.
     let single = withUnsafeMutablePointer(to: &random) { build(scene, poses: [view], random: $0) }
-    let one = GhostCore.render(surface: single.surface, edges: single.edges, states: nil, camera: camera, strength: 0.8)
+    let one = GhostCore.render(surface: single.surface, edges: single.edges(for: view), states: nil, camera: camera, strength: 0.8)
     let (oneLines, oneStray) = strayLines(one, scene: scene, camera: camera)
-    expect(oneLines > 300, "one view: \(oneLines) line pixels drawn (\(single.edges.positions.count) edge points)")
+    expect(oneLines > 300, "one view: \(oneLines) line pixels drawn (\(single.edges(for: view).positions.count) edge points)")
     expect(oneStray < oneLines / 10, "one view: \(oneStray) line pixels away from real edges")
     save("9-one-view", ghost: one, background: scene.capture(camera).rgba, width: camera.width, height: camera.height)
 
@@ -571,7 +577,7 @@ func testHardCases() {
     let smallView = lookAt(eye: SIMD3(0, 0.8, -0.5), target: SIMD3(0, 0.03, -1.22))
     let smallBuilt = withUnsafeMutablePointer(to: &random) { build(small, poses: [smallView], random: $0) }
     let smallCamera = screenCamera(smallView)
-    let smallGhost = GhostCore.render(surface: smallBuilt.surface, edges: smallBuilt.edges, states: nil, camera: smallCamera, strength: 0.8)
+    let smallGhost = GhostCore.render(surface: smallBuilt.surface, edges: smallBuilt.edges(for: smallView), states: nil, camera: smallCamera, strength: 0.8)
     let at = smallCamera.project(SIMD3(0, 0.03, -1.22))!
     let round = (0..<(smallCamera.width * smallCamera.height)).filter { i in
         hypot(Float(i % smallCamera.width) - at.u, Float(i / smallCamera.width) - at.v) < 120 && isYellow(smallGhost, i)

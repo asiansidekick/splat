@@ -15,8 +15,8 @@ enum Ghost3D {
     struct Built: @unchecked Sendable {
         /// The surfaces, used to hide edges behind things and to spot what has gone.
         var cloud = GhostCore.Cloud()
-        /// The edges of things: what the ghost draws.
-        var edges = GhostCore.Cloud()
+        /// The edges of things seen from each reference view: what the ghost draws.
+        var views: [GhostCore.EdgeView] = []
         /// What happened while building, for the feedback log.
         var note = ""
     }
@@ -27,11 +27,9 @@ enum Ghost3D {
         let keyframes = ReportPDF.spread(withDepth, count: maxKeyframes)
         var built = Built()
         var filled = [SIMD3<Int32>: Int32]()
-        var edgeCells = [SIMD3<Int32>: Int32]()
         var noFile = 0, wrongSize = 0, readings = 0, values = 0
 
-        for (view, keyframe) in keyframes.enumerated() {
-            guard built.cloud.positions.count < maxPoints else { break }
+        for keyframe in keyframes {
             guard let depthFile = keyframe.depthFile,
                 let data = try? Data(contentsOf: folder.appendingPathComponent(depthFile))
             else { noFile += 1; continue }
@@ -46,15 +44,11 @@ enum Ghost3D {
                 imageWidth: keyframe.imageWidth, width: w, height: h)
             readings += GhostCore.add(
                 depth: depth, rgba: rgba, camera: camera, maxPoints: maxPoints, to: &built.cloud, filled: &filled)
-            GhostCore.addEdges(
-                GhostCore.edgePoints(depth: depth, camera: camera), view: view, maxPoints: maxPoints, to: &built.edges, filled: &edgeCells)
+            built.views.append(GhostCore.edgeView(GhostCore.edgePoints(depth: depth, camera: camera), camera: camera))
         }
-        // With a walk round, every real edge is found from several views; lines only one view
-        // found are noise.
-        let allEdges = built.edges.positions.count
-        if keyframes.count >= 4 { built.edges = GhostCore.agreedEdges(built.edges, filled: edgeCells, minViews: 3) }
+        let edgeCounts = built.views.map(\.edges.positions.count)
         built.note = "\(keyframes.count) depth views (of \(reference.keyframes.count)), missing \(noFile), wrong size \(wrongSize), "
-            + "\(readings) readings of \(values / 4) sampled, \(built.cloud.positions.count) points, \(built.edges.positions.count) edge points (of \(allEdges) before dropping lone ones)"
+            + "\(readings) readings of \(values / 4) sampled, \(built.cloud.positions.count) points, edge points per view \(edgeCounts.min() ?? 0)-\(edgeCounts.max() ?? 0)"
         return built
     }
 
@@ -89,14 +83,15 @@ enum Ghost3D {
     /// Keeps each point's score between live checks and draws the ghost. Use from one queue.
     final class Viewer: @unchecked Sendable {
         let cloud: GhostCore.Cloud
-        let edges: GhostCore.Cloud
+        let views: [GhostCore.EdgeView]
         private var scores: [Int8]
         private let cells: [SIMD3<Int32>: Int32]
+        private var current: Int?
         private(set) var goneCount = 0
 
-        init(cloud: GhostCore.Cloud, edges: GhostCore.Cloud) {
+        init(cloud: GhostCore.Cloud, views: [GhostCore.EdgeView]) {
             self.cloud = cloud
-            self.edges = edges
+            self.views = views
             scores = [Int8](repeating: 0, count: cloud.positions.count)
             cells = GhostCore.cells(of: cloud.positions)
         }
@@ -104,6 +99,8 @@ enum Ghost3D {
         /// Checks against the live LiDAR (when there is any) and draws the ghost in the live
         /// camera's image layout, ready to lay over the screen like the camera feed.
         func draw(live: DepthView?, camera: PinholeCamera, strength: Float) -> CIImage? {
+            current = GhostCore.nearestView(views, to: camera.cameraToWorld, current: current)
+            let edges = current.map { views[$0].edges } ?? GhostCore.Cloud()
             var states: [GhostCore.State]?
             if let live {
                 let depthCamera = PinholeCamera(

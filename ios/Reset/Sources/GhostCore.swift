@@ -82,8 +82,6 @@ enum GhostCore {
         var colors: [SIMD3<Float>] = []
         /// How many depth views landed on each point.
         var hits: [UInt16] = []
-        /// For edges: which views found each point, one bit per view (view number mod 64).
-        var views: [UInt64] = []
     }
 
     enum State: UInt8 {
@@ -227,8 +225,6 @@ enum GhostCore {
     /// A crease (the edge of a box, where a table top meets its side) turns the surface by at
     /// least this many degrees.
     static let creaseDegrees: Float = 50
-    /// Edge points closer together than this are merged.
-    static let edgeVoxel: Float = 0.01
     /// Drawn lines shorter than this many pixels are noise.
     static let minLine = 50
     /// Gone lines shorter than this many pixels are noise.
@@ -386,71 +382,38 @@ enum GhostCore {
         return out
     }
 
-    /// Adds one view's edge points to the edge cloud, one per `edgeVoxel`, counting how many
-    /// views found each.
-    static func addEdges(
-        _ points: [SIMD3<Float>], view: Int, maxPoints: Int, to cloud: inout Cloud, filled: inout [SIMD3<Int32>: Int32]
-    ) {
-        var landed = Set<Int32>()
-        let bit = UInt64(1) << UInt64(view % 64)
-        for point in points {
-            let c = cell(point, size: edgeVoxel)
-            if let index = filled[c] {
-                if landed.insert(index).inserted, cloud.hits[Int(index)] < .max { cloud.hits[Int(index)] += 1 }
-                cloud.views[Int(index)] |= bit
-                continue
-            }
-            guard cloud.positions.count < maxPoints else { continue }
-            let index = Int32(cloud.positions.count)
-            filled[c] = index
-            landed.insert(index)
-            cloud.positions.append(point)
-            cloud.colors.append(outlineColor)
-            cloud.hits.append(1)
-            cloud.views.append(bit)
-        }
+    /// One reference view's edges, with where it was taken from.
+    struct EdgeView {
+        var cameraToWorld: simd_float4x4
+        var edges: Cloud
     }
 
-    /// Size of the cells edges are matched up in between views: wide enough for the few
-    /// centimetres ARKit's tracking drifts from one view to the next.
-    static let agreeCell: Float = 0.03
-
-    /// Only the edge points found by at least `minViews` different views within a few
-    /// centimetres (the same edge lands a little apart from view to view as tracking drifts).
-    /// If that would leave almost nothing, as with very few views, fewer views must agree.
-    static func agreedEdges(_ cloud: Cloud, filled: [SIMD3<Int32>: Int32], minViews: Int) -> Cloud {
-        guard minViews > 1, cloud.views.count == cloud.positions.count, !cloud.positions.isEmpty else { return cloud }
-        var coarse = [SIMD3<Int32>: UInt64](minimumCapacity: cloud.positions.count / 4)
-        for i in cloud.positions.indices { coarse[cell(cloud.positions[i], size: agreeCell), default: 0] |= cloud.views[i] }
-        var counts = [Int](repeating: 0, count: cloud.positions.count)
-        for i in cloud.positions.indices {
-            let c = cell(cloud.positions[i], size: agreeCell)
-            var seen: UInt64 = 0
-            for dz: Int32 in -1...1 {
-                for dy: Int32 in -1...1 {
-                    for dx: Int32 in -1...1 { seen |= coarse[c &+ SIMD3(dx, dy, dz)] ?? 0 }
-                }
-            }
-            counts[i] = seen.nonzeroBitCount
-        }
-        for needed in stride(from: minViews, through: 2, by: -1) {
-            var out = Cloud()
-            for i in cloud.positions.indices where counts[i] >= needed {
-                out.positions.append(cloud.positions[i])
-                out.colors.append(cloud.colors[i])
-                out.hits.append(cloud.hits[i])
-                out.views.append(cloud.views[i])
-            }
-            if out.positions.count * 5 >= cloud.positions.count || needed == 2 {
-                return out.positions.count >= 100 ? out : cloud
-            }
-        }
-        return cloud
+    /// One view's edge points as a cloud to draw.
+    static func edgeView(_ points: [SIMD3<Float>], camera: PinholeCamera) -> EdgeView {
+        var cloud = Cloud()
+        cloud.positions = points
+        cloud.colors = Array(repeating: outlineColor, count: points.count)
+        return EdgeView(cameraToWorld: camera.cameraToWorld, edges: cloud)
     }
 
-    static func cell(_ point: SIMD3<Float>, size: Float) -> SIMD3<Int32> {
-        SIMD3<Int32>(Int32((point.x / size).rounded(.down)), Int32((point.y / size).rounded(.down)), Int32((point.z / size).rounded(.down)))
+    /// The view whose edges to draw: the one taken nearest the live camera, metres plus 0.5 m
+    /// per 30 degrees of turn. Edges are drawn from one view at a time because views drift a
+    /// few centimetres apart, and drawing several doubles every line. Sticks with `current`
+    /// unless another is clearly nearer, so the lines do not flick between views.
+    static func nearestView(_ views: [EdgeView], to camera: simd_float4x4, current: Int?) -> Int? {
+        func score(_ view: EdgeView) -> Float {
+            let a = view.cameraToWorld
+            let distance = simd_distance(SIMD3(a.columns.3.x, a.columns.3.y, a.columns.3.z), SIMD3(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z))
+            let forward = simd_dot(-SIMD3(a.columns.2.x, a.columns.2.y, a.columns.2.z), -SIMD3(camera.columns.2.x, camera.columns.2.y, camera.columns.2.z))
+            return distance + acos(min(1, max(-1, forward))) / (.pi / 6) * 0.5
+        }
+        guard let best = views.indices.filter({ !views[$0].edges.positions.isEmpty }).min(by: { score(views[$0]) < score(views[$1]) }) else { return nil }
+        if let current, current < views.count, current != best, score(views[best]) > score(views[current]) * 0.8 - 0.02 {
+            return current
+        }
+        return best
     }
+
 
     /// Each edge point is gone when most of the surface around it is gone.
     static func edgeStates(edges: [SIMD3<Float>], surfaceStates: [State], surfaceCells: [SIMD3<Int32>: Int32]) -> [State] {

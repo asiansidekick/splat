@@ -110,7 +110,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
                     built = Ghost3D.mapPoints(points)
                     Diagnostics.log("3D ghost from the room map instead: \(built.note)")
                 }
-                return built.cloud.positions.isEmpty ? nil : Ghost3D.Viewer(cloud: built.cloud, edges: built.edges)
+                return built.cloud.positions.isEmpty ? nil : Ghost3D.Viewer(cloud: built.cloud, views: built.views)
             }.value
             guard let viewer else {
                 cloudFailed = true
