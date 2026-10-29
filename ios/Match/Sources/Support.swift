@@ -63,15 +63,15 @@ struct HelpView: View {
                     Text("• Above the shutter: angles (Any, Front, ¾ L, Left, Back, Right, ¾ R, Close, Full). Tap or swipe. Picking an angle shows its reference see-through over the camera. The first photo of each angle becomes its reference.")
                     Text("• Bottom left: the reference thumbnail, with the time it was taken. Tap it for the gallery: swipe like Photos, Use as overlay, Compare, Import from Photos, Save to Photos.")
                     Text("• Bottom right: Next take. Touch and hold to go back or to Prep. Every board in the scene follows it.")
-                    Text("• The slider sets how strong the overlay is; the eye hides it. Pinch or drag the overlay to line up a QTake screenshot; double tap resets it.")
+                    Text("• Pinch or drag the overlay to line up a QTake screenshot; double tap resets it.")
                 }
-                Section("The edge guide") {
-                    Text("With a reference showing, yellow arrows at the edges of the screen say how to line up, so the face and hair stay clear:")
-                    Text("• Straight arrow: MOVE that way (left, right, up, down).")
-                    Text("• Curved arrow: TURN the phone that way, without moving.")
-                    Text("• Bottom: LEVEL (rotate the phone) and STEP CLOSER or STEP BACK.")
-                    Text("• Hold still once lined up: after half a second a green frame shows, the phone taps, and you can shoot.")
-                    Text("It works from the pictures alone, so it works on any iPhone or iPad. It needs some detail in view; on plain walls or in the dark it shows nothing.")
+                Section("The guide") {
+                    Text("With a reference showing, the guide stays at the edges and corners of the screen, so the face and hair stay clear.")
+                    Text("• Corners: white corners mark the screen. Yellow corners show where the reference's frame is now. Line the yellow corners up with the white ones.")
+                    Text("• One instruction at a time, the biggest first: MOVE (slide the phone), PAN (aim left or right), TILT (aim up or down), ROTATE (twist it level), STEP IN or STEP BACK.")
+                    Text("• Hold still once lined up: after half a second the corners turn green, LINED UP shows and the phone taps.")
+                    Text("• The slider in the bottom left corner sets how strong the overlay is; the eye hides it.")
+                    Text("The guide works from the pictures alone, so it works on any iPhone or iPad. It needs some detail in view. If it says POINT AT THE REFERENCE, it can't find a match yet.")
                 }
                 Section("Compare") {
                     Text("Side by side, Wipe, Blend, Flicker, or Changes, which lines the photos up and marks differences in red. Pinch to zoom; the expand button hides the controls.")

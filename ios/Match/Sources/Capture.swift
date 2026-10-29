@@ -254,8 +254,12 @@ struct CaptureView: View {
                         }
                     }
                 if guideOn, ghost != nil {
-                    EdgeGuide(reading: guide.reading, matched: guide.matched,
+                    EdgeGuide(reading: guide.reading, cue: guide.cue, matched: guide.matched, searching: guide.searching,
                               quarterTurns: quarterTurns, mirrored: camera.isFront)
+                        .clearOfControls()
+                }
+                if ghost != nil {
+                    strengthControl(wide: geometry.size.width > geometry.size.height)
                         .clearOfControls()
                 }
                 if flash { Color.white.opacity(0.6).allowsHitTesting(false) }
@@ -273,23 +277,6 @@ struct CaptureView: View {
                     }
                     Spacer()
                     if let ghost { turnHint(image: ghost.size, view: geometry.size) }
-                    if guideOn, ghost != nil {
-                        EdgeGuideFooter(reading: guide.reading, matched: guide.matched, mirrored: camera.isFront,
-                                        searching: guide.searching)
-                    }
-                    if ghost != nil {
-                        HStack(spacing: 8) {
-                            Button { ghostID = nil } label: { Image(systemName: "eye.slash").font(.caption) }
-                                .accessibilityLabel("Hide overlay")
-                            Slider(value: $opacity, in: 0...1)
-                                .accessibilityLabel("Overlay strength")
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                        .background(Color.black.opacity(0.4), in: Capsule())
-                        .frame(maxWidth: 320)
-                        .foregroundStyle(.white)
-                    }
                 }
                 .padding(.horizontal, 64)  // keep clear of the edge arrows
                 .padding(.vertical, 8)
@@ -298,6 +285,35 @@ struct CaptureView: View {
             .onAppear { previewSize = geometry.size }
             .onChange(of: geometry.size) { _, size in previewSize = size }
         }
+    }
+
+    /// Overlay strength, tucked into the bottom left corner so the guide's arrows stay clear: upright
+    /// along the left edge when the phone is upright, along the bottom when it is on its side.
+    private func strengthControl(wide: Bool) -> some View {
+        let length: CGFloat = 130
+        let hide = Button { ghostID = nil } label: {
+            Image(systemName: "eye.slash").font(.footnote).frame(width: 30, height: 30)
+        }
+        .accessibilityLabel("Hide overlay")
+        let slider = Slider(value: $opacity, in: 0...1)
+            .frame(width: length)
+            .accessibilityLabel("Overlay strength")
+        let layout = wide ? AnyLayout(HStackLayout(spacing: 6)) : AnyLayout(VStackLayout(spacing: 6))
+        return layout {
+            if wide {
+                hide
+                slider
+            } else {
+                slider.rotationEffect(.degrees(-90)).frame(width: 30, height: length)
+                hide
+            }
+        }
+        .padding(6)
+        .background(Color.black.opacity(0.35), in: Capsule())
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .padding(.leading, 8)
+        .padding(.bottom, 12)
     }
 
     /// The part of the camera picture the screen shows, as width over height the way photos are
