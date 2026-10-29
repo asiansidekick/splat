@@ -1153,6 +1153,7 @@ struct ResetStage: View {
             ZStack {
                 CameraView(session: restorer.session, content: restorer.sceneContent) { view in
                     restorer.placer.attachGestures(to: view)
+                    restorer.guide.attach(to: view)
                     holder.view = view
                 }
                 if reference.photoOnly, let photo = restorer.startPhoto {
@@ -1391,125 +1392,32 @@ struct ScanProgressOverlay: View {
 /// Live guidance over the camera, from ARKit's tracking: a ring where the reference camera was
 /// aiming (put it on the cross, ticks level), and a pad and bar showing where to step to stand
 /// where the photo was taken. It fades away once everything lines up.
-/// The alignment guide, with no text. A ball split into two hemispheres shows every axis:
-/// - where it sits: where to point the phone (put it on the cross);
-/// - its horizon: how to turn the phone about its own axis (level it);
-/// - its size: forward or back (small: step forward, big: step back, until it fills the circle);
-/// - the dot inside: which way to step sideways or raise or lower the phone (bring it to the middle).
+/// The guide itself is two spheres in 3D (`GuideSpheres`). When the reference spot is off screen,
+/// this points the way to turn to find it.
 struct AimOverlay: View {
     @ObservedObject var state: AimState
-    /// Size of the fixed circle; the ball matches it when standing at the right distance.
-    static let circle: CGFloat = 150
 
     var body: some View {
         GeometryReader { geometry in
             let size = geometry.size
             let centre = CGPoint(x: size.width / 2, y: size.height / 2)
-            if let point = state.point, let offset = state.offset {
-                let colour: Color = offset.isMatched ? .green : .yellow
+            if let point = state.point, let offset = state.offset, !offset.isMatched {
                 let inset: CGFloat = 50
                 let shown = CGPoint(
                     x: min(max(point.x, inset), size.width - inset),
                     y: min(max(point.y, inset), size.height - inset))
-                let offScreen = shown != point
-                ZStack {
-                    Path { path in
-                        path.move(to: centre)
-                        path.addLine(to: shown)
-                    }
-                    .stroke(colour.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [6, 8]))
-                    // Fixed: where the ball should end up, the same size.
-                    Circle()
-                        .stroke(Color.white.opacity(0.85), style: StrokeStyle(lineWidth: 3, dash: [10, 8]))
-                        .frame(width: AimOverlay.circle, height: AimOverlay.circle)
-                        .position(centre)
-                    Crosshair()
-                        .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .frame(width: 70, height: 70)
-                        .position(centre)
-                    if offScreen {
-                        Image(systemName: "arrowtriangle.up.fill")
-                            .font(.system(size: 44))
-                            .foregroundStyle(colour)
-                            .rotationEffect(.radians(atan2(point.x - centre.x, centre.y - point.y)))
-                            .position(shown)
-                    } else {
-                        HemisphereBall(roll: state.roll, right: offset.right, up: offset.up, colour: colour)
-                            .frame(width: AimOverlay.circle * state.scale, height: AimOverlay.circle * state.scale)
-                            .position(shown)
-                    }
+                if shown != point {
+                    Image(systemName: "arrowtriangle.up.fill")
+                        .font(.system(size: 54))
+                        .foregroundStyle(Color.yellow)
+                        .shadow(color: .black.opacity(0.7), radius: 2)
+                        .rotationEffect(.radians(atan2(point.x - centre.x, centre.y - point.y)))
+                        .position(shown)
+                        .animation(.linear(duration: 0.1), value: shown)
                 }
-                .shadow(color: .black.opacity(0.7), radius: 2)
-                .animation(.linear(duration: 0.1), value: shown)
-                // Gone once everything lines up.
-                .opacity(offset.isMatched ? 0 : 0.9)
-                .animation(.easeOut(duration: 0.6), value: offset.isMatched)
             }
         }
         .allowsHitTesting(false)
-    }
-}
-
-/// Two hemispheres split by a horizon that tilts with the turn still needed, and a dot that sits
-/// off centre by the sideways and up or down step still needed.
-struct HemisphereBall: View {
-    let roll: Double
-    let right: Float
-    let up: Float
-    let colour: Color
-
-    var body: some View {
-        GeometryReader { geometry in
-            let d = min(geometry.size.width, geometry.size.height)
-            let r = d / 2
-            // 50 cm of step reaches the rim; further stays on the rim.
-            let reach = r * 0.8
-            let step = SIMD2<Float>(right, up)
-            let length = simd_length(step)
-            let shown = length > 0.5 ? step / length * 0.5 : step
-            let dot = CGPoint(x: r + CGFloat(shown.x / 0.5) * reach, y: r - CGFloat(shown.y / 0.5) * reach)
-            ZStack {
-                ZStack {
-                    // Upper hemisphere filled, lower one clear, so up is always obvious.
-                    Rectangle()
-                        .fill(colour.opacity(0.35))
-                        .frame(width: d, height: r)
-                        .offset(y: -r / 2)
-                    Rectangle()
-                        .fill(colour)
-                        .frame(width: d, height: 4)
-                }
-                .frame(width: d, height: d)
-                .clipShape(Circle())
-                .rotationEffect(.radians(roll))
-                Circle()
-                    .stroke(colour, lineWidth: 5)
-                // Where the dot belongs.
-                Circle()
-                    .stroke(Color.white, lineWidth: 3)
-                    .frame(width: 30, height: 30)
-                Circle()
-                    .fill(colour)
-                    .overlay(Circle().stroke(Color.black.opacity(0.6), lineWidth: 2))
-                    .frame(width: 22, height: 22)
-                    .position(dot)
-            }
-            .frame(width: d, height: d)
-        }
-    }
-}
-
-/// A fixed cross in the middle of the screen, with a gap in the centre.
-struct Crosshair: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let c = CGPoint(x: rect.midX, y: rect.midY)
-        let gap = rect.width * 0.15
-        path.move(to: CGPoint(x: rect.minX, y: c.y)); path.addLine(to: CGPoint(x: c.x - gap, y: c.y))
-        path.move(to: CGPoint(x: c.x + gap, y: c.y)); path.addLine(to: CGPoint(x: rect.maxX, y: c.y))
-        path.move(to: CGPoint(x: c.x, y: rect.minY)); path.addLine(to: CGPoint(x: c.x, y: c.y - gap))
-        path.move(to: CGPoint(x: c.x, y: c.y + gap)); path.addLine(to: CGPoint(x: c.x, y: rect.maxY))
-        return path
     }
 }
 

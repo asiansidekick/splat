@@ -48,18 +48,14 @@ final class AimState: ObservableObject {
     /// How far to turn the phone about its own axis, radians, clockwise positive.
     @Published private(set) var roll: Double = 0
     @Published private(set) var offset: Offset?
-    /// How big the aim ring is next to the fixed circle: below 1 when standing too far back, above
-    /// 1 when too close, like the set itself looks smaller or bigger.
-    @Published private(set) var scale: Double = 1
 
-    func update(point: CGPoint, roll: Double, offset: Offset, scale: Double) {
+    func update(point: CGPoint, roll: Double, offset: Offset) {
         if let old = self.point, hypot(old.x - point.x, old.y - point.y) < 1.5, abs(self.roll - roll) < 0.01,
-            abs(self.scale - scale) < 0.005, let previous = self.offset, simd_distance(previous.vector, offset.vector) < 0.003
+            let previous = self.offset, simd_distance(previous.vector, offset.vector) < 0.003
         { return }
         self.point = point
         self.roll = roll
         self.offset = offset
-        self.scale = scale
     }
 
     func clear() {

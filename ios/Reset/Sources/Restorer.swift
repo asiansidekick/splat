@@ -20,6 +20,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     @Published var matched = false
     /// Where to aim and move, updated every frame for the guidance graphic.
     let aim = AimState()
+    /// The two-sphere alignment guide, in 3D.
+    let guide = GuideSpheres()
     @Published var lockedKeyframe: Keyframe?
     /// The LiDAR change colours over the photo ghost. Off at first: on device they flickered and
     /// hid the ghost, and the 3D ghost shows what has gone as outlines instead.
@@ -79,6 +81,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         super.init()
         modelsNode.isHidden = true
         sceneContent.addChildNode(modelsNode)
+        sceneContent.addChildNode(guide.root)
     }
 
     /// Whether the reference has LiDAR depth, which the 3D ghost is built from. Viewing it works on
@@ -217,6 +220,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
                 Diagnostics.log("Reset lost tracking: \(frame.camera.trackingState)")
             }
             modelsNode.isHidden = true
+            guide.hide()
             if !slowToFind, let since = relocalizingSince, Date().timeIntervalSince(since) > 20 {
                 slowToFind = true
                 Diagnostics.log("Reset still looking for the room after 20 s: \(frame.camera.trackingState)")
@@ -235,6 +239,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let screen = Screen.orientation
         if orientation != screen { orientation = screen }
         if show3D {
+            guide.hide()
             // As often as drawing keeps up, so the ghost follows the phone closely.
             draw3D(frame: frame)
         } else if let target = lockedKeyframe ?? current {
@@ -266,8 +271,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let camera = frame.camera.transform
         let move = Guidance.offset(from: camera, to: target, orientation: orientation)
         let (right, up) = Guidance.screenAxes(camera, orientation: orientation)
-        // The spot 1.5 m in front of where the reference photo was taken.
-        let spot = target.position + target.forward * 1.5
+        // Where the guide's solid sphere sits, in front of where the reference photo was taken.
+        let spot = target.position + target.forward * GuideSpheres.distance
+        guide.update(target: target, camera: camera, matched: move.isMatched)
         let local = camera.inverse * SIMD4<Float>(spot, 1)
         let point: CGPoint
         if local.z < -0.05 {
@@ -282,9 +288,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
         let (_, targetUp) = Guidance.screenAxes(target.cameraToWorld, orientation: orientation)
         let roll = atan2(simd_dot(targetUp, right), simd_dot(targetUp, up))
-        // The ring is the size the spot would look from here: 1.5 m away is the reference distance.
-        let distance = max(0.2, simd_distance(camera.columns.3.xyz, spot))
-        aim.update(point: point, roll: Double(roll), offset: move, scale: Double(min(2.5, max(0.35, 1.5 / distance))))
+        aim.update(point: point, roll: Double(roll), offset: move)
         if matched != move.isMatched { matched = move.isMatched }
     }
 
