@@ -280,8 +280,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let camera = frame.camera.transform
         let move = Guidance.offset(from: camera, to: target, orientation: orientation)
         let (right, up) = Guidance.screenAxes(camera, orientation: orientation)
-        // Where the guide's solid sphere sits, in front of where the reference photo was taken.
-        let spot = target.position + target.forward * GuideSpheres.distance
+        // Where the guide's solid ball hangs, in front of where the reference photo was taken.
+        let spot = GuideSpheres.position(for: target)
         // Close: within 25 cm and 10°. Then the pictures decide, since the position ARKit found
         // the room at can be a few centimetres out; without a picture check, the position does.
         let close = simd_length(move.vector) < 0.25 && move.turn < 10 * .pi / 180

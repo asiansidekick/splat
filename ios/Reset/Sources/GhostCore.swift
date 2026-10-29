@@ -268,12 +268,13 @@ enum GhostCore {
                 }
             }
         }
+        // The silhouette line itself: only the pixel right beside the step, for a thin line.
         for y in 0..<h {
             for x in 0..<w {
                 let z = at(x, y)
                 guard valid(z) else { continue }
                 let limit = z * (1 + stepShare) + minStep
-                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (2, 0), (-2, 0), (0, 2), (0, -2)] {
+                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                     let nx = x + dx
                     let ny = y + dy
                     guard nx >= 0, nx < w, ny >= 0, ny < h else { continue }
@@ -304,17 +305,25 @@ enum GhostCore {
                 if length > 1e-9 { normals[i] = n / length }
             }
         }
-        let turn = cos(creaseDegrees * .pi / 180)
+        // How sharply the surface turns across each pixel, left to right and top to bottom; a
+        // crease is where that peaks, so the line is one pixel wide rather than a band.
+        let turn = 1 - cos(creaseDegrees * .pi / 180)
         let s = 3
+        var across = [Float](repeating: 0, count: w * h)
+        var down = [Float](repeating: 0, count: w * h)
         for y in s..<(h - s) {
             for x in s..<(w - s) {
                 let i = y * w + x
                 guard normals[i] != .zero else { continue }
-                for (a, b) in [(i - s, i + s), (i - s * w, i + s * w)] {
-                    let na = normals[a]
-                    let nb = normals[b]
-                    if na != .zero, nb != .zero, simd_dot(na, nb) < turn { edge[i] = true; break }
-                }
+                if normals[i - s] != .zero, normals[i + s] != .zero { across[i] = 1 - simd_dot(normals[i - s], normals[i + s]) }
+                if normals[i - s * w] != .zero, normals[i + s * w] != .zero { down[i] = 1 - simd_dot(normals[i - s * w], normals[i + s * w]) }
+            }
+        }
+        for y in 1..<(h - 1) {
+            for x in 1..<(w - 1) {
+                let i = y * w + x
+                if across[i] > turn, across[i] >= across[i - 1], across[i] >= across[i + 1] { edge[i] = true }
+                if down[i] > turn, down[i] >= down[i - w], down[i] >= down[i + w] { edge[i] = true }
             }
         }
 
@@ -488,16 +497,23 @@ enum GhostCore {
             }
             if hidden { continue }
             let gone = lineStates?[index] == .gone
-            // Dots big enough to join up along a line.
-            let r = Int(min(2, max(0, (camera.fx * edgeVoxel * 0.6 / z).rounded())))
+            // Dots wide enough to merge the scatter of an edge into one band for thinning.
+            let r = Int(min(4, max(1, (camera.fx * 0.02 / z).rounded())))
             for y in max(0, y0 - r)...min(H - 1, y0 + r) {
                 for x in max(0, x0 - r)...min(W - 1, x0 + r) {
                     if gone { blue[y * W + x] = true } else { yellow[y * W + x] = true }
                 }
             }
         }
-        if !edges.positions.isEmpty { yellow = keepLarge(yellow, width: W, height: H, minSize: minLine) }
-        blue = keepLarge(blue, width: W, height: H, minSize: minGoneLine)
+        // Many views' worth of edge points scatter a little either side of the true edge: thin
+        // what they cover down to its centre line, then drop short bits, for clean lines.
+        if !edges.positions.isEmpty {
+            yellow = keepLarge(thinned(yellow, width: W, height: H), width: W, height: H, minSize: minLine / 2)
+            blue = keepLarge(thinned(blue, width: W, height: H), width: W, height: H, minSize: minGoneLine / 2)
+            // Back to a steady width of three pixels.
+            yellow = widened(yellow, width: W, height: H)
+            blue = widened(blue, width: W, height: H)
+        }
 
         var out = [UInt8](repeating: 0, count: W * H * 4)
         let alpha = min(1, max(0.7, strength))
@@ -524,6 +540,55 @@ enum GhostCore {
         }
         for i in 0..<(W * H) {
             if blue[i] { put(i, goneColor, 1) } else if yellow[i] { put(i, outlineColor, alpha) }
+        }
+        return out
+    }
+
+    /// The centre lines of a mask, one pixel wide (Zhang and Suen's thinning).
+    static func thinned(_ mask: [Bool], width w: Int, height h: Int) -> [Bool] {
+        var m = mask
+        for x in 0..<w { m[x] = false; m[(h - 1) * w + x] = false }
+        for y in 0..<h { m[y * w] = false; m[y * w + w - 1] = false }
+        var candidates = (0..<(w * h)).filter { m[$0] }
+        var remove: [Int] = []
+        for _ in 0..<30 {
+            var changed = false
+            for pass in 0..<2 {
+                remove.removeAll(keepingCapacity: true)
+                for i in candidates where m[i] {
+                    // Neighbours clockwise from the top.
+                    let p = [m[i - w], m[i - w + 1], m[i + 1], m[i + w + 1], m[i + w], m[i + w - 1], m[i - 1], m[i - w - 1]]
+                    let count = p.reduce(0) { $0 + ($1 ? 1 : 0) }
+                    guard count >= 2, count <= 6 else { continue }
+                    var transitions = 0
+                    for k in 0..<8 where !p[k] && p[(k + 1) % 8] { transitions += 1 }
+                    guard transitions == 1 else { continue }
+                    if pass == 0 {
+                        guard !(p[0] && p[2] && p[4]), !(p[2] && p[4] && p[6]) else { continue }
+                    } else {
+                        guard !(p[0] && p[2] && p[6]), !(p[0] && p[4] && p[6]) else { continue }
+                    }
+                    remove.append(i)
+                }
+                for i in remove { m[i] = false }
+                if !remove.isEmpty { changed = true }
+            }
+            candidates = candidates.filter { m[$0] }
+            if !changed { break }
+        }
+        return m
+    }
+
+    /// Each set pixel and the four beside it.
+    static func widened(_ mask: [Bool], width w: Int, height h: Int) -> [Bool] {
+        var out = mask
+        for y in 0..<h {
+            for x in 0..<w where mask[y * w + x] {
+                if x > 0 { out[y * w + x - 1] = true }
+                if x < w - 1 { out[y * w + x + 1] = true }
+                if y > 0 { out[(y - 1) * w + x] = true }
+                if y < h - 1 { out[(y + 1) * w + x] = true }
+            }
         }
         return out
     }

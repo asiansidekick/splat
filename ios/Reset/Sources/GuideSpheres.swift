@@ -13,7 +13,11 @@ import simd
 final class GuideSpheres {
     /// How far in front of the camera the spheres sit, metres.
     static let distance: Float = 0.6
-    static let radius: CGFloat = 0.07
+    static let radius: CGFloat = 0.035
+    /// The balls sit up and to the right of the middle of the picture (in the reference's
+    /// upright view), metres at `distance`, so the middle stays clear for lining up the ghost.
+    static let offRight: Float = 0.09
+    static let offUp: Float = 0.11
 
     /// In the room, where the reference camera's sphere was.
     let target = SCNNode()
@@ -102,8 +106,14 @@ final class GuideSpheres {
         }
     }
 
-    /// In the camera's own axes: the spot `distance` ahead, turned so the sphere's top points the
-    /// way that was up on the screen when the reference was taken.
+    /// Where the reference's ball hangs in the room.
+    static func position(for keyframe: Keyframe) -> SIMD3<Float> {
+        let p = keyframe.cameraToWorld * local(for: keyframe).columns.3
+        return SIMD3(p.x, p.y, p.z)
+    }
+
+    /// In the camera's own axes: the spot `distance` ahead and off to the upper right, turned so
+    /// the sphere's top points the way that was up on the screen when the reference was taken.
     static func local(for keyframe: Keyframe) -> simd_float4x4 {
         let up: SIMD3<Float>
         switch keyframe.uprightOrientation {
@@ -114,7 +124,8 @@ final class GuideSpheres {
         }
         let back = SIMD3<Float>(0, 0, 1)
         let right = simd_cross(up, back)
-        return simd_float4x4(SIMD4(right, 0), SIMD4(up, 0), SIMD4(back, 0), SIMD4(0, 0, -distance, 1))
+        let centre = right * offRight + up * offUp - back * distance
+        return simd_float4x4(SIMD4(right, 0), SIMD4(up, 0), SIMD4(back, 0), SIMD4(centre, 1))
     }
 
     static let solidImage = hemispheres(top: .systemYellow, bottom: UIColor(white: 0.12, alpha: 1), line: .black)

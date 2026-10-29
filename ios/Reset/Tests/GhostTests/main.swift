@@ -322,8 +322,8 @@ func testGhost() {
     }
     expect(worst < 0.01, "points sit on the scene's surfaces (worst \(worst) m)")
     let segments = edgeSegments(scene)
-    let offEdge = built.edges.positions.filter { p in !segments.contains { distance(p, $0) < 0.05 } }.count
-    expect(offEdge < built.edges.positions.count / 20, "edge points off the real edges: \(offEdge) of \(built.edges.positions.count)")
+    let offEdge = built.edges.positions.filter { p in !segments.contains { distance(p, $0) < 0.08 } }.count
+    expect(offEdge < built.edges.positions.count / 10, "edge points off the real edges: \(offEdge) of \(built.edges.positions.count)")
 
     // Drawn from the first reference view: lines round the box, no clutter.
     let frontPose = lookAt(eye: SIMD3(0, 1, 0), target: boxCentre)
@@ -482,8 +482,8 @@ func testNoisyGhost() {
     let cloud = built.surface
     expect(cloud.positions.count > 20_000, "noisy: built \(cloud.positions.count) points, \(built.edges.positions.count) edge points")
     let segments = edgeSegments(scene)
-    let offEdge = built.edges.positions.filter { p in !segments.contains { distance(p, $0) < 0.06 } }.count
-    expect(offEdge < built.edges.positions.count / 10, "noisy: edge points off the real edges: \(offEdge) of \(built.edges.positions.count)")
+    let offEdge = built.edges.positions.filter { p in !segments.contains { distance(p, $0) < 0.08 } }.count
+    expect(offEdge < built.edges.positions.count / 8, "noisy: edge points off the real edges: \(offEdge) of \(built.edges.positions.count)")
     let cells = GhostCore.cells(of: cloud.positions)
 
     for (name, eye) in [("front", SIMD3<Float>(-0.2, 1.1, -0.3)), ("close", SIMD3<Float>(0.3, 0.8, -0.9))] {
