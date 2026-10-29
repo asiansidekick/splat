@@ -69,17 +69,27 @@ final class GuideSpheres {
         camera.addChildNode(fixed)
     }
 
-    /// Places the solid sphere for the reference view and turns both to its up direction.
-    /// `camera` is only used when the see-through sphere could not ride on the view's camera node.
-    func update(target keyframe: Keyframe, camera: simd_float4x4, matched: Bool) {
-        let local = GuideSpheres.local(for: keyframe)
+    /// Places the room's ball for the reference view and the phone's ball in front of the
+    /// phone, both turned to the way the phone is held now, so holding it landscape for a
+    /// portrait reference still lines up. The phone's ball also tips forward or back,
+    /// exaggerated, by how much higher or lower the reference looked: more yellow showing means
+    /// tilt up, more dark means tilt down. `camera` is only used when the phone's ball could
+    /// not ride on the view's camera node.
+    func update(target keyframe: Keyframe, camera: simd_float4x4, orientation: UIInterfaceOrientation, matched: Bool) {
+        let (right, up) = GuideSpheres.axes(orientation)
+        target.simdTransform = keyframe.cameraToWorld * GuideSpheres.local(orientation)
+        // The reference's view direction, in the phone camera's own axes.
+        let toReference = camera.inverse * keyframe.cameraToWorld
+        let forward = -SIMD3(toReference.columns.2.x, toReference.columns.2.y, toReference.columns.2.z)
+        let pitch = atan2(simd_dot(forward, up), -forward.z)
+        let tip = max(-1.2, min(1.2, pitch * GuideSpheres.tiltGain))
+        let live = GuideSpheres.local(orientation, tip: simd_quatf(angle: tip, axis: right))
         if let view, let eye = view.pointOfView, fixed.parent !== eye { attach(to: view) }
-        target.simdTransform = keyframe.cameraToWorld * local
         if fixed.parent == nil || fixed.parent === root {
             if fixed.parent == nil { root.addChildNode(fixed) }
-            fixed.simdTransform = camera * local
+            fixed.simdTransform = camera * live
         } else {
-            fixed.simdTransform = local
+            fixed.simdTransform = live
         }
         let image = matched ? GuideSpheres.matchedImage : GuideSpheres.solidImage
         targetSphere.diffuse.contents = image
@@ -106,26 +116,33 @@ final class GuideSpheres {
         }
     }
 
-    /// Where the reference's ball hangs in the room.
-    static func position(for keyframe: Keyframe) -> SIMD3<Float> {
-        let p = keyframe.cameraToWorld * local(for: keyframe).columns.3
+    /// How much the phone's ball tips for each degree the phone is tilted off the reference.
+    static let tiltGain: Float = 3
+
+    /// Where the reference's ball hangs in the room, for the phone held this way.
+    static func position(for keyframe: Keyframe, orientation: UIInterfaceOrientation) -> SIMD3<Float> {
+        let p = keyframe.cameraToWorld * local(orientation).columns.3
         return SIMD3(p.x, p.y, p.z)
     }
 
-    /// In the camera's own axes: the spot `distance` ahead and off to the upper right, turned so
-    /// the sphere's top points the way that was up on the screen when the reference was taken.
-    static func local(for keyframe: Keyframe) -> simd_float4x4 {
-        let up: SIMD3<Float>
-        switch keyframe.uprightOrientation {
-        case .up: up = SIMD3(0, 1, 0)  // landscape, camera on the left
-        case .down: up = SIMD3(0, -1, 0)
-        case .right: up = SIMD3(-1, 0, 0)  // portrait
-        default: up = SIMD3(1, 0, 0)
+    /// Right and up on the screen, in the camera's own axes, for the phone held this way.
+    static func axes(_ orientation: UIInterfaceOrientation) -> (right: SIMD3<Float>, up: SIMD3<Float>) {
+        switch orientation {
+        case .landscapeRight: return (SIMD3(1, 0, 0), SIMD3(0, 1, 0))
+        case .landscapeLeft: return (SIMD3(-1, 0, 0), SIMD3(0, -1, 0))
+        case .portraitUpsideDown: return (SIMD3(0, -1, 0), SIMD3(1, 0, 0))
+        default: return (SIMD3(0, 1, 0), SIMD3(-1, 0, 0))  // portrait
         }
+    }
+
+    /// In the camera's own axes: the spot `distance` ahead and off to the upper right of the
+    /// screen, turned so the ball's top points up the screen, then tipped by `tip`.
+    static func local(_ orientation: UIInterfaceOrientation, tip: simd_quatf = simd_quatf(angle: 0, axis: SIMD3(1, 0, 0))) -> simd_float4x4 {
+        let (right, up) = axes(orientation)
         let back = SIMD3<Float>(0, 0, 1)
-        let right = simd_cross(up, back)
         let centre = right * offRight + up * offUp - back * distance
-        return simd_float4x4(SIMD4(right, 0), SIMD4(up, 0), SIMD4(back, 0), SIMD4(centre, 1))
+        return simd_float4x4(
+            SIMD4(tip.act(right), 0), SIMD4(tip.act(up), 0), SIMD4(tip.act(back), 0), SIMD4(centre, 1))
     }
 
     static let solidImage = hemispheres(top: .systemYellow, bottom: UIColor(white: 0.12, alpha: 1), line: .black)
