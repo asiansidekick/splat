@@ -33,16 +33,38 @@ final class GuideSpheres {
         target.geometry = solid
 
         // A little bigger, so the solid sphere shows inside it with an even rim when lined up.
+        // Flat lit and mostly opaque so it reads clearly over any set, with a bold white ring
+        // round its edge (it always faces the camera, since the sphere rides on it).
         let glass = SCNSphere(radius: GuideSpheres.radius * 1.2)
         glass.segmentCount = 48
-        let glassMaterial = GuideSpheres.material(top: UIColor(white: 1, alpha: 1), bottom: UIColor(white: 0.6, alpha: 1), line: .white)
-        glassMaterial.transparency = 0.35
+        let glassMaterial = GuideSpheres.material(top: UIColor(white: 1, alpha: 1), bottom: UIColor(white: 0.55, alpha: 1), line: .black)
+        glassMaterial.lightingModel = .constant
+        glassMaterial.transparency = 0.6
         glassMaterial.writesToDepthBuffer = false
         glass.materials = [glassMaterial]
         fixed.geometry = glass
+        let rings: [(radius: CGFloat, pipe: CGFloat, color: UIColor)] = [
+            (GuideSpheres.radius * 1.2 + 0.006, 0.0025, .black),
+            (GuideSpheres.radius * 1.2, 0.005, .white),
+        ]
+        for (radius, pipe, color) in rings {
+            let torus = SCNTorus(ringRadius: radius, pipeRadius: pipe)
+            torus.ringSegmentCount = 96
+            let material = SCNMaterial()
+            material.diffuse.contents = color
+            material.lightingModel = .constant
+            material.readsFromDepthBuffer = false
+            material.writesToDepthBuffer = false
+            torus.materials = [material]
+            let ring = SCNNode(geometry: torus)
+            ring.eulerAngles.x = .pi / 2
+            ring.renderingOrder = 102
+            fixed.addChildNode(ring)
+        }
 
-        // Always drawn on top of the set and of any models, the glass after the solid sphere.
-        for (node, order) in [(target, 100), (fixed, 101)] {
+        // Always drawn on top of the set and of any models: the glass sphere first, then the
+        // solid one over it so it shows at full strength, then the ring.
+        for (node, order) in [(fixed, 100), (target, 101)] {
             node.renderingOrder = order
             node.geometry?.firstMaterial?.readsFromDepthBuffer = false
         }
@@ -70,7 +92,9 @@ final class GuideSpheres {
         } else {
             fixed.simdTransform = local
         }
-        targetSphere.diffuse.contents = matched ? GuideSpheres.matchedImage : GuideSpheres.solidImage
+        let image = matched ? GuideSpheres.matchedImage : GuideSpheres.solidImage
+        targetSphere.diffuse.contents = image
+        targetSphere.emission.contents = image
         if matched != wasMatched || !shown {
             wasMatched = matched
             shown = true
@@ -116,6 +140,9 @@ final class GuideSpheres {
         material.diffuse.contents = hemispheres(top: top, bottom: bottom, line: line)
         material.lightingModel = .blinn
         material.specular.contents = UIColor(white: 0.6, alpha: 1)
+        // Glows a little so it stays bright in a dim room, keeping some shading to look round.
+        material.emission.contents = material.diffuse.contents
+        material.emission.intensity = 0.6
         return material
     }
 
@@ -129,7 +156,7 @@ final class GuideSpheres {
             bottom.setFill()
             context.fill(CGRect(x: 0, y: size.height / 2, width: size.width, height: size.height / 2))
             line.setFill()
-            context.fill(CGRect(x: 0, y: size.height / 2 - 3, width: size.width, height: 6))
+            context.fill(CGRect(x: 0, y: size.height / 2 - 4, width: size.width, height: 8))
         }
     }
 }

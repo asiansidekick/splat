@@ -26,6 +26,28 @@ struct PinholeCamera {
         self.height = height
     }
 
+    /// The same camera drawing a picture `factor` times the size.
+    func scaled(by factor: Float) -> PinholeCamera {
+        PinholeCamera(
+            cameraToWorld: cameraToWorld, worldToCamera: worldToCamera, fx: fx * factor, fy: fy * factor,
+            cx: cx * factor, cy: cy * factor,
+            width: Int((Float(width) * factor).rounded()), height: Int((Float(height) * factor).rounded()))
+    }
+
+    private init(
+        cameraToWorld: simd_float4x4, worldToCamera: simd_float4x4, fx: Float, fy: Float, cx: Float, cy: Float,
+        width: Int, height: Int
+    ) {
+        self.cameraToWorld = cameraToWorld
+        self.worldToCamera = worldToCamera
+        self.fx = fx
+        self.fy = fy
+        self.cx = cx
+        self.cy = cy
+        self.width = width
+        self.height = height
+    }
+
     /// The point at pixel (u, v) with depth d (metres along the view direction), in world space.
     func unproject(u: Float, v: Float, depth d: Float) -> SIMD3<Float> {
         let local = SIMD4<Float>((u - cx) / fx * d, -(v - cy) / fy * d, -d, 1)
@@ -52,7 +74,7 @@ enum GhostCore {
     static let threshold: Float = 0.06
     static let perMetre: Float = 0.02
     /// A gone point needs this many gone neighbours (of 26) to count, so only solid patches show.
-    static let minNeighbours = 3
+    static let minNeighbours = 6
 
     struct Cloud {
         var positions: [SIMD3<Float>] = []
@@ -138,7 +160,7 @@ enum GhostCore {
     /// Each point's state from its score. A gone point with too few gone neighbours is noise and
     /// counts as unchecked.
     static func states(scores: [Int8], positions: [SIMD3<Float>], cells: [SIMD3<Int32>: Int32]) -> [State] {
-        var states = scores.map { $0 >= 2 ? State.gone : ($0 < 0 ? State.matched : State.unchecked) }
+        var states = scores.map { $0 >= 3 ? State.gone : ($0 < 0 ? State.matched : State.unchecked) }
         let gone = states.map { $0 == .gone }
         for index in positions.indices where gone[index] {
             let c = cell(positions[index])
@@ -157,23 +179,35 @@ enum GhostCore {
 
     static let outlineColor = SIMD3<Float>(1, 0.84, 0.1)
     static let goneColor = SIMD3<Float>(0.25, 0.6, 1)
+    /// An outline needs a step back of at least this share of the distance, plus `minStep`, so
+    /// the gentle slope of a floor or table top never draws a line.
+    static let stepShare: Float = 0.12
+    static let minStep: Float = 0.08
+    /// Lines shorter than this many pixels (at the drawing's half size) are noise.
+    static let minLine = 24
+    /// Gone patches smaller than this many pixels (half size) are noise.
+    static let minGoneArea = 150
 
-    /// Draws the cloud as the camera sees it, as outlines only so the set stays visible: RGBA
-    /// bytes, premultiplied, top row first, at the camera's size. Yellow lines where the cloud
-    /// steps back (the edges of props against what is behind them), blue lines round anything
-    /// gone. `strength` is the ghost strength slider.
+    /// Draws the cloud as the camera sees it, as clean edge outlines only so the set stays
+    /// visible: RGBA bytes, premultiplied, top row first, at the camera's size. Yellow lines
+    /// where the set steps back sharply (the silhouettes of props against what is behind them),
+    /// blue lines round anything large that has gone. Flat surfaces draw nothing. `strength` is
+    /// the ghost strength slider.
     static func render(cloud: Cloud, states: [State]?, camera: PinholeCamera, strength: Float) -> [UInt8] {
-        let w = camera.width
-        let h = camera.height
-        // Nearest point per pixel, dots growing nearer the camera.
+        // Worked out at half size: dots cover the gaps between voxels with a quarter of the work,
+        // and lines come out two pixels wide, bold enough to read at arm's length.
+        let small = camera.scaled(by: 0.5)
+        let w = small.width
+        let h = small.height
         var near = [Float](repeating: .infinity, count: w * h)
         var owner = [Int32](repeating: -1, count: w * h)
         near.withUnsafeMutableBufferPointer { near in
             owner.withUnsafeMutableBufferPointer { owner in
                 for index in cloud.positions.indices {
-                    guard let p = camera.project(cloud.positions[index]) else { continue }
+                    guard let p = small.project(cloud.positions[index]) else { continue }
                     let z = p.depth
-                    let r = Int(min(3, max(1, camera.fx * voxel * 0.6 / z)).rounded())
+                    // Big enough that neighbouring voxels overlap, so nothing behind shows through.
+                    let r = Int(min(6, max(1, (small.fx * voxel * 0.7 / z).rounded(.up))))
                     let x0 = Int(p.u.rounded())
                     let y0 = Int(p.v.rounded())
                     guard x0 >= -r, x0 < w + r, y0 >= -r, y0 < h + r else { continue }
@@ -190,50 +224,51 @@ enum GhostCore {
             }
         }
 
-        // Close the gaps between dots: each pixel takes the nearest depth around it, so the far
-        // side showing through a gap does not draw a ring of outline round every gap.
-        let surface = minFilter(near, width: w, height: h, radius: 2)
+        // Close any gaps left: each pixel takes the nearest depth around it.
+        let surface = minFilter(near, width: w, height: h, radius: 1)
 
-        // 1 outline, 2 edge of something gone.
-        var edges = [UInt8](repeating: 0, count: w * h)
-        func gone(_ i: Int) -> Bool {
-            guard let states, owner[i] >= 0 else { return false }
-            return states[Int(owner[i])] == .gone
-        }
+        // Silhouettes: the near side of a big step back in depth.
+        var outline = [Bool](repeating: false, count: w * h)
         for y in 0..<h {
             for x in 0..<w {
                 let i = y * w + x
                 let z = surface[i]
                 guard z.isFinite else { continue }
-                let isGone = gone(i)
-                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let limit = z * (1 + stepShare) + minStep
+                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1), (2, 0), (-2, 0), (0, 2), (0, -2)] {
                     let nx = x + dx
                     let ny = y + dy
                     guard nx >= 0, nx < w, ny >= 0, ny < h else { continue }
-                    let n = ny * w + nx
-                    if isGone, !gone(n) { edges[i] = 2; break }
-                    if surface[n].isFinite, surface[n] > z * 1.08 + 0.03 { edges[i] = 1 }
+                    let n = surface[ny * w + nx]
+                    if n.isFinite, n > limit { outline[i] = true; break }
                 }
             }
         }
-        // Lone edge pixels are LiDAR noise: a line needs neighbours along it.
-        var kept = edges
-        for y in 0..<h {
-            for x in 0..<w where edges[y * w + x] == 1 {
-                var neighbours = 0
-                for dy in -1...1 {
-                    for dx in -1...1 where dx != 0 || dy != 0 {
+        outline = keepLarge(outline, width: w, height: h, minSize: minLine)
+
+        // Gone: only patches big enough to be a prop, outlined round their edge.
+        var goneEdge = [Bool](repeating: false, count: w * h)
+        if let states {
+            var gone = [Bool](repeating: false, count: w * h)
+            for i in 0..<(w * h) where owner[i] >= 0 && states[Int(owner[i])] == .gone { gone[i] = true }
+            gone = keepLarge(gone, width: w, height: h, minSize: minGoneArea)
+            for y in 0..<h {
+                for x in 0..<w where gone[y * w + x] {
+                    for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
                         let nx = x + dx
                         let ny = y + dy
-                        if nx >= 0, nx < w, ny >= 0, ny < h, edges[ny * w + nx] != 0 { neighbours += 1 }
+                        if nx < 0 || nx >= w || ny < 0 || ny >= h || !gone[ny * w + nx] { goneEdge[y * w + x] = true; break }
                     }
                 }
-                if neighbours < 2 { kept[y * w + x] = 0 }
             }
         }
 
-        var out = [UInt8](repeating: 0, count: w * h * 4)
-        let alpha = min(1, max(0.5, strength))
+        // Back to full size: each half-size pixel is a 2 x 2 block, and lines are thickened by
+        // one more pixel so they read clearly. Blue wins where they meet.
+        let W = camera.width
+        let H = camera.height
+        var out = [UInt8](repeating: 0, count: W * H * 4)
+        let alpha = min(1, max(0.6, strength))
         func put(_ i: Int, _ color: SIMD3<Float>, _ a: Float) {
             let o = i * 4
             out[o] = UInt8(min(255, color.x * a * 255))
@@ -241,22 +276,56 @@ enum GhostCore {
             out[o + 2] = UInt8(min(255, color.z * a * 255))
             out[o + 3] = UInt8(a * 255)
         }
-        // Lines a pixel wider each way, so they read at arm's length. Blue wins where they meet.
-        var painted = [UInt8](repeating: 0, count: w * h)
+        var painted = [UInt8](repeating: 0, count: W * H)
         for y in 0..<h {
             for x in 0..<w {
-                let kind = kept[y * w + x]
+                let i = y * w + x
+                let kind: UInt8 = goneEdge[i] ? 2 : (outline[i] ? 1 : 0)
                 guard kind > 0 else { continue }
-                for (dx, dy) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
-                    let nx = x + dx
-                    let ny = y + dy
-                    guard nx >= 0, nx < w, ny >= 0, ny < h else { continue }
-                    let n = ny * w + nx
-                    guard kind > painted[n] else { continue }
-                    painted[n] = kind
-                    put(n, kind == 2 ? goneColor : outlineColor, kind == 2 ? 1 : alpha)
+                for by in -1...2 {
+                    for bx in -1...2 {
+                        let X = x * 2 + bx
+                        let Y = y * 2 + by
+                        guard X >= 0, X < W, Y >= 0, Y < H else { continue }
+                        let n = Y * W + X
+                        guard kind > painted[n] else { continue }
+                        painted[n] = kind
+                        put(n, kind == 2 ? goneColor : outlineColor, kind == 2 ? 1 : alpha)
+                    }
                 }
             }
+        }
+        return out
+    }
+
+    /// Keeps only the connected groups (touching, diagonals too) of at least `minSize` pixels.
+    static func keepLarge(_ mask: [Bool], width w: Int, height h: Int, minSize: Int) -> [Bool] {
+        var out = [Bool](repeating: false, count: w * h)
+        var seen = [Bool](repeating: false, count: w * h)
+        var stack: [Int] = []
+        var group: [Int] = []
+        for start in 0..<(w * h) where mask[start] && !seen[start] {
+            seen[start] = true
+            stack.append(start)
+            group.removeAll(keepingCapacity: true)
+            while let i = stack.popLast() {
+                group.append(i)
+                let x = i % w
+                let y = i / w
+                for dy in -1...1 {
+                    for dx in -1...1 where dx != 0 || dy != 0 {
+                        let nx = x + dx
+                        let ny = y + dy
+                        guard nx >= 0, nx < w, ny >= 0, ny < h else { continue }
+                        let n = ny * w + nx
+                        if mask[n], !seen[n] {
+                            seen[n] = true
+                            stack.append(n)
+                        }
+                    }
+                }
+            }
+            if group.count >= minSize { for i in group { out[i] = true } }
         }
         return out
     }

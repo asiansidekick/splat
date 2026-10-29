@@ -100,11 +100,13 @@ enum Ghost3D {
                 GhostCore.check(
                     positions: cloud.positions, scores: &scores, depth: live.depth, confidence: live.confidence,
                     camera: depthCamera)
-                let found = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
-                goneCount = found.reduce(0) { $0 + ($1 == .gone ? 1 : 0) }
-                states = found
+                states = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
             }
             let rgba = GhostCore.render(cloud: cloud, states: states, camera: camera, strength: strength)
+            // Counted from the drawing, so the banner only mentions blue lines that are showing.
+            var blue = 0
+            for o in stride(from: 0, to: rgba.count, by: 4) where rgba[o + 2] > 200 && rgba[o] < 100 { blue += 1 }
+            goneCount = blue
             return Ghost3D.image(rgba, width: camera.width, height: camera.height)
         }
     }

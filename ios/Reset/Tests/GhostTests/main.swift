@@ -27,6 +27,8 @@ struct Box {
 /// Floor at y = 0, a red box on it, and a back wall at z = -3.
 struct Scene {
     var box = Box(low: SIMD3(-0.15, 0, -1.65), high: SIMD3(0.15, 0.3, -1.35))
+    /// A table top for the noisy test: a big flat surface seen at a low angle.
+    var table: Box?
 
     /// Distance along the ray to the first surface and its colour.
     func hit(origin: SIMD3<Float>, direction: SIMD3<Float>) -> (Float, SIMD3<Float>)? {
@@ -44,14 +46,19 @@ struct Scene {
             let t = (-3 - origin.z) / direction.z
             consider(t, SIMD3(0.3, 0.45, 0.3))
         }
-        // Slab test for the box.
+        if let t = Scene.slab(box, origin: origin, direction: direction) { consider(t, SIMD3(0.9, 0.15, 0.1)) }
+        if let table, let t = Scene.slab(table, origin: origin, direction: direction) { consider(t, SIMD3(0.5, 0.35, 0.2)) }
+        return best
+    }
+
+    /// Where a ray first enters a box, if it does.
+    static func slab(_ box: Box, origin: SIMD3<Float>, direction: SIMD3<Float>) -> Float? {
         var tNear: Float = -.infinity
         var tFar: Float = .infinity
-        var inside = true
         for axis in 0..<3 {
             let o = origin[axis], d = direction[axis]
             if abs(d) < 1e-6 {
-                if o < box.low[axis] || o > box.high[axis] { inside = false }
+                if o < box.low[axis] || o > box.high[axis] { return nil }
             } else {
                 var t1 = (box.low[axis] - o) / d
                 var t2 = (box.high[axis] - o) / d
@@ -60,8 +67,7 @@ struct Scene {
                 tFar = min(tFar, t2)
             }
         }
-        if inside, tNear <= tFar, tFar > 0 { consider(tNear, SIMD3(0.9, 0.15, 0.1)) }
-        return best
+        return tNear <= tFar && tFar > 0 ? tNear : nil
     }
 
     /// An ARKit-style depth map (metres along the view axis) and photo at the camera's size.
@@ -338,6 +344,145 @@ func testGhost() {
     expect(seconds < 0.5, String(format: "300,000 points drawn in %.3f s on the test Mac", seconds))
 }
 
+// MARK: Real-world depth
+
+/// Repeatable random numbers.
+struct Random {
+    var state: UInt64
+    mutating func next() -> Float {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        return Float(state >> 40) / Float(1 << 24)
+    }
+    /// Roughly normal, mean 0, spread 1.
+    mutating func normal() -> Float {
+        let a = max(next(), 1e-6), b = next()
+        return sqrt(-2 * log(a)) * cos(2 * .pi * b)
+    }
+}
+
+/// Depth the way the LiDAR really gives it: noise growing with distance, missing readings, and
+/// smeared readings halfway across the edges of things.
+func lidar(_ depth: [Float], width: Int, height: Int, random: inout Random) -> [Float] {
+    var out = depth
+    for y in 0..<height {
+        for x in 0..<width {
+            let i = y * width + x
+            let d = depth[i]
+            guard d > 0 else { continue }
+            if random.next() < 0.04 { out[i] = 0; continue }
+            if x + 1 < width, depth[i + 1] > 0, abs(depth[i + 1] - d) > 0.1, random.next() < 0.5 {
+                out[i] = (d + depth[i + 1]) / 2
+                continue
+            }
+            out[i] = d + random.normal() * (0.006 + 0.006 * d)
+        }
+    }
+    return out
+}
+
+/// A pose knocked slightly off, the way ARKit's tracking drifts between keyframes.
+func drifted(_ pose: simd_float4x4, random: inout Random, metres: Float = 0.01, degrees: Float = 0.4) -> simd_float4x4 {
+    let axis = simd_normalize(SIMD3(random.normal(), random.normal(), random.normal()) + SIMD3(repeating: 0.001))
+    let turn = simd_float4x4(simd_quatf(angle: random.normal() * degrees * .pi / 180, axis: axis))
+    var out = pose * turn
+    out.columns.3 += SIMD4(random.normal() * metres, random.normal() * metres, random.normal() * metres, 0)
+    return out
+}
+
+/// Pixels on the true outlines of the scene as `camera` sees it, widened by `margin` pixels.
+func trueEdges(_ scene: Scene, _ camera: PinholeCamera, margin: Int) -> [Bool] {
+    let depth = scene.capture(camera).depth
+    let w = camera.width, h = camera.height
+    var near = [Bool](repeating: false, count: w * h)
+    for y in 0..<h {
+        for x in 0..<w {
+            let d = depth[y * w + x]
+            guard d > 0 else { continue }
+            for (dx, dy) in [(1, 0), (0, 1)] where x + dx < w && y + dy < h {
+                let n = depth[(y + dy) * w + x + dx]
+                if n > 0, abs(n - d) > 0.05 { near[y * w + x] = true }
+            }
+        }
+    }
+    var out = near
+    for y in 0..<h {
+        for x in 0..<w where near[y * w + x] {
+            for dy in -margin...margin where y + dy >= 0 && y + dy < h {
+                for dx in -margin...margin where x + dx >= 0 && x + dx < w { out[(y + dy) * w + x + dx] = true }
+            }
+        }
+    }
+    return out
+}
+
+func testNoisyGhost() {
+    print("3D ghost with real-world depth (noise, gaps, drift)")
+    var scene = Scene()
+    scene.table = Box(low: SIMD3(-1.1, 0.7, -2.4), high: SIMD3(-0.4, 0.74, -1.7))
+    let centre = SIMD3<Float>(-0.2, 0.3, -1.7)
+    var random = Random(state: 7)
+    // A slow walk round, like a real reference: many views, each with its own small drift.
+    var cloud = GhostCore.Cloud()
+    var filled = Set<SIMD3<Int32>>()
+    for k in 0..<30 {
+        let angle = Float(k) / 29 * 1.2 - 0.6
+        let eye = SIMD3<Float>(sin(angle) * 1.4 - 0.2, 0.9 + Float(k % 3) * 0.15, cos(angle) * 1.4 - 1.7)
+        let pose = lookAt(eye: eye, target: centre)
+        let truth = depthCamera(pose)
+        let shot = scene.capture(truth)
+        let noisy = lidar(shot.depth, width: truth.width, height: truth.height, random: &random)
+        let believed = depthCamera(drifted(pose, random: &random))
+        GhostCore.add(depth: noisy, rgba: shot.rgba, camera: believed, maxPoints: 300_000, to: &cloud, filled: &filled)
+    }
+    expect(cloud.positions.count > 20_000, "noisy: built \(cloud.positions.count) points")
+
+    func yellow(_ rgba: [UInt8], _ i: Int) -> Bool { rgba[i * 4] > 150 && rgba[i * 4 + 1] > 100 && rgba[i * 4 + 2] < 60 }
+    func blue(_ rgba: [UInt8], _ i: Int) -> Bool { rgba[i * 4 + 2] > 150 && rgba[i * 4] < 100 }
+    let cells = GhostCore.cells(of: cloud.positions)
+
+    for (name, eye) in [("front", SIMD3<Float>(-0.2, 1.1, -0.3)), ("close", SIMD3<Float>(0.3, 0.8, -0.9))] {
+        let pose = lookAt(eye: eye, target: centre)
+        let camera = screenCamera(pose)
+        let ghost = GhostCore.render(cloud: cloud, states: nil, camera: camera, strength: 0.8)
+        let allowed = trueEdges(scene, camera, margin: 14)
+        let total = camera.width * camera.height
+        let lines = (0..<total).filter { yellow(ghost, $0) }.count
+        let stray = (0..<total).filter { !allowed[$0] && yellow(ghost, $0) }.count
+        expect(lines > 400, "noisy \(name): \(lines) outline pixels round the props")
+        expect(stray < total / 400, "noisy \(name): \(stray) outline pixels on flat floor or table (clutter)")
+        let photo = scene.capture(camera).rgba
+        save("5-noisy-\(name)", ghost: ghost, background: photo, width: camera.width, height: camera.height)
+
+        // Nothing moved, but live depth is noisy and tracking has drifted: no blue at all.
+        var scores = [Int8](repeating: 0, count: cloud.positions.count)
+        let liveTruth = depthCamera(pose)
+        for _ in 0..<10 {
+            let live = lidar(scene.capture(liveTruth).depth, width: liveTruth.width, height: liveTruth.height, random: &random)
+            GhostCore.check(positions: cloud.positions, scores: &scores, depth: live, confidence: nil, camera: depthCamera(drifted(pose, random: &random)))
+        }
+        let states = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
+        let checked = GhostCore.render(cloud: cloud, states: states, camera: camera, strength: 0.8)
+        let falseBlue = (0..<total).filter { blue(checked, $0) }.count
+        expect(falseBlue == 0, "noisy \(name), nothing moved: \(falseBlue) blue pixels")
+        if name == "front" {
+            save("6-noisy-front-nothing-moved", ghost: checked, background: photo, width: camera.width, height: camera.height)
+            // The box taken away: a blue outline where it stood.
+            var gone = scene
+            gone.box = Box(low: SIMD3(5, 0, 5), high: SIMD3(5.1, 0.1, 5.1))
+            scores = [Int8](repeating: 0, count: cloud.positions.count)
+            for _ in 0..<10 {
+                let live = lidar(gone.capture(liveTruth).depth, width: liveTruth.width, height: liveTruth.height, random: &random)
+                GhostCore.check(positions: cloud.positions, scores: &scores, depth: live, confidence: nil, camera: depthCamera(drifted(pose, random: &random)))
+            }
+            let goneStates = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
+            let goneGhost = GhostCore.render(cloud: cloud, states: goneStates, camera: camera, strength: 0.8)
+            let shown = (0..<total).filter { blue(goneGhost, $0) }.count
+            expect(shown > 200, "noisy front, box taken away: \(shown) blue pixels where it stood")
+            save("7-noisy-box-gone", ghost: goneGhost, background: gone.capture(camera).rgba, width: camera.width, height: camera.height)
+        }
+    }
+}
+
 // MARK: Picture match
 
 func ciImage(_ rgba: [UInt8], width: Int, height: Int) -> CIImage {
@@ -383,6 +528,7 @@ func testImageMatch() {
 
 testDepthBuffers()
 testGhost()
+testNoisyGhost()
 testImageMatch()
 print(failures == 0 ? "All passed" : "\(failures) failed")
 exit(failures == 0 ? 0 : 1)
