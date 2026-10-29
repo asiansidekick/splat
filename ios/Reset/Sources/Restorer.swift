@@ -306,7 +306,22 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
         let (_, targetUp) = Guidance.screenAxes(target.cameraToWorld, orientation: orientation)
         let roll = atan2(simd_dot(targetUp, right), simd_dot(targetUp, up))
-        aim.update(point: point, roll: Double(roll), offset: move)
+        // Outlines of both balls, drawn over the photo ghost so the strength slider never fades
+        // them: where each ball is on screen and how big.
+        var rings: AimState.Rings?
+        if !lined, local.z < -0.05 {
+            func ring(_ centre: SIMD3<Float>) -> (CGPoint, CGFloat) {
+                let middle = frame.camera.projectPoint(centre, orientation: orientation, viewportSize: viewport)
+                let edge = frame.camera.projectPoint(
+                    centre + up * Float(GuideSpheres.radius), orientation: orientation, viewportSize: viewport)
+                return (middle, hypot(edge.x - middle.x, edge.y - middle.y))
+            }
+            let liveCentre = (camera * GuideSpheres.local(orientation).columns.3).xyz
+            let (targetPoint, targetRadius) = ring(spot)
+            let (livePoint, liveRadius) = ring(liveCentre)
+            rings = AimState.Rings(target: targetPoint, targetRadius: targetRadius, live: livePoint, liveRadius: liveRadius)
+        }
+        aim.update(point: point, roll: Double(roll), offset: move, rings: rings)
         if matched != lined { matched = lined }
     }
 

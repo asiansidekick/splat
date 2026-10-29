@@ -48,19 +48,31 @@ final class AimState: ObservableObject {
     /// How far to turn the phone about its own axis, radians, clockwise positive.
     @Published private(set) var roll: Double = 0
     @Published private(set) var offset: Offset?
+    /// The two guide balls' outlines on screen, while they are not lined up.
+    @Published private(set) var rings: Rings?
 
-    func update(point: CGPoint, roll: Double, offset: Offset) {
+    struct Rings: Equatable {
+        var target: CGPoint
+        var targetRadius: CGFloat
+        var live: CGPoint
+        var liveRadius: CGFloat
+    }
+
+    func update(point: CGPoint, roll: Double, offset: Offset, rings: Rings? = nil) {
         if let old = self.point, hypot(old.x - point.x, old.y - point.y) < 1.5, abs(self.roll - roll) < 0.01,
-            let previous = self.offset, simd_distance(previous.vector, offset.vector) < 0.003
+            let previous = self.offset, simd_distance(previous.vector, offset.vector) < 0.003,
+            (self.rings == nil) == (rings == nil)
         { return }
         self.point = point
         self.roll = roll
         self.offset = offset
+        if self.rings != rings { self.rings = rings }
     }
 
     func clear() {
         point = nil
         offset = nil
+        rings = nil
     }
 }
 

@@ -1459,6 +1459,19 @@ struct AimOverlay: View {
         GeometryReader { geometry in
             let size = geometry.size
             let centre = CGPoint(x: size.width / 2, y: size.height / 2)
+            // Crisp outlines of the two guide balls, on top of the photo ghost.
+            if let rings = state.rings {
+                Circle()
+                    .stroke(Color.yellow, lineWidth: 3)
+                    .frame(width: rings.targetRadius * 2, height: rings.targetRadius * 2)
+                    .shadow(color: .black.opacity(0.8), radius: 1.5)
+                    .position(rings.target)
+                Circle()
+                    .stroke(Color.white, lineWidth: 3)
+                    .frame(width: rings.liveRadius * 2, height: rings.liveRadius * 2)
+                    .shadow(color: .black.opacity(0.8), radius: 1.5)
+                    .position(rings.live)
+            }
             if let point = state.point, let offset = state.offset, !offset.isMatched {
                 let inset: CGFloat = 50
                 let shown = CGPoint(

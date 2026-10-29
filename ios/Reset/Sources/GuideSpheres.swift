@@ -14,10 +14,12 @@ final class GuideSpheres {
     /// How far in front of the camera the spheres sit, metres.
     static let distance: Float = 0.6
     static let radius: CGFloat = 0.035
-    /// The balls sit up and to the right of the middle of the picture (in the reference's
-    /// upright view), metres at `distance`, so the middle stays clear for lining up the ghost.
-    static let offRight: Float = 0.09
-    static let offUp: Float = 0.11
+    /// The balls sit centred, low in the picture, metres below the middle at `distance`, so the
+    /// middle stays clear for lining up the ghost. Less when landscape, where the picture is
+    /// shorter.
+    static func drop(_ orientation: UIInterfaceOrientation) -> Float {
+        orientation.isLandscape ? 0.08 : 0.15
+    }
 
     /// In the room, where the reference camera's sphere was.
     let target = SCNNode()
@@ -44,7 +46,7 @@ final class GuideSpheres {
         let live = SCNSphere(radius: GuideSpheres.radius)
         live.segmentCount = 48
         let liveMaterial = GuideSpheres.material(top: .systemYellow, bottom: UIColor(white: 0.12, alpha: 1), line: .black)
-        liveMaterial.transparency = 0.5
+        liveMaterial.transparency = 0.75
         liveMaterial.writesToDepthBuffer = false
         live.materials = [liveMaterial]
         fixed.geometry = live
@@ -83,13 +85,18 @@ final class GuideSpheres {
         let forward = -SIMD3(toReference.columns.2.x, toReference.columns.2.y, toReference.columns.2.z)
         let pitch = atan2(simd_dot(forward, up), -forward.z)
         let tip = max(-1.2, min(1.2, pitch * GuideSpheres.tiltGain))
-        let live = GuideSpheres.local(orientation, tip: simd_quatf(angle: tip, axis: right))
         if let view, let eye = view.pointOfView, fixed.parent !== eye { attach(to: view) }
         if fixed.parent == nil || fixed.parent === root {
             if fixed.parent == nil { root.addChildNode(fixed) }
-            fixed.simdTransform = camera * live
+            fixed.simdTransform = camera * GuideSpheres.local(orientation, tip: simd_quatf(angle: tip, axis: right))
         } else {
-            fixed.simdTransform = live
+            // The AR view's camera node is already turned to the screen: x right, y up,
+            // whichever way the phone is held. (Using the sensor's axes here turned the ball
+            // 90 degrees and put it off to the side when upright.)
+            let screenRight = SIMD3<Float>(1, 0, 0)
+            fixed.simdTransform = GuideSpheres.local(
+                right: screenRight, up: SIMD3(0, 1, 0), drop: GuideSpheres.drop(orientation),
+                tip: simd_quatf(angle: tip, axis: screenRight))
         }
         let image = matched ? GuideSpheres.matchedImage : GuideSpheres.solidImage
         targetSphere.diffuse.contents = image
@@ -135,12 +142,16 @@ final class GuideSpheres {
         }
     }
 
-    /// In the camera's own axes: the spot `distance` ahead and off to the upper right of the
-    /// screen, turned so the ball's top points up the screen, then tipped by `tip`.
+    /// In ARKit's camera axes: the spot `distance` ahead and low in the middle of the screen,
+    /// turned so the ball's top points up the screen, then tipped by `tip`.
     static func local(_ orientation: UIInterfaceOrientation, tip: simd_quatf = simd_quatf(angle: 0, axis: SIMD3(1, 0, 0))) -> simd_float4x4 {
         let (right, up) = axes(orientation)
+        return local(right: right, up: up, drop: drop(orientation), tip: tip)
+    }
+
+    static func local(right: SIMD3<Float>, up: SIMD3<Float>, drop: Float, tip: simd_quatf) -> simd_float4x4 {
         let back = SIMD3<Float>(0, 0, 1)
-        let centre = right * offRight + up * offUp - back * distance
+        let centre = -up * drop - back * distance
         return simd_float4x4(
             SIMD4(tip.act(right), 0), SIMD4(tip.act(up), 0), SIMD4(tip.act(back), 0), SIMD4(centre, 1))
     }
