@@ -39,6 +39,8 @@ jobs:
           exit $status
       - name: Publish test pictures
         if: always()
+        # Only for reading the pictures; a failed upload must not hold back the app build.
+        continue-on-error: true
         working-directory: ios/Reset
         run: |
           [ -d test-pictures ] || exit 0
