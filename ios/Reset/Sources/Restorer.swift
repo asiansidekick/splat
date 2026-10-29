@@ -71,16 +71,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// made a turning ghost impossible to line up perfectly). Further off it turns with the phone
     /// to lead the way back.
     private var ghostPinned = false
-    private var pinnedLayout: (id: String, orientation: UIInterfaceOrientation, viewport: CGSize, snap: Int)?
-    /// The latest picture check, when close enough to snap the ghost photo onto the live view by
-    /// stretching it (scale, skew and perspective), so it lies exactly over what is still in
-    /// place and only what has moved shows double.
-    private var snap: (id: String, corners: [CGPoint], version: Int)?
-    private var snapVersion = 0
-    private var snapSmoother = ImageMatch.SnapSmoother()
-    private var snapSmootherID: String?
-    /// Whether the ghost on screen is snapped on, for the banner.
-    @Published private(set) var snapped = false
+    private var pinnedLayout: (id: String, orientation: UIInterfaceOrientation, viewport: CGSize)?
     private var lastUpdate = Date.distantPast
     private var diffBusy = false
     private let ciContext = CIContext()
@@ -310,8 +301,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             checkImage(frame: frame, keyframe: target)
         } else {
             lastMatch = nil
-            snap = nil
-            snapSmoother = ImageMatch.SnapSmoother()
         }
         let spot = (target.cameraToWorld * SIMD4<Float>(0, 0, -1, 1)).xyz
         let local = camera.inverse * SIMD4<Float>(spot, 1)
@@ -397,7 +386,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     /// Compares the live picture with the reference photo on a background queue, a few times a
-    /// second: the edge guides and the snapped ghost follow the answer.
+    /// second: the edge guides follow the answer.
     private func checkImage(frame: ARFrame, keyframe: Keyframe) {
         guard !imageBusy, Date().timeIntervalSince(lastImageCheck) > 0.3,
             let source = ghostSource, source.id == keyframe.id
@@ -405,7 +394,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         lastImageCheck = Date()
         imageBusy = true
         let live = CIImage(cvPixelBuffer: frame.capturedImage)
-        let liveSize = live.extent.size
         let reference = source.image
         let camera = frame.camera.transform
         let time = frame.timestamp
@@ -414,7 +402,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             Task { @MainActor in
                 self.imageBusy = false
                 guard let result, self.current?.id == keyframe.id else { return }
-                self.updateSnap(result, keyframe: keyframe, reference: reference.extent.size, live: liveSize)
                 // A wild answer means Vision paired the wrong things: carry on from the last one.
                 if result.error < ImageMatch.guideLimit {
                     self.lastMatch = (keyframe.id, result, reference.extent.size, camera, time)
@@ -479,7 +466,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
         if ghostPinned {
             if let layout = pinnedLayout, layout.id == keyframe.id, layout.orientation == orientation,
-                layout.viewport == viewport, layout.snap == currentSnap(for: keyframe)?.version ?? -1,
+                layout.viewport == viewport,
                 ghostSource?.id == keyframe.id, ghost != nil
             { return }
         } else {
@@ -501,38 +488,17 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             live: ghostPinned ? keyframe.cameraToWorld : camera, liveIntrinsics: frame.camera.intrinsics, liveSize: resolution)
         let placement = Placement(display: frame.displayTransform(for: orientation, viewportSize: viewport), viewport: viewport)
         let context = ciContext
-        let snapping = ghostPinned ? currentSnap(for: keyframe) : nil
         lastGhostPose = camera
-        pinnedLayout = ghostPinned ? (keyframe.id, orientation, viewport, snapping?.version ?? -1) : nil
+        pinnedLayout = ghostPinned ? (keyframe.id, orientation, viewport) : nil
         ghostBusy = true
         ghostQueue.async {
-            let placed = snapping.flatMap { ImageMatch.stretch(source, corners: $0.corners, live: resolution) } ?? warp.apply(to: source)
-            let image = placed.flatMap { Restorer.render($0, placement: placement, context: context) }
+            let image = warp.apply(to: source).flatMap { Restorer.render($0, placement: placement, context: context) }
             Task { @MainActor in
                 self.ghostBusy = false
-                let isSnapped = snapping != nil && image != nil
-                if self.snapped != isSnapped { self.snapped = isSnapped }
                 // Nil when the phone faces away from where the photo was taken; the aim ring guides back.
                 self.ghost = image
             }
         }
-    }
-
-    private func updateSnap(_ result: ImageMatch.Result, keyframe: Keyframe, reference: CGSize, live: CGSize) {
-        if snapSmootherID != keyframe.id {
-            snapSmootherID = keyframe.id
-            snapSmoother = ImageMatch.SnapSmoother()
-            snap = nil
-        }
-        let corners = result.error < ImageMatch.snapLimit ? result.corners(reference: reference, live: live) : nil
-        guard snapSmoother.add(corners, liveWidth: live.width) else { return }
-        snapVersion += 1
-        snap = snapSmoother.shown.map { (keyframe.id, $0, snapVersion) }
-    }
-
-    private func currentSnap(for keyframe: Keyframe) -> (id: String, corners: [CGPoint], version: Int)? {
-        guard let snap, snap.id == keyframe.id else { return nil }
-        return snap
     }
 
     static func angle(between a: simd_float4x4, and b: simd_float4x4) -> Float {
