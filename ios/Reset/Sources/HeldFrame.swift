@@ -10,28 +10,27 @@ struct HeldFrame {
     let reference: UIImage?
     /// Whether the pictures were paired (Vision's homography) rather than turned by the phone.
     let registered: Bool
-    let since: Date
+    /// The screen size it was laid out for: turning the phone lays it out again.
+    let viewport: CGSize
 
-    /// Builds both pictures laid out like the live camera. `fallback` turns the reference by the
-    /// phone's attitude when the pictures cannot be paired.
-    static func build(
-        live: CIImage, reference: CIImage?, fallback: Restorer.Warp?, placement: Restorer.Placement,
-        context: CIContext, since: Date
+    /// The reference in the live picture's sensor layout, the live picture's size: stretched by
+    /// the pictures when they pair up, otherwise turned by `fallback`, the phone's attitude.
+    static func place(live: CIImage, reference: CIImage?, fallback: Restorer.Warp?) -> (image: CIImage?, registered: Bool) {
+        guard let reference else { return (nil, false) }
+        if let match = ImageMatch.compare(live: live, reference: reference), match.error < ImageMatch.guideLimit,
+            let stretched = match.snapped(reference, live: live.extent.size)
+        {
+            return (stretched, true)
+        }
+        return (fallback?.apply(to: reference), false)
+    }
+
+    /// Both pictures laid out like the live camera, for the screen as it is held now.
+    static func render(
+        live: CIImage, placed: CIImage?, registered: Bool, placement: Restorer.Placement, context: CIContext
     ) -> HeldFrame {
         let now = Restorer.render(live, placement: placement, context: context) ?? UIImage()
-        guard let reference else { return HeldFrame(now: now, reference: nil, registered: false, since: since) }
-        let size = live.extent.size
-        var placed: CIImage?
-        var registered = false
-        if let match = ImageMatch.compare(live: live, reference: reference), match.error < ImageMatch.guideLimit,
-            let stretched = match.snapped(reference, live: size)
-        {
-            placed = stretched
-            registered = true
-        } else {
-            placed = fallback?.apply(to: reference)
-        }
         let image = placed.flatMap { Restorer.render($0, placement: placement, context: context) }
-        return HeldFrame(now: now, reference: image, registered: registered && image != nil, since: since)
+        return HeldFrame(now: now, reference: image, registered: registered && image != nil, viewport: placement.viewport)
     }
 }

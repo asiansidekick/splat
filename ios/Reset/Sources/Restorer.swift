@@ -29,6 +29,13 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Paused: the live picture frozen, with the reference stretched onto that same frame.
     @Published private(set) var paused = false
     @Published private(set) var held: HeldFrame?
+    /// What the held pictures are made from, kept so turning the phone while paused lays them
+    /// out again for the new screen shape instead of stretching them.
+    private var heldParts: (frame: ARFrame, live: CIImage, placed: CIImage?, registered: Bool)?
+    private var heldLayout: (orientation: UIInterfaceOrientation, viewport: CGSize)?
+    private var heldBusy = false
+    /// Counts pauses, so a slow build from an earlier pause never lands on a later one.
+    private var pauseCount = 0
     private let holdQueue = DispatchQueue(label: "held-frame")
     /// The two-sphere alignment guide, in 3D.
     @Published var lockedKeyframe: Keyframe?
@@ -235,6 +242,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     private func handle(_ frame: ARFrame) {
         // ARKit reports normal tracking once it has recognised the saved room.
         if case .failed = status { return }
+        if paused { relayoutHeld() }
         if reference.photoOnly { return }
         guard case .normal = frame.camera.trackingState else {
             if status == .ready {
@@ -432,20 +440,55 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
                 live: frame.camera.transform, liveIntrinsics: frame.camera.intrinsics, liveSize: frame.camera.imageResolution)
         }
         let context = ciContext
-        let since = Date()
+        let layout = (orientation, viewport)
+        pauseCount += 1
+        let count = pauseCount
+        heldBusy = true
         holdQueue.async {
-            let built = HeldFrame.build(live: live, reference: source, fallback: warp, placement: placement, context: context, since: since)
+            let placed = HeldFrame.place(live: live, reference: source, fallback: warp)
+            let built = HeldFrame.render(live: live, placed: placed.image, registered: placed.registered, placement: placement, context: context)
             Task { @MainActor in
+                guard self.pauseCount == count else { return }
+                self.heldBusy = false
                 guard self.paused else { return }
+                self.heldParts = (frame, live, placed.image, placed.registered)
+                self.heldLayout = layout
                 self.held = built
                 Diagnostics.log("Paused: reference \(built.registered ? "stretched by the pictures" : source == nil ? "none" : "turned by the phone")")
             }
         }
     }
 
+    /// While paused, lays the held pictures out again once the phone has turned.
+    private func relayoutHeld() {
+        let screen = Screen.orientation
+        if orientation != screen { orientation = screen }
+        guard !heldBusy, let parts = heldParts, let layout = heldLayout, viewport != .zero,
+            layout.orientation != orientation || layout.viewport != viewport
+        else { return }
+        let placement = Placement(display: parts.frame.displayTransform(for: orientation, viewportSize: viewport), viewport: viewport)
+        let context = ciContext
+        let newLayout = (orientation, viewport)
+        let count = pauseCount
+        heldBusy = true
+        holdQueue.async {
+            let built = HeldFrame.render(live: parts.live, placed: parts.placed, registered: parts.registered, placement: placement, context: context)
+            Task { @MainActor in
+                guard self.pauseCount == count else { return }
+                self.heldBusy = false
+                guard self.paused else { return }
+                self.heldLayout = newLayout
+                self.held = built
+            }
+        }
+    }
+
     func resume() {
         paused = false
+        heldBusy = false
         held = nil
+        heldParts = nil
+        heldLayout = nil
     }
 
     // MARK: Ghost photo
