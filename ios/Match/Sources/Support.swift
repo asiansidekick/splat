@@ -55,18 +55,23 @@ struct HelpView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Match keeps continuity photos for hair, makeup, costume, props and set, and checks the set against them before each take. Everything stays on this device; no signal needed.")
+                    Text("Match keeps continuity photos for hair, makeup and costume, and checks each look against them before every take. Everything stays on this device; no signal needed.")
                 }
                 Section("The camera screen") {
-                    Text("Match opens straight into the camera. Everything is on this screen:")
-                    Text("• Top left: the board you are shooting (for example Sc 12 · Sarah). Tap to switch boards or start a new one.")
-                    Text("• Top right: the take. Tap for the next take; touch and hold to go back or to Prep. Every board in the scene follows it.")
-                    Text("• Nothing is saved until you press the shutter.")
-                    Text("• Above the shutter: angles (Front, Left, Back…). Picking an angle shows that angle's reference see-through over the camera. The first photo of each angle becomes its reference.")
-                    Text("• The slider sets how strong the overlay is, the eye hides it, the square shows outlines only. Pinch or drag the overlay to line up a QTake screenshot; double tap resets it.")
-                    Text("• Bottom left: the reference thumbnail. Tap it for the gallery: swipe through the photos like the Photos app, tap Use as overlay to show one over the camera, or Compare to check it against its reference.")
-                    Text("• In the gallery: Import from Photos (top) brings in several photos or QTake screenshots at once; Save to Photos (bottom) puts the photo you are looking at into your Photos library. In Compare, the save button puts the side-by-side picture into Photos in one tap.")
-                    Text("• Bottom right: boards and photos, for importing QTake screenshots, editing notes, PDFs and more.")
+                    Text("Match opens straight into the camera, laid out like the Camera app (and like Reset). Nothing is saved until you press the shutter.")
+                    Text("• Top: the grid opens all boards. The middle pill shows the scene, character and take; tap it to switch character or start a new one. Guide turns the edge guide on or off. Then switch camera, and ••• for Import from Photos, Compare, outlines and Help.")
+                    Text("• Above the shutter: angles (Any, Front, ¾ L, Left, Back, Right, ¾ R, Close, Full). Tap or swipe. Picking an angle shows its reference see-through over the camera. The first photo of each angle becomes its reference.")
+                    Text("• Bottom left: the reference thumbnail, with the time it was taken. Tap it for the gallery: swipe like Photos, Use as overlay, Compare, Import from Photos, Save to Photos.")
+                    Text("• Bottom right: Next take. Touch and hold to go back or to Prep. Every board in the scene follows it.")
+                    Text("• The slider sets how strong the overlay is; the eye hides it. Pinch or drag the overlay to line up a QTake screenshot; double tap resets it.")
+                }
+                Section("The edge guide") {
+                    Text("With a reference showing, yellow arrows at the edges of the screen say how to line up, so the face and hair stay clear:")
+                    Text("• Straight arrow: MOVE that way (left, right, up, down).")
+                    Text("• Curved arrow: TURN the phone that way, without moving.")
+                    Text("• Bottom: LEVEL (rotate the phone) and STEP CLOSER or STEP BACK.")
+                    Text("• Hold still once lined up: after half a second a green frame shows, the phone taps, and you can shoot.")
+                    Text("It works from the pictures alone, so it works on any iPhone or iPad. It needs some detail in view; on plain walls or in the dark it shows nothing.")
                 }
                 Section("Compare") {
                     Text("Side by side, Wipe, Blend, Flicker, or Changes, which lines the photos up and marks differences in red. Pinch to zoom; the expand button hides the controls.")

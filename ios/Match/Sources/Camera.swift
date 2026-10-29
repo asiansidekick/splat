@@ -19,6 +19,12 @@ final class Camera: NSObject, ObservableObject {
     private var captureAngle: CGFloat = 90
 
     private let output = AVCapturePhotoOutput()
+    private let frames = AVCaptureVideoDataOutput()
+    private let frameQueue = DispatchQueue(label: "camera.frames")
+    private var lastFrame: CFTimeInterval = 0
+    private var frameAngle: CGFloat = 90
+    /// Live frames for the guide, upright like saved photos, about five a second, on a background queue.
+    var onFrame: ((CIImage) -> Void)?
     private let queue = DispatchQueue(label: "camera.session")
     private var input: AVCaptureDeviceInput?
     private var configured = false
@@ -126,6 +132,11 @@ final class Camera: NSObject, ObservableObject {
         }
         session.addInput(newInput)
         input = newInput
+        if !configured, session.canAddOutput(frames) {
+            frames.alwaysDiscardsLateVideoFrames = true
+            frames.setSampleBufferDelegate(self, queue: frameQueue)
+            session.addOutput(frames)
+        }
         if !configured, session.canAddOutput(output) {
             session.addOutput(output)
             output.maxPhotoQualityPrioritization = .balanced
@@ -167,6 +178,7 @@ final class Camera: NSObject, ObservableObject {
                 self?.captureAngle = angle
                 self?.updatePhotoToPreview()
             }
+            self?.frameQueue.async { self?.frameAngle = angle }
             self?.queue.async {
                 guard let self, let connection = self.output.connection(with: .video),
                     connection.isVideoRotationAngleSupported(angle)
@@ -183,6 +195,24 @@ extension Camera {
         if degrees > 180 { degrees -= 360 }
         if degrees <= -180 { degrees += 360 }
         if photoToPreview != degrees { photoToPreview = degrees }
+    }
+}
+
+extension Camera: AVCaptureVideoDataOutputSampleBufferDelegate {
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let onFrame else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastFrame > 0.2, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        lastFrame = now
+        // Frames arrive in the sensor's layout; turn them the way photos are saved.
+        let orientation: CGImagePropertyOrientation
+        switch Int(frameAngle.rounded()) {
+        case 90: orientation = .right
+        case 180: orientation = .down
+        case 270: orientation = .left
+        default: orientation = .up
+        }
+        onFrame(CIImage(cvPixelBuffer: buffer).oriented(orientation))
     }
 }
 
@@ -208,7 +238,7 @@ final class PreviewView: UIView {
     }
 }
 
-/// The live camera, fitted (not cropped) so the reference ghost lines up with what gets saved.
+/// The live camera filling the screen, as in Reset; the overlay is filled the same way so they line up.
 struct CameraPreview: UIViewRepresentable {
     let camera: Camera
 
@@ -216,7 +246,7 @@ struct CameraPreview: UIViewRepresentable {
         let view = PreviewView()
         view.backgroundColor = .black
         view.previewLayer.session = camera.session
-        view.previewLayer.videoGravity = .resizeAspect
+        view.previewLayer.videoGravity = .resizeAspectFill
         camera.attach(view.previewLayer)
         view.onLayout = { [weak camera] in camera?.levelPreview() }
         return view

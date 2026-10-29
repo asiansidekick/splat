@@ -185,12 +185,16 @@ struct BoardEditor: View {
                         .keyboardType(.numbersAndPunctuation)
                         .multilineTextAlignment(.trailing)
                 }
-                LabeledContent("Character or prop") {
+                LabeledContent("Character") {
                     TextField("Sarah", text: $board.subject)
                         .multilineTextAlignment(.trailing)
                 }
+                LabeledContent("Change or look") {
+                    TextField("Change 2", text: $board.look)
+                        .multilineTextAlignment(.trailing)
+                }
                 Picker("Department", selection: $board.department) {
-                    ForEach(Department.allCases) { department in
+                    ForEach(Department.picked(board.department)) { department in
                         Label(department.name, systemImage: department.symbol).tag(department)
                     }
                 }

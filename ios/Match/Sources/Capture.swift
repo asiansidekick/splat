@@ -20,20 +20,25 @@ extension EnvironmentValues {
     }
 }
 
-/// The main screen, like the iPhone Camera app: everything for checking continuity is one tap away.
-/// Nothing is saved until the shutter is pressed. Board and take at the top; angles above the
-/// shutter (picking an angle shows its reference); the reference thumbnail at bottom left opens a
-/// gallery to pick the overlay or compare; the library at bottom right.
+/// The main screen, laid out like Reset's (and the Camera app's): the camera fills the screen with
+/// the controls floating over it. Nothing is saved until the shutter is pressed. Top: library,
+/// board and take, guide, switch camera, more. Above the shutter: angles (swipe, or tap; picking
+/// one shows its reference). Bottom left: the reference thumbnail, which opens the gallery. Bottom
+/// right: next take. The guide sits on the edges of the screen, so the face, hair and costume stay
+/// clear.
 struct CaptureView: View {
     @EnvironmentObject private var store: BoardStore
     @StateObject private var camera = Camera()
+    @StateObject private var guide = Guide()
     @AppStorage("currentBoard") private var currentBoard = ""
     @AppStorage("seenHelp") private var seenHelp = false
+    @AppStorage("ghostOpacity") private var opacity = 0.5
+    @AppStorage("guideOn") private var guideOn = true
+    @AppStorage("saveToPhotos") private var saveToPhotos = false
     @State private var ghostID: UUID?
     @State private var angle = ""
     @State private var ghost: UIImage?
     @State private var ghostEdges: UIImage?
-    @State private var opacity = 0.4
     @State private var outlines = false
     @State private var ghostScale: CGFloat = 1
     @State private var ghostOffset: CGSize = .zero
@@ -45,32 +50,48 @@ struct CaptureView: View {
     @State private var showingHelp = false
     @State private var showingGallery = false
     @State private var creating: Board?
+    @State private var editing: Board?
     @State private var flash = false
     @State private var saveError: String?
     @State private var toast: String?
+    @State private var picked: [PhotosPickerItem] = []
 
     /// The board being shot: the one chosen last, else the newest.
     private var board: Board? {
         UUID(uuidString: currentBoard).flatMap(store.board) ?? store.boards.max { $0.created < $1.created }
     }
 
+    private var take: Int { store.take(for: board?.scene ?? "") }
+
     var body: some View {
-        GeometryReader { geometry in
-            // Controls sit beside the picture, never on it.
-            let landscape = geometry.size.width > geometry.size.height
-            let layout = landscape ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
-            layout {
-                if landscape { leftColumn } else { topBar }
-                viewfinder
-                if landscape { rightColumn(height: geometry.size.height) } else { bottomBar }
+        CameraLayout {
+            topBar
+        } preview: {
+            preview
+        } modes: { vertical in
+            anglePicker(vertical: vertical)
+        } leading: {
+            referenceButton
+        } shutter: {
+            ShutterButton(style: .photo) { shoot() }
+                .accessibilityLabel("Take photo")
+        } trailing: {
+            SideButton(title: "Next T\(take + 1)", systemImage: "forward.end.fill", tint: .yellow) {
+                setTake(take + 1)
             }
+            .contextMenu {
+                if take > 0 {
+                    Button("Back to \(Slate.takeName(take - 1))") { setTake(take - 1) }
+                    Button("Prep") { setTake(0) }
+                }
+            }
+            .accessibilityLabel("Next take, \(take + 1). Touch and hold to go back.")
         }
-        .background(Color.black.ignoresSafeArea())
-        .foregroundStyle(.white)
-        .tint(.yellow)
+        .preferredColorScheme(.dark)
         .statusBarHidden()
         .onAppear {
             camera.start()
+            connectGuide()
             if !seenHelp { showingHelp = true }
         }
         .onChange(of: showingLibrary) { _, open in
@@ -81,6 +102,8 @@ struct CaptureView: View {
             lastShot = nil
             pickReference(for: angle)
         }
+        .onChange(of: guideOn) { _, _ in connectGuide() }
+        .onChange(of: picked) { _, items in importPicked(items) }
         .task(id: ghostID) { await loadGhost() }
         .fullScreenCover(item: $comparing) { pair in
             if let board {
@@ -108,6 +131,9 @@ struct CaptureView: View {
                 ghostID = nil
             }
         }
+        .sheet(item: $editing) { board in
+            BoardEditor(board: board, isNew: false) { store.save($0) }
+        }
         .sheet(isPresented: $showingHelp, onDismiss: { seenHelp = true }) { HelpView() }
         .fullScreenCover(isPresented: $showingGallery) {
             if let board {
@@ -126,41 +152,150 @@ struct CaptureView: View {
         }
     }
 
+    // MARK: Top bar
+
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            Button { showingLibrary = true } label: { Image(systemName: "square.grid.2x2").font(.title3) }
+                .accessibilityLabel("Boards and photos")
+            boardMenu
+            Spacer(minLength: 4)
+            Button {
+                Haptics.tap()
+                guideOn.toggle()
+            } label: {
+                pill(guideOn ? "Guide" : "Guide off", systemImage: "arrow.up.and.down.and.arrow.left.and.right", highlighted: guideOn && ghost != nil)
+            }
+            .accessibilityLabel(guideOn ? "Turn the guide off" : "Turn the guide on")
+            Button { camera.flip() } label: { Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3) }
+                .accessibilityLabel("Switch camera")
+            moreMenu
+        }
+        .padding(.horizontal, 12)
+        .foregroundStyle(.white)
+    }
+
+    /// Looks like Reset's top pills; used as a menu label as well as a button.
+    private func pill(_ text: String, systemImage: String? = nil, highlighted: Bool = false) -> some View {
+        HStack(spacing: 4) {
+            if let systemImage { Image(systemName: systemImage) }
+            Text(text).lineLimit(1)
+        }
+        .font(.subheadline.bold())
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(highlighted ? Color.yellow : Color.white.opacity(0.15), in: Capsule())
+        .foregroundStyle(highlighted ? Color.black : Color.white)
+    }
+
+    /// Switch character in one tap; boards grouped by scene, newest scene first.
+    private var boardMenu: some View {
+        Menu {
+            Button { creating = store.newBoard() } label: { Label("New character or look", systemImage: "plus") }
+            if let board {
+                Button { editing = board } label: { Label("Edit \(board.subject.isEmpty ? "this board" : board.subject)", systemImage: "pencil") }
+            }
+            ForEach(store.scenes.reversed(), id: \.self) { scene in
+                Section(scene.isEmpty ? "No scene" : "Scene \(scene)") {
+                    ForEach(store.boards.filter { $0.scene == scene }.sorted { $0.title < $1.title }) { item in
+                        Button {
+                            currentBoard = item.id.uuidString
+                        } label: {
+                            if item.id == board?.id {
+                                Label(item.title, systemImage: "checkmark")
+                            } else {
+                                Text(item.title)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            pill(board.map { "Sc \($0.scene) · \($0.shortTitle) · \(Slate.shortTake(take))" } ?? "New board")
+        }
+        .accessibilityLabel("Choose character")
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            PhotosPicker(selection: $picked, maxSelectionCount: 50, selectionBehavior: .ordered, matching: .images) {
+                Label("Import from Photos", systemImage: "photo.badge.plus")
+            }
+            if let board, board.shots.count > 1, let latest = lastShot ?? board.newest {
+                Button {
+                    comparing = ComparePair(before: board.reference(for: latest)?.id, after: latest.id)
+                } label: { Label("Compare latest photo", systemImage: "rectangle.split.2x1") }
+            }
+            Toggle(isOn: $outlines) { Label("Overlay as outlines", systemImage: "square.dashed") }
+            Toggle(isOn: $saveToPhotos) { Label("Also save photos to Photos", systemImage: "square.and.arrow.down") }
+            Button { showingLibrary = true } label: { Label("Boards, notes and backup", systemImage: "square.grid.2x2") }
+            Button { showingHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
+        } label: {
+            Image(systemName: "ellipsis.circle").font(.title3)
+        }
+        .accessibilityLabel("More")
+    }
+
     // MARK: Picture
 
-    private var viewfinder: some View {
-        ZStack(alignment: .top) {
+    private var preview: some View {
+        GeometryReader { geometry in
             ZStack {
                 CameraPreview(camera: camera)
                 ghostLayer
-            }
-            .clipped()
-            .contentShape(Rectangle())
-            .gesture(ghostGesture)
-            .onTapGesture(count: 2) {
-                withAnimation {
-                    ghostScale = 1
-                    ghostOffset = .zero
+                    .contentShape(Rectangle())
+                    .gesture(ghostGesture)
+                    .onTapGesture(count: 2) {
+                        withAnimation {
+                            ghostScale = 1
+                            ghostOffset = .zero
+                        }
+                    }
+                if guideOn, ghost != nil {
+                    EdgeGuide(reading: guide.reading, matched: guide.matched,
+                              quarterTurns: quarterTurns, mirrored: camera.isFront)
+                        .clearOfControls()
                 }
-            }
-            if flash { Color.white.opacity(0.6).allowsHitTesting(false) }
-            VStack(spacing: 6) {
-                if camera.paused { banner("Camera paused. On iPad it stops while another app uses it.") }
-                if let error = camera.error { banner(error) }
-                if let saveError { banner(saveError) }
-                if let toast {
-                    Text(toast)
-                        .font(.title2.weight(.bold))
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 8)
-                        .background(.black.opacity(0.6), in: Capsule())
-                        .transition(.opacity)
+                if flash { Color.white.opacity(0.6).allowsHitTesting(false) }
+                VStack(spacing: 8) {
+                    if camera.paused { Banner(text: "Camera paused. On iPad it stops while another app uses it.", tint: .red) }
+                    if let error = camera.error { Banner(text: error, tint: .red) }
+                    if let saveError { Banner(text: saveError, tint: .red) }
+                    if let toast {
+                        Text(toast)
+                            .font(.subheadline.bold())
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    Spacer()
+                    if let ghost { turnHint(image: ghost.size, view: geometry.size) }
+                    if guideOn, ghost != nil {
+                        EdgeGuideFooter(reading: guide.reading, matched: guide.matched, mirrored: camera.isFront)
+                    }
+                    if ghost != nil {
+                        HStack(spacing: 8) {
+                            Button { ghostID = nil } label: { Image(systemName: "eye.slash").font(.caption) }
+                                .accessibilityLabel("Hide overlay")
+                            Slider(value: $opacity, in: 0...1)
+                                .accessibilityLabel("Overlay strength")
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.4), in: Capsule())
+                        .frame(maxWidth: 320)
+                        .foregroundStyle(.white)
+                    }
                 }
+                .padding(.horizontal, 64)  // keep clear of the edge arrows
+                .padding(.vertical, 8)
+                .clearOfControls()
             }
-            .padding(8)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    private var quarterTurns: Int { Int((camera.photoToPreview / 90).rounded()) }
 
     @ViewBuilder
     private var ghostLayer: some View {
@@ -169,32 +304,29 @@ struct CaptureView: View {
                 let size = geometry.size
                 let turn = camera.photoToPreview
                 let sideways = abs(abs(turn) - 90) < 1
-                // Fit the photo as it will look once turned, so a sideways photo still fills the view.
+                // Filled like the camera (and Reset's ghost), and fitted as it will look once turned.
                 let box = sideways ? CGSize(width: size.height, height: size.width) : size
-                ZStack(alignment: .bottom) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: box.width, height: box.height)
-                        .rotationEffect(.degrees(turn))
-                        .frame(width: size.width, height: size.height)
-                        .colorMultiply(outlines ? .cyan : .white)
-                        .blendMode(outlines ? .screen : .normal)
-                        .opacity(outlines ? max(opacity, 0.6) : opacity)
-                        .scaleEffect(x: camera.isFront ? -ghostScale : ghostScale, y: ghostScale)
-                        .offset(ghostOffset)
-                        .allowsHitTesting(false)
-                    turnHint(image: image.size, sideways: sideways, view: size)
-                        .allowsHitTesting(false)
-                }
-                .frame(width: size.width, height: size.height)
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: box.width, height: box.height)
+                    .clipped()
+                    .rotationEffect(.degrees(turn))
+                    .frame(width: size.width, height: size.height)
+                    .colorMultiply(outlines ? .cyan : .white)
+                    .blendMode(outlines ? .screen : .normal)
+                    .opacity(outlines ? max(opacity, 0.6) : opacity)
+                    .scaleEffect(x: camera.isFront ? -ghostScale : ghostScale, y: ghostScale)
+                    .offset(ghostOffset)
+                    .allowsHitTesting(false)
             }
         }
     }
 
     /// When the reference was shot the other way round from how the phone is held, say which way to turn.
     @ViewBuilder
-    private func turnHint(image: CGSize, sideways: Bool, view: CGSize) -> some View {
+    private func turnHint(image: CGSize, view: CGSize) -> some View {
+        let sideways = abs(quarterTurns) % 2 == 1
         let photoWide = (image.width > image.height) != sideways
         let viewWide = view.width > view.height
         if image.width != image.height, photoWide != viewWide {
@@ -205,7 +337,6 @@ struct CaptureView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(Color.yellow, in: Capsule())
-                .padding(.bottom, 10)
         }
     }
 
@@ -226,226 +357,20 @@ struct CaptureView: View {
                 .onEnded { _ in dragStart = nil })
     }
 
-    // MARK: Portrait
-
-    private var topBar: some View {
-        HStack(spacing: 14) {
-            boardMenu(compact: false)
-            Spacer(minLength: 4)
-            takeMenu
-            flipButton
-        }
-        .padding(.horizontal)
-        .frame(height: 44)
-    }
-
-    private var bottomBar: some View {
-        VStack(spacing: 8) {
-            if ghost != nil { opacityRow.padding(.horizontal) }
-            angleStrip
-            HStack {
-                referenceButton
-                Spacer()
-                shutter
-                Spacer()
-                libraryButton
-            }
-            .padding(.horizontal, 24)
-        }
-        .padding(.vertical, 8)
-    }
-
-    // MARK: Landscape
-
-    private var leftColumn: some View {
-        VStack(spacing: 14) {
-            libraryButton
-            boardMenu(compact: true)
-            takeMenu
-            Spacer(minLength: 4)
-            if ghost != nil {
-                Slider(value: $opacity, in: 0...1)
-                    .frame(width: 110)
-                    .rotationEffect(.degrees(-90))
-                    .frame(width: 36, height: 110)
-                outlinesButton
-                hideButton
-            }
-            Spacer(minLength: 4)
-            flipButton
-        }
-        .padding(.vertical, 12)
-        .frame(width: 84)
-    }
-
-    private func rightColumn(height: CGFloat) -> some View {
-        VStack(spacing: 10) {
-            angleMenu
-            Spacer(minLength: 4)
-            shutter
-            Spacer(minLength: 4)
-            referenceButton
-        }
-        .padding(.vertical, 12)
-        .frame(width: 104)
-    }
-
     // MARK: Controls
 
-    private var opacityRow: some View {
-        HStack(spacing: 10) {
-            hideButton
-            Slider(value: $opacity, in: 0...1)
-            outlinesButton
-        }
-    }
-
-    private var outlinesButton: some View {
-        Button {
-            outlines.toggle()
-        } label: {
-            Image(systemName: outlines ? "square.dashed" : "photo").frame(width: 32, height: 32)
-        }
-        .accessibilityLabel(outlines ? "Show whole photo" : "Show outlines only")
-    }
-
-    private var hideButton: some View {
-        Button {
-            ghostID = nil
-        } label: {
-            Image(systemName: "eye.slash").frame(width: 32, height: 32)
-        }
-        .accessibilityLabel("Hide overlay")
-    }
-
-    private var flipButton: some View {
-        Button {
-            camera.flip()
-        } label: {
-            Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3).frame(width: 36, height: 36)
-        }
-        .accessibilityLabel("Switch camera")
-    }
-
-    private var shutter: some View {
-        Button(action: shoot) {
-            ZStack {
-                Circle().fill(.white).frame(width: 60, height: 60)
-                Circle().stroke(.white, lineWidth: 3).frame(width: 72, height: 72)
+    /// Angles above the shutter like Reset's modes: tap one or swipe. Picking one shows its reference.
+    private func anglePicker(vertical: Bool) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(vertical ? .vertical : .horizontal, showsIndicators: false) {
+                ModePicker(modes: [""] + Slate.angles, label: Slate.angleLabel,
+                           selection: Binding(get: { angle }, set: { selectAngle($0) }), vertical: vertical)
+                    .padding(vertical ? .vertical : .horizontal, 16)
             }
-        }
-        .accessibilityLabel("Take photo")
-    }
-
-    private var libraryButton: some View {
-        Button {
-            showingLibrary = true
-        } label: {
-            Image(systemName: "square.grid.2x2")
-                .font(.title2)
-                .frame(width: 52, height: 52)
-                .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
-        }
-        .accessibilityLabel("Boards and photos")
-    }
-
-    /// Switch boards in one tap; boards grouped by scene, newest scene first.
-    private func boardMenu(compact: Bool) -> some View {
-        Menu {
-            Button {
-                creating = store.newBoard()
-            } label: {
-                Label("New board", systemImage: "plus")
+            .frame(maxHeight: vertical ? 150 : 24)
+            .onChange(of: angle) { _, value in
+                withAnimation { proxy.scrollTo(value, anchor: .center) }
             }
-            ForEach(store.scenes.reversed(), id: \.self) { scene in
-                Section(scene.isEmpty ? "No scene" : "Scene \(scene)") {
-                    ForEach(store.boards.filter { $0.scene == scene }.sorted { $0.title < $1.title }) { item in
-                        Button {
-                            currentBoard = item.id.uuidString
-                        } label: {
-                            if item.id == board?.id {
-                                Label(item.title, systemImage: "checkmark")
-                            } else {
-                                Text(item.title)
-                            }
-                        }
-                    }
-                }
-            }
-        } label: {
-            if compact {
-                VStack(spacing: 2) {
-                    Image(systemName: "rectangle.stack.badge.person.crop").font(.title3)
-                    Text(board.map { "Sc \($0.scene)" } ?? "Board").font(.caption2).lineLimit(1)
-                }
-                .frame(width: 70)
-            } else {
-                HStack(spacing: 4) {
-                    Text(board.map { "Sc \($0.scene) · \($0.subject.isEmpty ? $0.department.name : $0.subject)" } ?? "New board")
-                        .font(.headline)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down").font(.caption.weight(.bold))
-                }
-            }
-        }
-        .accessibilityLabel("Choose board")
-    }
-
-    /// Tap for the next take; touch and hold to go back or to Prep.
-    private var takeMenu: some View {
-        let scene = board?.scene ?? ""
-        let take = store.take(for: scene)
-        return Menu {
-            if take > 0 {
-                Button("Back to \(Slate.takeName(take - 1))") { setTake(take - 1, scene: scene) }
-                Button("Prep") { setTake(0, scene: scene) }
-            }
-            Button("Next take (\(take + 1))") { setTake(take + 1, scene: scene) }
-        } label: {
-            VStack(spacing: 0) {
-                Text(take == 0 ? "PREP" : "TAKE").font(.system(size: 9, weight: .bold))
-                Text(take == 0 ? "–" : "\(take)").font(.title3.weight(.bold).monospacedDigit())
-            }
-            .frame(minWidth: 44, minHeight: 36)
-            .padding(.horizontal, 4)
-            .background(.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
-        } primaryAction: {
-            setTake(take + 1, scene: scene)
-        }
-        .accessibilityLabel("Take \(take). Tap for next take, hold for more.")
-    }
-
-    /// Angles in a row like the Camera app's modes. Picking one also picks its reference.
-    private var angleStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 18) {
-                ForEach([""] + Slate.angles, id: \.self) { item in
-                    Button {
-                        selectAngle(item)
-                    } label: {
-                        Text(item.isEmpty ? "ANY" : item.uppercased())
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(item == angle ? Color.yellow : .white)
-                    }
-                }
-            }
-            .padding(.horizontal, 20)
-        }
-        .frame(height: 24)
-    }
-
-    private var angleMenu: some View {
-        Menu {
-            Picker("Angle", selection: Binding(get: { angle }, set: { selectAngle($0) })) {
-                Text("Any angle").tag("")
-                ForEach(Slate.angles, id: \.self) { Text($0).tag($0) }
-            }
-        } label: {
-            Text(angle.isEmpty ? "ANY" : angle.uppercased())
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.yellow)
-                .frame(width: 84, height: 30)
-                .background(.white.opacity(0.15), in: Capsule())
         }
     }
 
@@ -456,6 +381,7 @@ struct CaptureView: View {
         let shown = ghostID.flatMap { id in board?.shots.first { $0.id == id } }
         let shot = shown ?? board?.references.last
         Button {
+            Haptics.tap()
             if board == nil {
                 // Start a board, so photos can be imported before any are taken.
                 let fresh = store.newBoard()
@@ -482,14 +408,18 @@ struct CaptureView: View {
         .accessibilityLabel("Reference photos")
     }
 
-    private func banner(_ text: String) -> some View {
-        Text(text)
-            .font(.callout)
-            .padding(10)
-            .background(.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
-    }
-
     // MARK: Actions
+
+    /// Live frames go to the guide only while it is on and there is a reference to line up with.
+    private func connectGuide() {
+        let guide = self.guide
+        if guideOn, ghost != nil {
+            camera.onFrame = { @Sendable [weak guide] frame in guide?.consider(frame) }
+        } else {
+            camera.onFrame = nil
+        }
+        guide.setReference(guideOn ? ghost : nil)
+    }
 
     private func selectAngle(_ newAngle: String) {
         angle = newAngle
@@ -511,15 +441,42 @@ struct CaptureView: View {
         }
     }
 
-    private func setTake(_ take: Int, scene: String) {
-        store.setTake(take, for: scene)
-        show(Slate.takeName(max(0, take)))
+    private func setTake(_ newTake: Int) {
+        Haptics.tap()
+        store.setTake(newTake, for: board?.scene ?? "")
+        show(Slate.takeName(max(0, newTake)))
     }
 
     private func show(_ message: String) {
         withAnimation { toast = message }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             withAnimation { if toast == message { toast = nil } }
+        }
+    }
+
+    private func importPicked(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        picked = []
+        let target: Board
+        if let board {
+            target = board
+        } else {
+            target = store.newBoard()
+            store.save(target)
+            currentBoard = target.id.uuidString
+        }
+        show("Importing \(items.count)…")
+        Task {
+            var failed = 0
+            for item in items {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                    await store.addShot(data, to: target.id, angle: "", source: .imported) != nil
+                {
+                    continue
+                }
+                failed += 1
+            }
+            show(failed == 0 ? "Imported \(items.count)" : "\(failed) of \(items.count) could not be imported")
         }
     }
 
@@ -536,6 +493,7 @@ struct CaptureView: View {
             currentBoard = target.id.uuidString
         }
         let angle = self.angle
+        let alsoToPhotos = saveToPhotos
         camera.capture { data in
             guard let data else {
                 saveError = "The photo did not take. Try again."
@@ -547,7 +505,10 @@ struct CaptureView: View {
                     // A new reference is shown straight away, so the next photo can be checked against it.
                     if shot.isReference, ghostID == nil { ghostID = shot.id }
                     saveError = nil
-                    show(shot.isReference ? "Reference \(shot.angle.isEmpty ? "" : shot.angle)" : Slate.takeName(shot.take))
+                    show(shot.isReference ? "Reference \(Slate.angleLabel(shot.angle))" : Slate.takeName(shot.take))
+                    if alsoToPhotos, !(await PhotoLibrary.save([BoardStore.url(of: shot, in: target.id)])) {
+                        show(PhotoLibrary.deniedMessage)
+                    }
                 } else {
                     saveError = "Could not save the photo. The iPhone or iPad may be out of storage."
                 }
@@ -561,6 +522,7 @@ struct CaptureView: View {
         guard let ghostID, let board, let shot = board.shots.first(where: { $0.id == ghostID }) else {
             ghost = nil
             ghostEdges = nil
+            connectGuide()
             return
         }
         let boardID = board.id
@@ -571,6 +533,7 @@ struct CaptureView: View {
         guard !Task.isCancelled else { return }
         ghost = loaded.0
         ghostEdges = loaded.1
+        connectGuide()
     }
 }
 
