@@ -937,6 +937,9 @@ struct CaptureStage: View {
     @State private var holder = CameraViewHolder()
     @State private var importingModels = false
     @State private var justSaved = false
+    /// The "get its bearings" hint shows for a few seconds, then gives way to the usual line.
+    @State private var bearingsHintDone = false
+    @State private var bearingsTask: Task<Void, Never>?
 
     private var slate: String { scene + setup }
 
@@ -989,6 +992,8 @@ struct CaptureStage: View {
                 }
                 VStack {
                     Banner(text: status, tint: recorder.capturing ? .red : .black)
+                        .onAppear { timeBearingsHint(recorder.trackingNormal) }
+                        .onChange(of: recorder.trackingNormal) { _, normal in timeBearingsHint(normal) }
                     Spacer()
                     ModelOverlay(placer: recorder.placer)
                     if let error = recorder.error {
@@ -1094,6 +1099,18 @@ struct CaptureStage: View {
         }
     }
 
+    /// Shows the bearings hint for four seconds each time tracking is lost.
+    private func timeBearingsHint(_ normal: Bool) {
+        bearingsTask?.cancel()
+        bearingsHintDone = false
+        guard !normal else { return }
+        bearingsTask = Task {
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            withAnimation { bearingsHintDone = true }
+        }
+    }
+
     private var status: String {
         let ready = recorder.canSaveMap
         if recorder.saving { return "Saving \(slate)…" }
@@ -1103,7 +1120,10 @@ struct CaptureStage: View {
         if recorder.capturing {
             return "Recording \(slate). Walk slowly round the props, then tap stop."
         }
-        if !recorder.trackingNormal { return "Move the phone slowly so the camera can get its bearings" }
+        if !recorder.trackingNormal && !bearingsHintDone {
+            let start = mode == .walk ? "Press record" : "Tap the shutter"
+            return "\(start). Move the phone slowly so the camera can get its bearings"
+        }
         switch mode {
         case .photo:
             return recorder.placer.models.isEmpty
