@@ -18,6 +18,16 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     @Published var ghost: UIImage?
     @Published var differences: UIImage?
     @Published var matched = false
+    /// Lined up but not yet held still long enough to count: the banner says hold still.
+    @Published var holding = false
+    /// The phone must be held this still (per second) and lined up this long before it counts as
+    /// matched, so a wobble passing through the right spot never gives a false match.
+    static let steadyTurn: Float = 3 * .pi / 180
+    static let steadyMove: Float = 0.03
+    static let steadyTime: TimeInterval = 0.5
+    private var steadySince: Date?
+    private var lastSteadyPose: (pose: simd_float4x4, time: TimeInterval)?
+    private var isSteady = false
     /// Where to aim and move, updated every frame for the guidance graphic.
     let aim = AimState()
     /// The two-sphere alignment guide, in 3D.
@@ -351,7 +361,32 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
                 tip: Double(GuideSpheres.tip(camera: camera, keyframe: target, orientation: orientation)))
         }
         aim.update(point: point, roll: Double(roll), offset: move, balls: balls)
-        if matched != lined { matched = lined }
+        // Steady: how fast the phone turns and moves, measured over a tenth of a second (single
+        // frames are too close together to measure small turns).
+        let time = frame.timestamp
+        if let last = lastSteadyPose {
+            if time - last.time >= 0.1 {
+                let dt = Float(time - last.time)
+                let turnRate = Restorer.angle(between: last.pose, and: camera) / dt
+                let moveRate = simd_distance(last.pose.columns.3.xyz, camera.columns.3.xyz) / dt
+                isSteady = turnRate < Restorer.steadyTurn && moveRate < Restorer.steadyMove
+                lastSteadyPose = (camera, time)
+            }
+        } else {
+            lastSteadyPose = (camera, time)
+        }
+        let steady = isSteady
+        let nowDate = Date()
+        if lined && (steady || matched) {
+            if steadySince == nil { steadySince = nowDate }
+        } else {
+            steadySince = nil
+        }
+        // Once matched it stays matched while lined up, so small movements do not flicker it.
+        let isMatched = lined && (matched || steadySince.map { nowDate.timeIntervalSince($0) >= Restorer.steadyTime } ?? false)
+        let isHolding = lined && !isMatched
+        if matched != isMatched { matched = isMatched }
+        if holding != isHolding { holding = isHolding }
     }
 
     /// The closest reference view, but sticky: small adjustments of the phone between two views

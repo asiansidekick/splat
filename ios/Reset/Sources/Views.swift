@@ -1328,7 +1328,7 @@ struct ResetStage: View {
     }
 
     private var guiding: Bool {
-        restorer.status == .ready && !restorer.show3D && !reference.photoOnly && !restorer.matched
+        restorer.status == .ready && !restorer.show3D && !reference.photoOnly && !restorer.matched && !restorer.holding
     }
 
     private var headline: String {
@@ -1346,6 +1346,7 @@ struct ResetStage: View {
                     ? "Blue dots: something has gone from there"
                     : "3D ghost: dots on the props as they were"
             }
+            if restorer.holding { return "Hold still…" }
             return restorer.matched
                 ? "Matched. Line the props up with the ghost"
                 : "Line up the two spheres"
