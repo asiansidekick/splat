@@ -26,6 +26,11 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// The last picture check, while it is fresh: the edge guides follow it, carried on between
     /// checks by how the phone has turned since.
     private var lastMatch: (id: String, result: ImageMatch.Result, reference: CGSize, camera: simd_float4x4, time: TimeInterval)?
+    /// The pictures' correction to the attitude, for the reference view it was found for.
+    private var correction = AlignmentCorrection()
+    private var correctionID: String?
+    /// The picture check last added to the correction.
+    private var correctedTime: TimeInterval?
     /// Paused: the live picture frozen, with the reference stretched onto that same frame.
     @Published private(set) var paused = false
     @Published private(set) var held: HeldFrame?
@@ -325,25 +330,42 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let roll = atan2(simd_dot(targetUp, right), simd_dot(targetUp, up))
         aim.update(point: point, roll: Double(roll), offset: move)
         guard !paused else { return }
-        let found = alignment(frame: frame, target: target)
+        if correctionID != target.id || !close {
+            correctionID = target.id
+            correction.reset()
+            correctedTime = nil
+        }
+        var match = lastMatch
+        if let m = match, m.id != target.id || frame.timestamp - m.time > 1.5 { match = nil }
+        let attitude = alignment(frame: frame, target: target, match: nil)
+        // Each new picture check adds once to the correction, measured on this frame.
+        if let match, match.time != correctedTime, let attitude,
+            let pictures = alignment(frame: frame, target: target, match: match)
+        {
+            correctedTime = match.time
+            correction.add(pictures: pictures, attitude: attitude)
+        }
         // Only the pictures can say it is lined up: the phone's attitude alone knows nothing of
-        // where it stands, so a stroke can seat only while a picture check is fresh.
-        edges.update(found.alignment, canSeat: close && found.fromPictures, time: frame.timestamp)
+        // where it stands, so a stroke can seat only while picture checks are fresh and agree.
+        edges.update(
+            attitude.map { correction.apply(to: $0) },
+            canSeat: close && match != nil && correction.ready, time: frame.timestamp)
         if matched != edges.all { matched = edges.all }
     }
 
-    /// Where the reference's crosshair shows on screen now. From the last picture check (Vision's
-    /// homography, reference onto live) carried on by how the phone has turned since; without a
-    /// fresh check, from the phone's attitude alone.
-    private func alignment(frame: ARFrame, target: Keyframe) -> (alignment: GhostAlignment?, fromPictures: Bool) {
+    /// Where the reference's crosshair shows on screen now: from a picture check (Vision's
+    /// homography, reference onto live) carried on by how the phone has turned since, or with no
+    /// match, from the phone's attitude alone.
+    private func alignment(
+        frame: ARFrame, target: Keyframe,
+        match: (id: String, result: ImageMatch.Result, reference: CGSize, camera: simd_float4x4, time: TimeInterval)?
+    ) -> GhostAlignment? {
         let display = frame.displayTransform(for: orientation, viewportSize: viewport)
         let toImage = display.inverted()
         let resolution = frame.camera.imageResolution
         let referenceSize = CGSize(width: target.imageWidth, height: target.imageHeight)
         let camera = frame.camera.transform
         let intrinsics = frame.camera.intrinsics
-        var match = lastMatch
-        if let m = match, m.id != target.id || frame.timestamp - m.time > 1.5 { match = nil }
         let size = viewport
         func land(_ screen: CGPoint) -> CGPoint? {
             // The reference point that would show here if it were laid out like the live picture.
@@ -372,8 +394,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         guard let c = land(middle),
             let l = land(CGPoint(x: middle.x - arm, y: middle.y)),
             let r = land(CGPoint(x: middle.x + arm, y: middle.y))
-        else { return (nil, false) }
-        return (GhostAlignment(centre: c, left: l, right: r, arm: arm), match != nil)
+        else { return nil }
+        return GhostAlignment(centre: c, left: l, right: r, arm: arm)
     }
 
     /// The closest reference view, but sticky: small adjustments of the phone between two views

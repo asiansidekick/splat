@@ -41,6 +41,38 @@ struct GhostAlignment: Equatable {
     }
 }
 
+/// How far the pictures say the reference really is from where the phone's attitude puts it.
+/// The guides follow the attitude every frame (smooth, from ARKit) shifted by this correction,
+/// the middle of the last five picture checks, so a single check that pairs the wrong things
+/// (a keyboard's repeating keys, say) never makes the guides jump.
+struct AlignmentCorrection {
+    private var samples: [(dx: CGFloat, dy: CGFloat, roll: Double, scale: Double)] = []
+    /// Needs three checks that agree before it is used.
+    var ready: Bool { samples.count >= 3 }
+
+    mutating func add(pictures: GhostAlignment, attitude: GhostAlignment) {
+        var turn = pictures.roll - attitude.roll
+        while turn > .pi { turn -= 2 * .pi }
+        while turn < -.pi { turn += 2 * .pi }
+        samples.append((
+            pictures.centre.x - attitude.centre.x, pictures.centre.y - attitude.centre.y,
+            turn, attitude.scale > 0 ? pictures.scale / attitude.scale : 1))
+        if samples.count > 5 { samples.removeFirst() }
+    }
+
+    /// The attitude's alignment moved by the correction, or unchanged until it is ready.
+    func apply(to a: GhostAlignment) -> GhostAlignment {
+        guard ready else { return a }
+        func median<T: Comparable>(_ values: [T]) -> T { values.sorted()[values.count / 2] }
+        return GhostAlignment(
+            centre: CGPoint(x: a.centre.x + median(samples.map(\.dx)), y: a.centre.y + median(samples.map(\.dy))),
+            roll: a.roll + median(samples.map(\.roll)),
+            scale: a.scale * median(samples.map(\.scale)))
+    }
+
+    mutating func reset() { samples.removeAll() }
+}
+
 /// The edge guides: the reference crosshair drawn only where it crosses the four edges of the
 /// picture clear of the controls, each beside a fixed slot. Lined up, every stroke sits in its
 /// slot, level and the slot's length. Kept free of UIKit so the tests run it on a Mac.

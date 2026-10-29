@@ -788,6 +788,20 @@ func testEdgeGuide() {
     expect(
         measured.map { abs($0.roll - angle) < 1e-6 && abs($0.scale - 0.95) < 1e-6 } ?? false,
         String(format: "from points: turn %.3f° size %.3f", (measured?.roll ?? 0) * 180 / .pi, measured?.scale ?? 0))
+    // The pictures' correction: the middle of the last five, so one wrong check moves nothing.
+    var correction = AlignmentCorrection()
+    let attitude = GhostAlignment(centre: middle, roll: 0, scale: 1)
+    for dx in [20.0, 21, 19] as [CGFloat] {
+        correction.add(pictures: GhostAlignment(centre: CGPoint(x: middle.x + dx, y: middle.y), roll: 0.01, scale: 0.98), attitude: attitude)
+    }
+    let corrected = correction.apply(to: attitude)
+    expect(correction.ready && abs(corrected.centre.x - middle.x - 20) < 0.01 && abs(corrected.scale - 0.98) < 1e-9, String(format: "correction: moved %.1f pt", corrected.centre.x - middle.x))
+    correction.add(pictures: GhostAlignment(centre: CGPoint(x: middle.x + 150, y: middle.y - 90), roll: 0.3, scale: 1.4), attitude: attitude)
+    let afterWild = correction.apply(to: attitude)
+    expect(abs(afterWild.centre.x - middle.x - 20) < 1.01 && abs(afterWild.centre.y - middle.y) < 0.01 && abs(afterWild.roll - 0.01) < 1e-9, String(format: "correction: one wild check ignored (%.1f, %.1f)", afterWild.centre.x - middle.x, afterWild.centre.y - middle.y))
+    var fresh2 = AlignmentCorrection()
+    fresh2.add(pictures: GhostAlignment(centre: CGPoint(x: middle.x + 50, y: middle.y), roll: 0, scale: 1), attitude: attitude)
+    expect(fresh2.apply(to: attitude) == attitude, "correction: unused until three checks")
     // The low-pass filter: 0.3 of the way per 1/30 s, the same over two 1/60 s steps.
     expect(abs(EdgeGuide.alpha(dt: 1.0 / 30) - 0.3) < 1e-9, "filter: 0.3 per 1/30 s")
     let far = GhostAlignment(centre: CGPoint(x: middle.x + 100, y: middle.y), roll: 0.1, scale: 1.2)
