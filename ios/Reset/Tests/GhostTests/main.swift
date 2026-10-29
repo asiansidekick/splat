@@ -291,8 +291,8 @@ func strayLines(_ ghost: [UInt8], scene: Scene, camera: PinholeCamera) -> (lines
         lines += 1
         let x = i % w, y = i / w
         var near = false
-        search: for dy in stride(from: -6, through: 6, by: 2) where y + dy >= 0 && y + dy < h {
-            for dx in stride(from: -6, through: 6, by: 2) where x + dx >= 0 && x + dx < w {
+        search: for dy in stride(from: -10, through: 10, by: 2) where y + dy >= 0 && y + dy < h {
+            for dx in stride(from: -10, through: 10, by: 2) where x + dx >= 0 && x + dx < w {
                 let d = depth[(y + dy) * w + x + dx]
                 guard d > 0 else { continue }
                 let p = camera.unproject(u: Float(x + dx), v: Float(y + dy), depth: d)
