@@ -23,7 +23,7 @@ enum Ghost3D {
         let withDepth = reference.keyframes.filter { $0.depthFile != nil }
         let keyframes = ReportPDF.spread(withDepth, count: maxKeyframes)
         var built = Built()
-        var filled = Set<SIMD3<Int32>>()
+        var filled = [SIMD3<Int32>: Int32]()
         var noFile = 0, wrongSize = 0, readings = 0, values = 0
 
         for keyframe in keyframes {
@@ -43,8 +43,11 @@ enum Ghost3D {
             readings += GhostCore.add(
                 depth: depth, rgba: rgba, camera: camera, maxPoints: maxPoints, to: &built.cloud, filled: &filled)
         }
+        // With a walk round, every real surface is seen from several views; specks seen once go.
+        let all = built.cloud.positions.count
+        if keyframes.count >= 8 { built.cloud = GhostCore.solid(built.cloud) }
         built.note = "\(keyframes.count) depth views (of \(reference.keyframes.count)), missing \(noFile), wrong size \(wrongSize), "
-            + "\(readings) readings of \(values / 4) sampled, \(built.cloud.positions.count) points"
+            + "\(readings) readings of \(values / 4) sampled, \(built.cloud.positions.count) points (of \(all) before dropping specks)"
         return built
     }
 

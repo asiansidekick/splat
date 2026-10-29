@@ -231,7 +231,7 @@ func testGhost() {
     let boxCentre = SIMD3<Float>(0, 0.15, -1.5)
     // The reference: a few views from in front, like a short walk round.
     var cloud = GhostCore.Cloud()
-    var filled = Set<SIMD3<Int32>>()
+    var filled = [SIMD3<Int32>: Int32]()
     let eyes: [SIMD3<Float>] = [SIMD3(0, 1, 0), SIMD3(-0.4, 1, -0.1), SIMD3(0.4, 1, -0.1), SIMD3(0, 0.6, -0.5)]
     var readings = 0
     for eye in eyes {
@@ -423,7 +423,7 @@ func testNoisyGhost() {
     var random = Random(state: 7)
     // A slow walk round, like a real reference: many views, each with its own small drift.
     var cloud = GhostCore.Cloud()
-    var filled = Set<SIMD3<Int32>>()
+    var filled = [SIMD3<Int32>: Int32]()
     for k in 0..<30 {
         let angle = Float(k) / 29 * 1.2 - 0.6
         let eye = SIMD3<Float>(sin(angle) * 1.4 - 0.2, 0.9 + Float(k % 3) * 0.15, cos(angle) * 1.4 - 1.7)
@@ -434,6 +434,7 @@ func testNoisyGhost() {
         let believed = depthCamera(drifted(pose, random: &random))
         GhostCore.add(depth: noisy, rgba: shot.rgba, camera: believed, maxPoints: 300_000, to: &cloud, filled: &filled)
     }
+    cloud = GhostCore.solid(cloud)
     expect(cloud.positions.count > 20_000, "noisy: built \(cloud.positions.count) points")
 
     func yellow(_ rgba: [UInt8], _ i: Int) -> Bool { rgba[i * 4] > 150 && rgba[i * 4 + 1] > 100 && rgba[i * 4 + 2] < 60 }

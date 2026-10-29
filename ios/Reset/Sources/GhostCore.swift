@@ -80,6 +80,8 @@ enum GhostCore {
         var positions: [SIMD3<Float>] = []
         /// RGB, 0 to 1.
         var colors: [SIMD3<Float>] = []
+        /// How many depth views landed on each point.
+        var hits: [UInt16] = []
     }
 
     enum State: UInt8 {
@@ -91,34 +93,69 @@ enum GhostCore {
     }
 
     /// Adds one depth view to the cloud, one point per voxel. `depth` is row major at the camera's
-    /// size; `rgba` is the photo at the same size, top row first. Returns the usable readings.
+    /// size; `rgba` is the photo at the same size, top row first. `filled` maps voxels to points.
+    /// Returns the usable readings.
+    ///
+    /// Readings on the edge of something are skipped: the LiDAR smears them halfway between the
+    /// prop and what is behind it, which leaves specks floating in mid-air.
     @discardableResult
     static func add(
         depth: [Float], rgba: [UInt8]?, camera: PinholeCamera, step: Int = 2, maxPoints: Int,
-        to cloud: inout Cloud, filled: inout Set<SIMD3<Int32>>
+        to cloud: inout Cloud, filled: inout [SIMD3<Int32>: Int32]
     ) -> Int {
         let w = camera.width
         let h = camera.height
         guard depth.count == w * h else { return 0 }
+        if cloud.hits.count != cloud.positions.count { cloud.hits = Array(repeating: 1, count: cloud.positions.count) }
         var readings = 0
+        var landed = Set<Int32>()
         for v in stride(from: 0, to: h, by: step) {
             for u in stride(from: 0, to: w, by: step) {
-                guard cloud.positions.count < maxPoints else { return readings }
                 let d = depth[v * w + u]
                 guard d > 0.1, d < maxRange else { continue }
+                var smeared = false
+                for (du, dv) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let x = u + du
+                    let y = v + dv
+                    guard x >= 0, x < w, y >= 0, y < h else { continue }
+                    let n = depth[y * w + x]
+                    if n > 0.1, abs(n - d) > 0.04 + 0.04 * d { smeared = true; break }
+                }
+                if smeared { continue }
                 readings += 1
                 let point = camera.unproject(u: Float(u), v: Float(v), depth: d)
-                guard filled.insert(cell(point)).inserted else { continue }
+                let c = cell(point)
+                if let index = filled[c] {
+                    if landed.insert(index).inserted, cloud.hits[Int(index)] < .max { cloud.hits[Int(index)] += 1 }
+                    continue
+                }
+                guard cloud.positions.count < maxPoints else { continue }
                 var color = SIMD3<Float>(0.8, 0.8, 0.8)
                 if let rgba, rgba.count == w * h * 4 {
                     let o = (v * w + u) * 4
                     color = SIMD3(Float(rgba[o]), Float(rgba[o + 1]), Float(rgba[o + 2])) / 255
                 }
+                let index = Int32(cloud.positions.count)
+                filled[c] = index
+                landed.insert(index)
                 cloud.positions.append(point)
                 cloud.colors.append(color)
+                cloud.hits.append(1)
             }
         }
         return readings
+    }
+
+    /// Only the points that at least `minHits` depth views agree on: a speck seen once is noise.
+    static func solid(_ cloud: Cloud, minHits: UInt16 = 2) -> Cloud {
+        guard cloud.hits.count == cloud.positions.count else { return cloud }
+        var out = Cloud()
+        for i in cloud.positions.indices where cloud.hits[i] >= minHits {
+            out.positions.append(cloud.positions[i])
+            out.colors.append(cloud.colors[i])
+            out.hits.append(cloud.hits[i])
+        }
+        return out
     }
 
     /// Voxel cell to point index, for finding a point's neighbours.
@@ -184,7 +221,7 @@ enum GhostCore {
     static let stepShare: Float = 0.12
     static let minStep: Float = 0.08
     /// Lines shorter than this many pixels (at the drawing's half size) are noise.
-    static let minLine = 24
+    static let minLine = 40
     /// Gone patches smaller than this many pixels (half size) are noise.
     static let minGoneArea = 150
 
@@ -206,8 +243,9 @@ enum GhostCore {
                 for index in cloud.positions.indices {
                     guard let p = small.project(cloud.positions[index]) else { continue }
                     let z = p.depth
-                    // Big enough that neighbouring voxels overlap, so nothing behind shows through.
-                    let r = Int(min(6, max(1, (small.fx * voxel * 0.7 / z).rounded(.up))))
+                    // About the voxel's own size, so the shape does not grow; the closing below
+                    // fills what gaps are left.
+                    let r = Int(min(4, max(1, (small.fx * voxel * 0.5 / z).rounded())))
                     let x0 = Int(p.u.rounded())
                     let y0 = Int(p.v.rounded())
                     guard x0 >= -r, x0 < w + r, y0 >= -r, y0 < h + r else { continue }
@@ -224,8 +262,10 @@ enum GhostCore {
             }
         }
 
-        // Close any gaps left: each pixel takes the nearest depth around it.
-        let surface = minFilter(near, width: w, height: h, radius: 1)
+        // Close the gaps between dots without growing anything: take the nearest depth around
+        // each pixel, then shrink back by taking the furthest, so holes fill but silhouettes stay
+        // where they are.
+        let surface = maxFilter(minFilter(near, width: w, height: h, radius: 2), width: w, height: h, radius: 2)
 
         // Silhouettes: the near side of a big step back in depth.
         var outline = [Bool](repeating: false, count: w * h)
@@ -328,6 +368,31 @@ enum GhostCore {
             if group.count >= minSize { for i in group { out[i] = true } }
         }
         return out
+    }
+
+    /// Each pixel's largest value within `radius`, ignoring empty (infinite) pixels; empty
+    /// pixels stay empty.
+    static func maxFilter(_ values: [Float], width w: Int, height h: Int, radius: Int) -> [Float] {
+        func pass(_ input: [Float], horizontal: Bool) -> [Float] {
+            var out = input
+            for y in 0..<h {
+                for x in 0..<w {
+                    let i = y * w + x
+                    guard input[i].isFinite else { continue }
+                    var m = input[i]
+                    for k in -radius...radius {
+                        let nx = horizontal ? x + k : x
+                        let ny = horizontal ? y : y + k
+                        guard nx >= 0, nx < w, ny >= 0, ny < h else { continue }
+                        let v = input[ny * w + nx]
+                        if v.isFinite, v > m { m = v }
+                    }
+                    out[i] = m
+                }
+            }
+            return out
+        }
+        return pass(pass(values, horizontal: true), horizontal: false)
     }
 
     /// Each pixel's smallest value within `radius`, done as two passes (rows, then columns).
