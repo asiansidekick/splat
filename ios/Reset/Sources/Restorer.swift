@@ -70,6 +70,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Whether the live picture lines up with the reference photo, checked a few times a second
     /// once the phone is close. Nil when not close or when the pictures could not be paired.
     private var imageAligned: Bool?
+    /// When the ghost last moved to another reference view.
+    private var lastSwitch = Date.distantPast
     private var imageBusy = false
     private var lastImageCheck = Date.distantPast
     private let imageQueue = DispatchQueue(label: "image-match")
@@ -256,8 +258,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         lastUpdate = now
 
         let camera = frame.camera.transform
-        let keyframe = lockedKeyframe ?? Guidance.closest(to: camera, in: reference.keyframes)
+        let keyframe = lockedKeyframe ?? steadyClosest(to: camera, now: now)
         guard let keyframe else { return }
+        if current?.id != keyframe.id { imageAligned = nil }
         current = keyframe
         if !show3D { updateGhost(keyframe, frame: frame) }
         // Less often when the phone is hot, so it does not throttle or shut the camera down.
@@ -305,6 +308,21 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let roll = atan2(simd_dot(targetUp, right), simd_dot(targetUp, up))
         aim.update(point: point, roll: Double(roll), offset: move)
         if matched != lined { matched = lined }
+    }
+
+    /// The closest reference view, but sticky: small adjustments of the phone between two views
+    /// taken close together must not flip the ghost back and forth. Another view takes over only
+    /// when it is clearly closer (by a fifth, and at least 8 cm or the like in turn) and the
+    /// current one has shown for over a second.
+    private func steadyClosest(to camera: simd_float4x4, now: Date) -> Keyframe? {
+        guard let best = Guidance.closest(to: camera, in: reference.keyframes) else { return nil }
+        guard let shown = current, shown.id != best.id else { return best }
+        let shownScore = Guidance.score(camera, shown)
+        let bestScore = Guidance.score(camera, best)
+        let clearlyBetter = bestScore < shownScore * 0.8 && bestScore < shownScore - 0.08
+        guard clearlyBetter, now.timeIntervalSince(lastSwitch) > 1 else { return shown }
+        lastSwitch = now
+        return best
     }
 
     /// Compares the live picture with the reference photo on a background queue.
