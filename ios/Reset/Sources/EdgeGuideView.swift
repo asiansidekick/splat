@@ -214,6 +214,35 @@ struct ScrubCursor: View {
     }
 }
 
+/// THEN on the left edge and NOW on the right, the one being swiped towards lit up.
+struct SwipeTags: View {
+    let towardsNow: Bool
+
+    var body: some View {
+        HStack {
+            tag("THEN", lit: !towardsNow)
+            Spacer()
+            tag("NOW", lit: towardsNow)
+        }
+        .padding(.horizontal, 6)
+        // A little above the middle, clear of the side edge guides.
+        .offset(y: -48)
+        .frame(maxHeight: .infinity)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func tag(_ text: String, lit: Bool) -> some View {
+        Text(text)
+            .font(.caption.weight(.heavy))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(lit ? Color.white : Color.black.opacity(0.35), in: Capsule())
+            .foregroundStyle(lit ? Color.black : Color.white.opacity(0.7))
+            .scaleEffect(lit ? 1.1 : 1)
+    }
+}
+
 /// Swiping left or right anywhere sets a value from 0 to 1, a screen width for the full range.
 struct HorizontalSwipe: ViewModifier {
     @Binding var value: Double

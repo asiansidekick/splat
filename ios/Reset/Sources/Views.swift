@@ -1166,6 +1166,9 @@ struct ResetStage: View {
     @State private var ghostShown = true
     /// While swiping the ghost strength, the cursor shows.
     @State private var swipingStrength = false
+    /// Which way the last swipe went (true: towards now), for the THEN and NOW tags; nil hides them.
+    @State private var towardsNow: Bool?
+    @State private var tagsTask: Task<Void, Never>?
     /// While paused: 0 shows the reference, 1 the frozen live picture.
     @State private var toNow = 1.0
     @State private var importingModel = false
@@ -1347,7 +1350,7 @@ struct ResetStage: View {
                 if !restorer.paused, reference.models.isEmpty {
                     // Swipe left or right anywhere for the ghost strength.
                     Color.clear
-                        .modifier(HorizontalSwipe(value: $ghostOpacity) { active in
+                        .modifier(HorizontalSwipe(value: Binding(get: { 1 - ghostOpacity }, set: { ghostOpacity = 1 - $0 })) { active in
                             if active {
                                 if !swipingStrength { withAnimation(.easeOut(duration: 0.15)) { swipingStrength = true } }
                             } else {
@@ -1379,11 +1382,11 @@ struct ResetStage: View {
                     }
                     Spacer()
                     if restorer.paused {
-                        ScrubCursor(value: toNow, start: "REF", end: "NOW")
+                        ScrubCursor(value: toNow, start: "THEN", end: "NOW")
                     } else {
                         ModelOverlay(placer: restorer.placer)
                         if swipingStrength {
-                            ScrubCursor(value: ghostOpacity, start: "Ghost", end: "\(Int(ghostOpacity * 100))%")
+                            ScrubCursor(value: 1 - ghostOpacity, start: "THEN", end: "NOW")
                                 .transition(.opacity)
                         }
                     }
@@ -1391,6 +1394,13 @@ struct ResetStage: View {
                 .padding(8)
                 .clearOfControls()
                 ModelSizeBadge(placer: restorer.placer)
+            }
+            .overlay {
+                if let towardsNow {
+                    SwipeTags(towardsNow: towardsNow)
+                        .clearOfControls()
+                        .transition(.opacity)
+                }
             }
             .overlay {
                 // Green once all four edge guides are in.
@@ -1408,9 +1418,25 @@ struct ResetStage: View {
                 restorer.viewport = size
                 restorer.orientation = Screen.orientation
             }
-            .onChange(of: ghostOpacity) { _, value in
+            .onChange(of: ghostOpacity) { old, value in
                 restorer.setGhostOpacity(value)
+                if swipingStrength { showTags(towardsNow: value < old) }
             }
+            .onChange(of: toNow) { old, value in
+                if restorer.paused { showTags(towardsNow: value > old) }
+            }
+        }
+    }
+
+    /// Shows the THEN and NOW tags, the one being swiped towards lit, until a second after the
+    /// last change.
+    private func showTags(towardsNow now: Bool) {
+        if towardsNow != now { withAnimation(.easeOut(duration: 0.15)) { towardsNow = now } }
+        tagsTask?.cancel()
+        tagsTask = Task {
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.3)) { towardsNow = nil }
         }
     }
 
