@@ -55,6 +55,7 @@ struct CaptureView: View {
     @State private var saveError: String?
     @State private var toast: String?
     @State private var picked: [PhotosPickerItem] = []
+    @State private var previewSize: CGSize = .zero
 
     /// The board being shot: the one chosen last, else the newest.
     private var board: Board? {
@@ -103,6 +104,7 @@ struct CaptureView: View {
             pickReference(for: angle)
         }
         .onChange(of: guideOn) { _, _ in connectGuide() }
+        .onChange(of: visibleAspect) { _, _ in connectGuide() }
         .onChange(of: picked) { _, items in importPicked(items) }
         .task(id: ghostID) { await loadGhost() }
         .fullScreenCover(item: $comparing) { pair in
@@ -272,7 +274,8 @@ struct CaptureView: View {
                     Spacer()
                     if let ghost { turnHint(image: ghost.size, view: geometry.size) }
                     if guideOn, ghost != nil {
-                        EdgeGuideFooter(reading: guide.reading, matched: guide.matched, mirrored: camera.isFront)
+                        EdgeGuideFooter(reading: guide.reading, matched: guide.matched, mirrored: camera.isFront,
+                                        searching: guide.searching)
                     }
                     if ghost != nil {
                         HStack(spacing: 8) {
@@ -292,7 +295,17 @@ struct CaptureView: View {
                 .padding(.vertical, 8)
                 .clearOfControls()
             }
+            .onAppear { previewSize = geometry.size }
+            .onChange(of: geometry.size) { _, size in previewSize = size }
         }
+    }
+
+    /// The part of the camera picture the screen shows, as width over height the way photos are
+    /// saved, so photos keep just what was on screen.
+    private var visibleAspect: CGFloat? {
+        guard previewSize.width > 0, previewSize.height > 0 else { return nil }
+        let sideways = abs(quarterTurns) % 2 == 1
+        return sideways ? previewSize.height / previewSize.width : previewSize.width / previewSize.height
     }
 
     private var quarterTurns: Int { Int((camera.photoToPreview / 90).rounded()) }
@@ -418,7 +431,7 @@ struct CaptureView: View {
         } else {
             camera.onFrame = nil
         }
-        guide.setReference(guideOn ? ghost : nil)
+        guide.setReference(guideOn ? ghost : nil, aspect: visibleAspect)
     }
 
     private func selectAngle(_ newAngle: String) {
@@ -494,13 +507,14 @@ struct CaptureView: View {
         }
         let angle = self.angle
         let alsoToPhotos = saveToPhotos
+        let crop = visibleAspect
         camera.capture { data in
             guard let data else {
                 saveError = "The photo did not take. Try again."
                 return
             }
             Task {
-                if let shot = await store.addShot(data, to: target.id, angle: angle, source: .camera) {
+                if let shot = await store.addShot(data, to: target.id, angle: angle, source: .camera, crop: crop) {
                     lastShot = shot
                     // A new reference is shown straight away, so the next photo can be checked against it.
                     if shot.isReference, ghostID == nil { ghostID = shot.id }

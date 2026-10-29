@@ -76,13 +76,22 @@ final class Guide: ObservableObject {
     @Published private(set) var reading: GuideReading?
     @Published private(set) var matched = false
     private var reference: CIImage?
+    /// The part of the picture the screen shows (width over height, upright), so the guide lines up
+    /// what you see rather than the whole camera frame.
+    private var aspect: CGFloat?
     private var busy = false
+    private var lastReading = Date.distantPast
+    /// No reading for a second: shown so it is clear the guide is on but can't find the reference.
+    @Published private(set) var searching = false
     private var linedSince: Date?
     private nonisolated static let width: CGFloat = 480
 
-    func setReference(_ image: UIImage?) {
-        reference = image.flatMap { CIImage(image: $0) }.map(Self.prepared)
+    func setReference(_ image: UIImage?, aspect: CGFloat?) {
+        self.aspect = aspect
+        reference = image.flatMap { CIImage(image: $0) }.map { Self.prepared(Self.centred($0, aspect: aspect)) }
         reading = nil
+        searching = false
+        lastReading = .now
         matched = false
         linedSince = nil
     }
@@ -92,7 +101,7 @@ final class Guide: ObservableObject {
         Task { @MainActor in
             guard !self.busy, let reference = self.reference else { return }
             self.busy = true
-            let live = Self.prepared(frame)
+            let live = Self.prepared(Self.centred(frame, aspect: self.aspect))
             let reading = await Task.detached(priority: .utility) { Self.read(live: live, reference: reference) }.value
             self.busy = false
             guard self.reference != nil else { return }
@@ -101,8 +110,16 @@ final class Guide: ObservableObject {
     }
 
     private func update(_ reading: GuideReading?) {
-        self.reading = reading
-        if let reading, reading.lined {
+        if let reading {
+            self.reading = reading
+            lastReading = .now
+        } else if Date.now.timeIntervalSince(lastReading) > 1 {
+            // Keep the last arrows through a single missed frame; clear them after a second.
+            self.reading = nil
+        }
+        let lost = self.reading == nil
+        if searching != lost { searching = lost }
+        if let current = self.reading, current.lined {
             let since = linedSince ?? .now
             linedSince = since
             if !matched, Date.now.timeIntervalSince(since) >= 0.5 {
@@ -116,15 +133,33 @@ final class Guide: ObservableObject {
     }
 
     private nonisolated static func read(live: CIImage, reference: CIImage) -> GuideReading? {
-        let request = VNHomographicImageRegistrationRequest(targetedCIImage: live)
         let handler = VNImageRequestHandler(ciImage: reference, options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            return nil
+        let request = VNHomographicImageRegistrationRequest(targetedCIImage: live)
+        if (try? handler.perform([request])) != nil, let warp = request.results?.first?.warpTransform,
+            let reading = GuideReading.from(warp: warp, reference: reference.extent.size, live: live.extent.size),
+            reading.scale > 0.4, reading.scale < 2.5, abs(reading.turn.dx) < 1, abs(reading.turn.dy) < 1
+        {
+            return reading
         }
-        guard let warp = request.results?.first?.warpTransform else { return nil }
-        return GuideReading.from(warp: warp, reference: reference.extent.size, live: live.extent.size)
+        // Too far off for a full reading: a plain shift still gives move arrows.
+        let shift = VNTranslationalImageRegistrationRequest(targetedCIImage: live)
+        guard (try? handler.perform([shift])) != nil, let t = shift.results?.first?.alignmentTransform else { return nil }
+        let width = live.extent.width
+        let height = live.extent.height
+        guard width > 0, height > 0 else { return nil }
+        // Live shifted by t lands on the reference, so the reference middle sits at -t in live
+        // pixels (Vision counts y up).
+        return GuideReading(move: CGVector(dx: -t.tx / width, dy: t.ty / width), turn: .zero, tilt: 0, scale: 1)
+    }
+
+    /// The middle of a picture at the given width over height.
+    nonisolated static func centred(_ image: CIImage, aspect: CGFloat?) -> CIImage {
+        guard let aspect, aspect > 0 else { return image }
+        let e = image.extent
+        var width = e.width
+        var height = e.height
+        if width / height > aspect { width = height * aspect } else { height = width / aspect }
+        return image.cropped(to: CGRect(x: e.midX - width / 2, y: e.midY - height / 2, width: width, height: height))
     }
 
     /// Grey and small, from the origin, so lighting colour does not matter and it is quick.
@@ -250,8 +285,8 @@ struct EdgeGuide: View {
                 .fixedSize()
         }
         .foregroundStyle(Color.yellow)
-        .shadow(color: .black.opacity(0.35), radius: 1)
-        .opacity(0.3 + 0.3 * cue.strength)
+        .shadow(color: .black.opacity(0.6), radius: 2)
+        .opacity(0.45 + 0.35 * cue.strength)
         .position(position)
     }
 
@@ -273,6 +308,7 @@ struct EdgeGuideFooter: View {
     let reading: GuideReading?
     let matched: Bool
     let mirrored: Bool
+    var searching = false
 
     var body: some View {
         HStack(spacing: 14) {
@@ -287,6 +323,8 @@ struct EdgeGuideFooter: View {
                 }
             } else if matched {
                 Label("LINED UP", systemImage: "checkmark.circle.fill").foregroundStyle(Color.green)
+            } else if searching {
+                Label("FINDING REFERENCE… POINT AT IT", systemImage: "viewfinder").opacity(0.7)
             }
         }
         .font(.system(size: 12, weight: .heavy))

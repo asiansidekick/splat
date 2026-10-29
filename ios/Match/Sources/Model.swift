@@ -264,14 +264,15 @@ final class BoardStore: ObservableObject {
     /// Saves a photo (JPEG, HEIC, PNG or RAW data) to the board at the scene's current take.
     /// The first photo from each angle becomes that angle's reference. Nil if it could not be read or saved.
     @discardableResult
-    func addShot(_ data: Data, to boardID: UUID, angle: String, source: Shot.Source) async -> Shot? {
+    /// `crop` (width over height, upright) trims a camera photo to what the screen showed.
+    func addShot(_ data: Data, to boardID: UUID, angle: String, source: Shot.Source, crop: CGFloat? = nil) async -> Shot? {
         guard let board = board(boardID) else { return nil }
         var shot = Shot(taken: .now, take: take(for: board.scene), angle: angle, source: source)
         let folder = Self.folder(for: boardID)
         let file = shot.file
         let thumbnail = shot.thumbnailFile
         let saved = await Task.detached(priority: .userInitiated) {
-            ImageFile.write(data, to: folder, file: file, thumbnail: thumbnail)
+            ImageFile.write(data, to: folder, file: file, thumbnail: thumbnail, crop: crop)
         }.value
         guard saved, var latest = self.board(boardID) else { return nil }
         if !latest.shots.contains(where: { $0.isReference && $0.angle == angle }) {
@@ -318,10 +319,10 @@ enum ImageFile {
 
     /// Writes the photo upright as a JPEG, plus a small thumbnail for the grids. Decodes straight
     /// to the reduced size, so a 48 MP or RAW photo never sits in memory at full size.
-    static func write(_ data: Data, to folder: URL, file: String, thumbnail: String) -> Bool {
+    static func write(_ data: Data, to folder: URL, file: String, thumbnail: String, crop: CGFloat? = nil) -> Bool {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-            let full = downsample(source, maxPixels: maxPixels),
-            let small = downsample(source, maxPixels: 480),
+            let full = downsample(source, maxPixels: maxPixels).flatMap({ centred($0, aspect: crop) }),
+            let small = downsample(source, maxPixels: 640).flatMap({ centred($0, aspect: crop) }),
             let fullData = UIImage(cgImage: full).jpegData(compressionQuality: 0.85),
             let smallData = UIImage(cgImage: small).jpegData(compressionQuality: 0.8)
         else { return false }
@@ -333,6 +334,17 @@ enum ImageFile {
         } catch {
             return false
         }
+    }
+
+    /// The middle of the picture at the given width over height, as the screen fills with it.
+    static func centred(_ image: CGImage, aspect: CGFloat?) -> CGImage? {
+        guard let aspect, aspect > 0 else { return image }
+        var width = CGFloat(image.width)
+        var height = CGFloat(image.height)
+        if width / height > aspect { width = height * aspect } else { height = width / aspect }
+        let rect = CGRect(x: (CGFloat(image.width) - width) / 2, y: (CGFloat(image.height) - height) / 2,
+                          width: width, height: height).integral
+        return image.cropping(to: rect) ?? image
     }
 
     static func downsample(_ source: CGImageSource, maxPixels: Int) -> CGImage? {
