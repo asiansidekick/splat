@@ -367,7 +367,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                 VStack(spacing: 0) {
                     top()
                         .frame(height: Self.topHeight)
-                        .background(Color.black.opacity(bars ? 0.35 : 0).ignoresSafeArea(edges: .top))
+                        .background(shade(.bottom, .top).ignoresSafeArea(edges: .top))
                     Spacer(minLength: 0)
                     if !landscape {
                         VStack(spacing: 4) {
@@ -384,7 +384,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .padding(.top, 4)
                         .padding(.bottom, 2)
                         .frame(maxWidth: .infinity, minHeight: Self.bottomHeight)
-                        .background(Color.black.opacity(bars ? 0.35 : 0).ignoresSafeArea(edges: .bottom))
+                        .background(shade(.top, .bottom).ignoresSafeArea(edges: .bottom))
                     }
                 }
                 .padding(.trailing, landscape ? max(0, Self.sideWidth - safe.trailing) : 0)
@@ -402,7 +402,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .padding(.vertical, 8)
                         .frame(width: Self.sideWidth)
                         .frame(maxHeight: .infinity)
-                        .background(Color.black.opacity(bars ? 0.35 : 0).ignoresSafeArea(edges: [.top, .bottom]))
+                        .background(shade(.leading, .trailing).ignoresSafeArea(edges: [.top, .bottom]))
                     }
                     // Right against the edge of the screen, like the Camera app, not inset by the
                     // safe area, which only leaves an empty strip.
@@ -418,6 +418,14 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
         }
         .background(Color.black)
         .dynamicTypeSize(...DynamicTypeSize.xLarge)  // big accessibility text would push the controls off screen
+    }
+
+    /// Shading behind the controls that fades into the picture instead of ending in a hard edge:
+    /// clear on the picture side, darkest at the screen edge.
+    private func shade(_ from: UnitPoint, _ to: UnitPoint) -> LinearGradient {
+        LinearGradient(
+            colors: bars ? [.black.opacity(0), .black.opacity(0.3), .black.opacity(0.55)] : [.clear],
+            startPoint: from, endPoint: to)
     }
 }
 
