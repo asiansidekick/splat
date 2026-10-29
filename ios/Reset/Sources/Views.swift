@@ -1391,9 +1391,14 @@ struct ScanProgressOverlay: View {
 /// Live guidance over the camera, from ARKit's tracking: a ring where the reference camera was
 /// aiming (put it on the cross, ticks level), and a pad and bar showing where to step to stand
 /// where the photo was taken. It fades away once everything lines up.
+/// The alignment guide, with no text. A ball split into two hemispheres shows every axis:
+/// - where it sits: where to point the phone (put it on the cross);
+/// - its horizon: how to turn the phone about its own axis (level it);
+/// - its size: forward or back (small: step forward, big: step back, until it fills the circle);
+/// - the dot inside: which way to step sideways or raise or lower the phone (bring it to the middle).
 struct AimOverlay: View {
     @ObservedObject var state: AimState
-    /// Size of the fixed circle; the aim ring matches it when standing at the right distance.
+    /// Size of the fixed circle; the ball matches it when standing at the right distance.
     static let circle: CGFloat = 150
 
     var body: some View {
@@ -1413,7 +1418,7 @@ struct AimOverlay: View {
                         path.addLine(to: shown)
                     }
                     .stroke(colour.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [6, 8]))
-                    // Fixed: where the ring should end up, the same size.
+                    // Fixed: where the ball should end up, the same size.
                     Circle()
                         .stroke(Color.white.opacity(0.85), style: StrokeStyle(lineWidth: 3, dash: [10, 8]))
                         .frame(width: AimOverlay.circle, height: AimOverlay.circle)
@@ -1429,16 +1434,10 @@ struct AimOverlay: View {
                             .rotationEffect(.radians(atan2(point.x - centre.x, centre.y - point.y)))
                             .position(shown)
                     } else {
-                        let ring = AimOverlay.circle * state.scale
-                        AimRing(roll: state.roll)
-                            .stroke(colour, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                            .frame(width: ring, height: ring)
+                        HemisphereBall(roll: state.roll, right: offset.right, up: offset.up, colour: colour)
+                            .frame(width: AimOverlay.circle * state.scale, height: AimOverlay.circle * state.scale)
                             .position(shown)
                     }
-                    StepIndicator(right: offset.right, up: offset.up, colour: colour)
-                        .position(centre)
-                    GuideLabel(offset: offset, colour: colour)
-                        .position(x: centre.x, y: min(size.height - 40, centre.y + AimOverlay.circle / 2 + 110))
                 }
                 .shadow(color: .black.opacity(0.7), radius: 2)
                 .animation(.linear(duration: 0.1), value: shown)
@@ -1451,35 +1450,52 @@ struct AimOverlay: View {
     }
 }
 
-/// Large, plain directions under the guide: how far to step and which way.
-struct GuideLabel: View {
-    let offset: Offset
+/// Two hemispheres split by a horizon that tilts with the turn still needed, and a dot that sits
+/// off centre by the sideways and up or down step still needed.
+struct HemisphereBall: View {
+    let roll: Double
+    let right: Float
+    let up: Float
     let colour: Color
 
     var body: some View {
-        let lines = GuideLabel.lines(for: offset)
-        if !lines.isEmpty {
-            VStack(spacing: 2) {
-                ForEach(lines, id: \.self) { line in
-                    Text(line)
+        GeometryReader { geometry in
+            let d = min(geometry.size.width, geometry.size.height)
+            let r = d / 2
+            // 50 cm of step reaches the rim; further stays on the rim.
+            let reach = r * 0.8
+            let step = SIMD2<Float>(right, up)
+            let length = simd_length(step)
+            let shown = length > 0.5 ? step / length * 0.5 : step
+            let dot = CGPoint(x: r + CGFloat(shown.x / 0.5) * reach, y: r - CGFloat(shown.y / 0.5) * reach)
+            ZStack {
+                ZStack {
+                    // Upper hemisphere filled, lower one clear, so up is always obvious.
+                    Rectangle()
+                        .fill(colour.opacity(0.35))
+                        .frame(width: d, height: r)
+                        .offset(y: -r / 2)
+                    Rectangle()
+                        .fill(colour)
+                        .frame(width: d, height: 4)
                 }
+                .frame(width: d, height: d)
+                .clipShape(Circle())
+                .rotationEffect(.radians(roll))
+                Circle()
+                    .stroke(colour, lineWidth: 5)
+                // Where the dot belongs.
+                Circle()
+                    .stroke(Color.white, lineWidth: 3)
+                    .frame(width: 30, height: 30)
+                Circle()
+                    .fill(colour)
+                    .overlay(Circle().stroke(Color.black.opacity(0.6), lineWidth: 2))
+                    .frame(width: 22, height: 22)
+                    .position(dot)
             }
-            .font(.system(size: 26, weight: .heavy, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(colour)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 14))
+            .frame(width: d, height: d)
         }
-    }
-
-    static func lines(for offset: Offset) -> [String] {
-        func cm(_ value: Float) -> Int { Int((abs(value) * 100).rounded()) }
-        var lines: [String] = []
-        if cm(offset.forward) >= 5 { lines.append("\(offset.forward > 0 ? "FORWARD" : "BACK") \(cm(offset.forward)) cm") }
-        if cm(offset.right) >= 5 { lines.append("\(offset.right > 0 ? "RIGHT" : "LEFT") \(cm(offset.right)) cm") }
-        if cm(offset.up) >= 5 { lines.append("\(offset.up > 0 ? "UP" : "DOWN") \(cm(offset.up)) cm") }
-        return lines
     }
 }
 
@@ -1497,48 +1513,3 @@ struct Crosshair: Shape {
     }
 }
 
-/// A ring with four ticks, turned by how far the phone needs to turn about its own axis.
-struct AimRing: Shape {
-    var roll: Double
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let r = min(rect.width, rect.height) / 2
-        let c = CGPoint(x: rect.midX, y: rect.midY)
-        path.addEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
-        for k in 0..<4 {
-            let angle = roll + Double(k) * .pi / 2
-            let direction = CGPoint(x: sin(angle), y: -cos(angle))
-            // The top tick is longer, so it is clear which way is up.
-            let outer = k == 0 ? 1.6 : 1.35
-            path.move(to: CGPoint(x: c.x + direction.x * r * 0.6, y: c.y + direction.y * r * 0.6))
-            path.addLine(to: CGPoint(x: c.x + direction.x * r * outer, y: c.y + direction.y * r * outer))
-        }
-        return path
-    }
-}
-
-/// Outside the circle: a big arrow showing which way to step sideways or to raise or lower the
-/// phone, so standing in the wrong place does not pass for lined up when only the aim matches.
-struct StepIndicator: View {
-    let right: Float
-    let up: Float
-    let colour: Color
-
-    private var centimetres: Int { Int((simd_length(SIMD2(right, up)) * 100).rounded()) }
-
-    var body: some View {
-        let strength = CGFloat(min(1, (simd_length(SIMD2(right, up)) / 0.5).squareRoot()))
-        ZStack {
-            if centimetres >= 5 {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 36 + 20 * strength, weight: .black))
-                    .foregroundStyle(colour)
-                    .offset(y: -(AimOverlay.circle / 2 + 44))
-                    .rotationEffect(.radians(Double(atan2(right, up))))
-            }
-        }
-        .frame(width: AimOverlay.circle + 160, height: AimOverlay.circle + 160)
-        .animation(.easeOut(duration: 0.2), value: centimetres)
-    }
-}
