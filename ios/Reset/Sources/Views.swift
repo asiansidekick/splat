@@ -160,7 +160,17 @@ struct CameraHome: View {
             Haptics.tap()
             panel = .gallery
         } label: {
+            // The title hangs under the thumbnail so it stays level with the shutter.
             ReferenceThumbnail(reference: references.first, thumbnails: thumbnails, size: 50)
+                .overlay(alignment: .bottom) {
+                    Text("Reference")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.9), radius: 2)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .offset(y: 18)
+                }
         }
         .buttonStyle(PressScale())
         .accessibilityLabel("References"))
@@ -893,7 +903,7 @@ enum CaptureMode: String, CaseIterable {
     var label: String {
         switch self {
         case .photo: return "PHOTO"
-        case .snapshot: return "REFERENCE"
+        case .snapshot: return "QUICK SCAN"
         case .walk: return "WALK AROUND"
         }
     }
@@ -951,6 +961,19 @@ struct CaptureStage: View {
                 CameraView(session: recorder.session, content: recorder.modelsNode) { view in
                     recorder.placer.attachGestures(to: view)
                     holder.view = view
+                }
+                // The outlines the LiDAR finds while scanning, as the 3D ghost will draw them.
+                GeometryReader { geometry in
+                    Color.clear
+                        .onAppear { recorder.viewport = geometry.size }
+                        .onChange(of: geometry.size) { _, size in recorder.viewport = size }
+                }
+                .allowsHitTesting(false)
+                if let edges = recorder.liveEdges {
+                    Image(uiImage: edges)
+                        .resizable()
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
                 }
                 ModelSizeBadge(placer: recorder.placer)
                 if mode == .snapshot && (recorder.pendingSave || recorder.saving || justSaved) {
@@ -1012,6 +1035,7 @@ struct CaptureStage: View {
         .onChange(of: showPoints) { _, show in
             holder.view?.debugOptions = show ? [.showFeaturePoints] : []
         }
+        .onChange(of: showPoints || justSaved) { _, show in recorder.showEdges = show }
         .onChange(of: useLiDAR) { _, on in
             recorder.stop()
             recorder.prepare(useLiDAR: on)

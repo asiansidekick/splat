@@ -27,7 +27,7 @@ enum Ghost3D {
         let keyframes = ReportPDF.spread(withDepth, count: maxKeyframes)
         var built = Built()
         var filled = [SIMD3<Int32>: Int32]()
-        var noFile = 0, wrongSize = 0, readings = 0, values = 0
+        var noFile = 0, wrongSize = 0, readings = 0, values = 0, withPhoto = 0
 
         for keyframe in keyframes {
             guard let depthFile = keyframe.depthFile,
@@ -44,11 +44,15 @@ enum Ghost3D {
                 imageWidth: keyframe.imageWidth, width: w, height: h)
             readings += GhostCore.add(
                 depth: depth, rgba: rgba, camera: camera, maxPoints: maxPoints, to: &built.cloud, filled: &filled)
-            built.views.append(GhostCore.edgeView(GhostCore.edgePoints(depth: depth, camera: camera), camera: camera))
+            // The photo again at a larger size, so the outlines follow its sharp edges.
+            let f = GhostCore.photoScale
+            let photo = pixels(of: folder.appendingPathComponent(keyframe.imageFile), width: w * f, height: h * f)
+            if photo != nil { withPhoto += 1 }
+            built.views.append(GhostCore.edgeView(GhostCore.edgePoints(depth: depth, camera: camera, photo: photo), camera: camera))
         }
         let edgeCounts = built.views.map(\.edges.positions.count)
         built.note = "\(keyframes.count) depth views (of \(reference.keyframes.count)), missing \(noFile), wrong size \(wrongSize), "
-            + "\(readings) readings of \(values / 4) sampled, \(built.cloud.positions.count) points, edge points per view \(edgeCounts.min() ?? 0)-\(edgeCounts.max() ?? 0)"
+            + "\(readings) readings of \(values / 4) sampled, \(built.cloud.positions.count) points, edge points per view \(edgeCounts.min() ?? 0)-\(edgeCounts.max() ?? 0), \(withPhoto) views outlined from the photo"
         return built
     }
 
@@ -67,6 +71,11 @@ enum Ghost3D {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
             let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { return nil }
+        return pixels(of: image, width: width, height: height)
+    }
+
+    /// An image scaled to the given size, as RGBA bytes, top row first.
+    static func pixels(of image: CGImage, width: Int, height: Int) -> [UInt8]? {
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
         let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in
             guard let context = CGContext(

@@ -240,7 +240,8 @@ struct Built {
 }
 
 func build(
-    _ scene: Scene, poses: [simd_float4x4], random: UnsafeMutablePointer<Random>? = nil, drift: (metres: Float, degrees: Float) = (0.01, 0.4)
+    _ scene: Scene, poses: [simd_float4x4], random: UnsafeMutablePointer<Random>? = nil, drift: (metres: Float, degrees: Float) = (0.01, 0.4),
+    usePhoto: Bool = true
 ) -> Built {
     var built = Built()
     var filled = [SIMD3<Int32>: Int32]()
@@ -254,7 +255,18 @@ func build(
             camera = depthCamera(drifted(pose, random: &random.pointee, metres: drift.metres, degrees: drift.degrees))
         }
         built.readings += GhostCore.add(depth: depth, rgba: shot.rgba, camera: camera, maxPoints: 300_000, to: &built.surface, filled: &filled)
-        built.views.append(GhostCore.edgeView(GhostCore.edgePoints(depth: depth, camera: camera), camera: camera))
+        // The photo the app reads for sharp outlines, a little grainy like a real one.
+        var photo: [UInt8]?
+        if usePhoto {
+            var rgba = scene.capture(truth.scaled(by: Float(GhostCore.photoScale))).rgba
+            if let random {
+                for i in rgba.indices where i % 4 != 3 {
+                    rgba[i] = UInt8(max(0, min(255, Float(rgba[i]) + random.pointee.normal() * 3)))
+                }
+            }
+            photo = rgba
+        }
+        built.views.append(GhostCore.edgeView(GhostCore.edgePoints(depth: depth, camera: camera, photo: photo), camera: camera))
     }
     return built
 }
@@ -422,10 +434,11 @@ func testGhost() {
     _ = GhostCore.render(surface: big, edges: bigEdges, states: nil, camera: front, strength: 0.8)
     let seconds = Date().timeIntervalSince(start)
     expect(seconds < 0.5, String(format: "300,000 points and 60,000 edge points drawn in %.3f s on the test Mac", seconds))
-    let edgeStart = Date()
     let depth = scene.capture(depthCamera(frontPose)).depth
-    for _ in 0..<10 { _ = GhostCore.edgePoints(depth: depth, camera: depthCamera(frontPose)) }
-    expect(Date().timeIntervalSince(edgeStart) < 2, String(format: "edges of 10 depth views found in %.2f s", Date().timeIntervalSince(edgeStart)))
+    let photo = scene.capture(depthCamera(frontPose).scaled(by: Float(GhostCore.photoScale))).rgba
+    let photoStart = Date()
+    for _ in 0..<10 { _ = GhostCore.edgePoints(depth: depth, camera: depthCamera(frontPose), photo: photo) }
+    expect(Date().timeIntervalSince(photoStart) < 3, String(format: "edges of 10 depth views with photos found in %.2f s", Date().timeIntervalSince(photoStart)))
 }
 
 // MARK: Real-world depth
@@ -491,6 +504,16 @@ func testNoisyGhost() {
     let segments = edgeSegments(scene)
     let offEdge = built.allEdges.filter { p in !segments.contains { distance(p, $0) < 0.08 } }.count
     expect(offEdge < built.allEdges.count / 8, "noisy: edge points off the real edges: \(offEdge) of \(built.allEdges.count)")
+    // The photo's sharp edges put the lines closer to the real edges than LiDAR alone.
+    var sameRandom = Random(state: 7)
+    let depthOnly = withUnsafeMutablePointer(to: &sameRandom) { build(scene, poses: poses, random: $0, usePhoto: false) }
+    func meanDistance(_ points: [SIMD3<Float>]) -> Float {
+        let near = points.map { p in segments.map { distance(p, $0) }.min() ?? 1 }.filter { $0 < 0.08 }
+        return near.reduce(0, +) / Float(max(near.count, 1))
+    }
+    let withPhoto = meanDistance(built.allEdges)
+    let withoutPhoto = meanDistance(depthOnly.allEdges)
+    expect(withPhoto < withoutPhoto, String(format: "noisy: lines sit %.1f mm from the real edges with the photo, %.1f mm with LiDAR alone", withPhoto * 1000, withoutPhoto * 1000))
     let cells = GhostCore.cells(of: cloud.positions)
 
     for (name, eye) in [("front", SIMD3<Float>(-0.2, 1.1, -0.3)), ("close", SIMD3<Float>(0.3, 0.8, -0.9))] {
@@ -619,6 +642,27 @@ func testImageMatch() {
             continue
         }
         expect(result.aligned == expected, String(format: "%@: corner error %.3f of the width, %@", name, result.error, result.aligned ? "lined up" : "not lined up"))
+    }
+    // Where the reference's middle shows live, for the guide balls: turn the phone a little
+    // right and down, with no step, so the answer is exact wherever things are in the room.
+    let referenceCamera = screenCamera(lookAt(eye: SIMD3(0, 1, 0), target: target))
+    let ahead = referenceCamera.cameraToWorld * SIMD4<Float>(0, 0, -50, 1)
+    for (name, aim) in [("turned right and down", SIMD3<Float>(0.05, 0.12, -1.5)), ("turned left and up", SIMD3<Float>(-0.04, 0.2, -1.5))] {
+        let liveCamera = screenCamera(lookAt(eye: SIMD3(0, 1, 0), target: aim))
+        guard let expected = liveCamera.project(SIMD3(ahead.x, ahead.y, ahead.z)),
+            let result = ImageMatch.compare(
+                live: ciImage(scene.capture(liveCamera).rgba, width: liveCamera.width, height: liveCamera.height),
+                reference: reference),
+            let centre = result.centre
+        else {
+            expect(false, "\(name): no middle found")
+            continue
+        }
+        let x = CGFloat(expected.u) / CGFloat(liveCamera.width)
+        let y = CGFloat(expected.v) / CGFloat(liveCamera.height)
+        expect(
+            abs(centre.x - x) < 0.01 && abs(centre.y - y) < 0.01,
+            String(format: "%@: reference middle shows at %.3f, %.3f (should be %.3f, %.3f)", name, centre.x, centre.y, x, y))
     }
     // The photo is stored smaller than the live picture: sizes must not matter.
     let small = reference.transformed(by: CGAffineTransform(scaleX: 0.5, y: 0.5))

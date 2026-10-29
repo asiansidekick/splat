@@ -236,10 +236,40 @@ enum GhostCore {
     /// back sharply) and creases (where a surface folds, like the corner of a box). Found on a
     /// smoothed copy of the depth so LiDAR noise and smeared readings do not draw lines, and only
     /// lines several pixels long are kept.
-    static func edgePoints(depth raw: [Float], camera: PinholeCamera) -> [SIMD3<Float>] {
+    ///
+    /// With the view's photo (`photoScale` times the depth map's size, RGBA, top row first) the
+    /// lines follow the photo's sharp edges where they run beside the LiDAR's blurry ones, which
+    /// makes clean, unbroken outlines; where the photo shows no edge (same colour both sides)
+    /// the LiDAR's edge is kept.
+    static func edgePoints(depth raw: [Float], camera: PinholeCamera, photo: [UInt8]? = nil) -> [SIMD3<Float>] {
         let w = camera.width
         let h = camera.height
         guard raw.count == w * h, w > 8, h > 8 else { return [] }
+        let (edge, depth) = depthEdges(raw, width: w, height: h, camera: camera)
+        if let photo, photo.count == w * h * photoScale * photoScale * 4 {
+            return photoEdgePoints(edge: edge, depth: depth, photo: photo, camera: camera)
+        }
+        var out: [SIMD3<Float>] = []
+        for y in 0..<h {
+            for x in 0..<w where edge[y * w + x] {
+                out.append(camera.unproject(u: Float(x), v: Float(y), depth: depth[y * w + x]))
+            }
+        }
+        return out
+    }
+
+    /// Photos are read at this many times the depth map's size for the outlines.
+    static let photoScale = 3
+    /// Photo edges count within this many depth pixels of a LiDAR edge.
+    static let photoReach = 3
+    /// How sharp a photo edge must be to start a line, and to carry one on: the colour change
+    /// across three pixels, 0 to 4 (4 is black to white).
+    static let photoStrong: Float = 0.3
+    static let photoWeak: Float = 0.12
+
+    /// The LiDAR's edge pixels (silhouettes and creases) and the smoothed depth they were
+    /// found on.
+    static func depthEdges(_ raw: [Float], width w: Int, height h: Int, camera: PinholeCamera) -> (edge: [Bool], depth: [Float]) {
         let depth = smoothed(raw, width: w, height: h)
         func at(_ x: Int, _ y: Int) -> Float { depth[y * w + x] }
         func valid(_ d: Float) -> Bool { d > 0.1 && d < maxRange }
@@ -323,9 +353,112 @@ enum GhostCore {
             }
         }
 
-        let kept = keepLarge(edge, width: w, height: h, minSize: 8)
+        return (keepLarge(edge, width: w, height: h, minSize: 8), depth)
+    }
+
+    /// The photo's sharp edges near the LiDAR's edges, placed in 3D at the nearer depth beside
+    /// them (an outline belongs to the thing in front), plus the LiDAR's edges where the photo
+    /// has none.
+    static func photoEdgePoints(edge: [Bool], depth: [Float], photo: [UInt8], camera: PinholeCamera) -> [SIMD3<Float>] {
+        let w = camera.width
+        let h = camera.height
+        let f = photoScale
+        let W = w * f
+        let H = h * f
+        func dilated(_ mask: [Bool], _ r: Int) -> [Bool] {
+            var out = [Bool](repeating: false, count: w * h)
+            for y in 0..<h {
+                for x in 0..<w where mask[y * w + x] {
+                    for ny in max(0, y - r)...min(h - 1, y + r) {
+                        for nx in max(0, x - r)...min(w - 1, x + r) { out[ny * w + nx] = true }
+                    }
+                }
+            }
+            return out
+        }
+        let reach = dilated(edge, photoReach)
+        let work = dilated(edge, photoReach + 1)
+
+        // Edge strength, Sobel on whichever colour changes most, only near the LiDAR's edges.
+        var magnitude = [Float](repeating: 0, count: W * H)
+        var gradX = [Float](repeating: 0, count: W * H)
+        var gradY = [Float](repeating: 0, count: W * H)
+        photo.withUnsafeBufferPointer { p in
+            for Y in 1..<(H - 1) {
+                for X in 1..<(W - 1) where work[(Y / f) * w + X / f] {
+                    var best: Float = 0, bx: Float = 0, by: Float = 0
+                    for c in 0..<3 {
+                        func v(_ x: Int, _ y: Int) -> Float { Float(p[(y * W + x) * 4 + c]) }
+                        let gx = (v(X + 1, Y - 1) + 2 * v(X + 1, Y) + v(X + 1, Y + 1)) - (v(X - 1, Y - 1) + 2 * v(X - 1, Y) + v(X - 1, Y + 1))
+                        let gy = (v(X - 1, Y + 1) + 2 * v(X, Y + 1) + v(X + 1, Y + 1)) - (v(X - 1, Y - 1) + 2 * v(X, Y - 1) + v(X + 1, Y - 1))
+                        let m = gx * gx + gy * gy
+                        if m > best { best = m; bx = gx; by = gy }
+                    }
+                    let I = Y * W + X
+                    magnitude[I] = best.squareRoot() / 255
+                    gradX[I] = bx
+                    gradY[I] = by
+                }
+            }
+        }
+        // Thin to the ridge across the edge, then keep weak ridges joined to strong ones.
+        var ridge = [Bool](repeating: false, count: W * H)
+        var stack: [Int] = []
+        var kept = [Bool](repeating: false, count: W * H)
+        for Y in 1..<(H - 1) {
+            for X in 1..<(W - 1) where reach[(Y / f) * w + X / f] {
+                let I = Y * W + X
+                let m = magnitude[I]
+                guard m > photoWeak else { continue }
+                let gx = abs(gradX[I])
+                let gy = abs(gradY[I])
+                let step: Int
+                if gx > 2.414 * gy { step = 1 }
+                else if gy > 2.414 * gx { step = W }
+                else { step = gradX[I] * gradY[I] > 0 ? W + 1 : W - 1 }
+                guard m >= magnitude[I - step], m >= magnitude[I + step] else { continue }
+                ridge[I] = true
+                if m > photoStrong { kept[I] = true; stack.append(I) }
+            }
+        }
+        while let I = stack.popLast() {
+            for n in [I - W - 1, I - W, I - W + 1, I - 1, I + 1, I + W - 1, I + W, I + W + 1] where ridge[n] && !kept[n] {
+                kept[n] = true
+                stack.append(n)
+            }
+        }
+        kept = keepLarge(kept, width: W, height: H, minSize: 4 * f)
+
+        // Depth for a photo pixel: the nearest reading within two depth pixels.
+        func nearDepth(_ x: Int, _ y: Int) -> Float? {
+            var best = Float.infinity
+            for ny in max(0, y - 2)...min(h - 1, y + 2) {
+                for nx in max(0, x - 2)...min(w - 1, x + 2) {
+                    let d = depth[ny * w + nx]
+                    if d > 0.1, d < maxRange, d < best { best = d }
+                }
+            }
+            return best.isFinite ? best : nil
+        }
         var out: [SIMD3<Float>] = []
-        for i in 0..<(w * h) where kept[i] { out.append(points[i]) }
+        var covered = [Bool](repeating: false, count: w * h)
+        let scale = Float(f)
+        for Y in 0..<H {
+            for X in 0..<W where kept[Y * W + X] {
+                let x = X / f
+                let y = Y / f
+                guard let d = nearDepth(x, y) else { continue }
+                out.append(camera.unproject(u: (Float(X) + 0.5) / scale - 0.5, v: (Float(Y) + 0.5) / scale - 0.5, depth: d))
+                for ny in max(0, y - 2)...min(h - 1, y + 2) {
+                    for nx in max(0, x - 2)...min(w - 1, x + 2) { covered[ny * w + nx] = true }
+                }
+            }
+        }
+        for y in 0..<h {
+            for x in 0..<w where edge[y * w + x] && !covered[y * w + x] {
+                out.append(camera.unproject(u: Float(x), v: Float(y), depth: depth[y * w + x]))
+            }
+        }
         return out
     }
 

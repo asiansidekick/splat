@@ -16,6 +16,10 @@ enum ImageMatch {
     struct Result {
         /// How far the furthest corner must move to line up, as a share of the picture's width.
         let error: CGFloat
+        /// Where the middle of the reference photo shows in the live picture, from 0 to 1 across
+        /// and down (top left is 0, 0), in the sensor's orientation like `ARFrame.capturedImage`.
+        /// The guide balls use it so they meet when the pictures do.
+        let centre: CGPoint?
         var aligned: Bool { error < ImageMatch.tolerance }
     }
 
@@ -32,7 +36,19 @@ enum ImageMatch {
             return nil
         }
         guard let observation = request.results?.first as? VNImageHomographicAlignmentObservation else { return nil }
-        return Result(error: cornerError(observation.warpTransform, size: b.extent.size))
+        let warp = observation.warpTransform
+        return Result(
+            error: cornerError(warp, size: b.extent.size),
+            centre: centre(warp, reference: b.extent.size, live: a.extent.size))
+    }
+
+    /// The warp takes the live picture onto the reference, so its inverse takes the reference's
+    /// middle to where that shows live. Vision counts pixels up from the bottom.
+    static func centre(_ warp: simd_float3x3, reference: CGSize, live: CGSize) -> CGPoint? {
+        guard abs(warp.determinant) > 1e-9, live.width > 0, live.height > 0 else { return nil }
+        let p = warp.inverse * SIMD3<Float>(Float(reference.width) / 2, Float(reference.height) / 2, 1)
+        guard abs(p.z) > 1e-6 else { return nil }
+        return CGPoint(x: CGFloat(p.x / p.z) / live.width, y: 1 - CGFloat(p.y / p.z) / live.height)
     }
 
     /// How far the warp moves the picture's corners, at most, as a share of its width.

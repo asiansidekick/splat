@@ -9,13 +9,14 @@ struct HelpView: View {
         NavigationStack {
             List {
                 Section("Recording a reference") {
-                    step("camera.circle", "The app opens on the camera. In Reference mode, point at the props and tap the shutter: that saves a reference for the setup shown at the top (tap it to change scene or setup).")
+                    step("camera.circle", "The app opens on the camera. In Quick Scan mode, point at the props and tap the shutter: that saves a reference for the setup shown at the top (tap it to change scene or setup).")
                     step("figure.walk", "For a fuller reference, swipe the modes to Walk around, tap record, walk slowly round the props and tap stop.")
                     step("cube", "Mock up the set: tap 3D models and pick one or more USDZ files. They appear at real size where the camera points. Drag to move, pinch to scale (the size shows as you pinch), twist to turn. Photo mode takes a picture with them in, ready to share.")
+                    step("viewfinder", "With LiDAR on, yellow outlines of the props appear while it scans: the edges the 3D ghost will show.")
                     step("hourglass", "If the room is not mapped yet, it saves by itself as soon as it is. Move the phone gently side to side.")
                 }
                 Section("Between takes") {
-                    step("photo.on.rectangle", "Tap the thumbnail bottom left. Swipe to the setup you want and tap Load. The grid button shows them all by scene.")
+                    step("photo.on.rectangle", "Tap the Reference thumbnail bottom left. Swipe to the setup you want and tap Load. The grid button shows them all by scene.")
                     step("circle.lefthalf.filled", "Line the props up with the see-through ghost using the two balls: a see-through one rides in front of the phone, and a solid one just like it hangs where the reference camera was looking. Move and turn until they become one ball, with both dividing lines level. The phone's ball tips to show tilt: more yellow showing means tilt up, more dark means tilt down. A yellow arrow at the edge points the way when the sphere is off screen. The spheres fade once lined up, or swipe the modes to 3D ghost to check from anywhere.")
                     step("cube.transparent", "3D ghost (LiDAR references): walk round the set from any side. The reference shows as yellow outlines of the props as they were, so the set stays visible underneath. A blue outline marks something that has gone from that spot: put it back until the blue goes. Changes at the top adds LiDAR change colours to the photo ghost.")
                     step("square.fill", "With LiDAR, red marks something in front of where it was, blue where something is missing.")

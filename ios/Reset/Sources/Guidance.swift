@@ -65,12 +65,18 @@ final class AimState: ObservableObject {
     func update(point: CGPoint, roll: Double, offset: Offset, balls: Balls? = nil) {
         if let old = self.point, hypot(old.x - point.x, old.y - point.y) < 1.5, abs(self.roll - roll) < 0.01,
             let previous = self.offset, simd_distance(previous.vector, offset.vector) < 0.003,
-            (self.balls == nil) == (balls == nil), abs((self.balls?.tip ?? 0) - (balls?.tip ?? 0)) < 0.02
+            (self.balls == nil) == (balls == nil), abs((self.balls?.tip ?? 0) - (balls?.tip ?? 0)) < 0.02,
+            Self.near(self.balls?.target, balls?.target), Self.near(self.balls?.live, balls?.live)
         { return }
         self.point = point
         self.roll = roll
         self.offset = offset
         if self.balls != balls { self.balls = balls }
+    }
+
+    private static func near(_ a: CGPoint?, _ b: CGPoint?) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        return hypot(a.x - b.x, a.y - b.y) < 1.5
     }
 
     func clear() {

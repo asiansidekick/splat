@@ -69,6 +69,11 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Whether the live picture lines up with the reference photo, checked a few times a second
     /// once the phone is close. Nil when not close or when the pictures could not be paired.
     private var imageAligned: Bool?
+    /// How far the room's guide ball must move on screen so the balls meet when the pictures
+    /// do: ARKit's position can be a few centimetres out after finding the room, which the photo
+    /// ghost hides (it only turns) but the balls show. Set from each picture check, eased in.
+    private var ballShiftGoal: CGVector = .zero
+    private var ballShift: CGVector = .zero
     /// When the ghost last moved to another reference view.
     private var lastSwitch = Date.distantPast
     private var imageBusy = false
@@ -281,13 +286,26 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         // Close: within 25 cm and 10°. Then the pictures decide, since the position ARKit found
         // the room at can be a few centimetres out; without a picture check, the position does.
         let close = simd_length(move.vector) < 0.25 && move.turn < 10 * .pi / 180
+        let local = camera.inverse * SIMD4<Float>(spot, 1)
+        func ball(_ centre: SIMD3<Float>) -> (CGPoint, CGFloat) {
+            let middle = frame.camera.projectPoint(centre, orientation: orientation, viewportSize: viewport)
+            let edge = frame.camera.projectPoint(
+                centre + up * GuideSpheres.radius, orientation: orientation, viewportSize: viewport)
+            return (middle, hypot(edge.x - middle.x, edge.y - middle.y))
+        }
+        let (targetPoint, targetRadius) = ball(spot)
+        let (livePoint, liveRadius) = ball(GuideSpheres.livePosition(camera: camera, orientation: orientation))
         if close {
-            checkImage(frame: frame, keyframe: target)
+            let gap: CGVector? = local.z < -0.05
+                ? CGVector(dx: targetPoint.x - livePoint.x, dy: targetPoint.y - livePoint.y) : nil
+            checkImage(frame: frame, keyframe: target, ballGap: gap)
         } else {
             imageAligned = nil
+            ballShiftGoal = .zero
         }
+        ballShift.dx += (ballShiftGoal.dx - ballShift.dx) * 0.3
+        ballShift.dy += (ballShiftGoal.dy - ballShift.dy) * 0.3
         let lined = close && (imageAligned ?? move.isMatched)
-        let local = camera.inverse * SIMD4<Float>(spot, 1)
         let point: CGPoint
         if local.z < -0.05 {
             point = frame.camera.projectPoint(spot, orientation: orientation, viewportSize: viewport)
@@ -305,16 +323,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         // them: where each is on screen and how big. Gone once lined up.
         var balls: AimState.Balls?
         if !lined, local.z < -0.05 {
-            func ball(_ centre: SIMD3<Float>) -> (CGPoint, CGFloat) {
-                let middle = frame.camera.projectPoint(centre, orientation: orientation, viewportSize: viewport)
-                let edge = frame.camera.projectPoint(
-                    centre + up * GuideSpheres.radius, orientation: orientation, viewportSize: viewport)
-                return (middle, hypot(edge.x - middle.x, edge.y - middle.y))
-            }
-            let (targetPoint, targetRadius) = ball(spot)
-            let (livePoint, liveRadius) = ball(GuideSpheres.livePosition(camera: camera, orientation: orientation))
+            let shifted = CGPoint(x: targetPoint.x + ballShift.dx, y: targetPoint.y + ballShift.dy)
             balls = AimState.Balls(
-                target: targetPoint, targetRadius: targetRadius, live: livePoint, liveRadius: liveRadius,
+                target: shifted, targetRadius: targetRadius, live: livePoint, liveRadius: liveRadius,
                 tip: Double(GuideSpheres.tip(camera: camera, keyframe: target, orientation: orientation)))
         }
         aim.update(point: point, roll: Double(roll), offset: move, balls: balls)
@@ -336,8 +347,10 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         return best
     }
 
-    /// Compares the live picture with the reference photo on a background queue.
-    private func checkImage(frame: ARFrame, keyframe: Keyframe) {
+    /// Compares the live picture with the reference photo on a background queue. `ballGap` is
+    /// how far apart ARKit's position puts the guide balls on screen; the picture says how far
+    /// apart they should be (where the reference's middle shows, from the middle of the screen).
+    private func checkImage(frame: ARFrame, keyframe: Keyframe, ballGap: CGVector?) {
         guard !imageBusy, Date().timeIntervalSince(lastImageCheck) > 0.3,
             let source = ghostSource, source.id == keyframe.id
         else { return }
@@ -345,11 +358,20 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         imageBusy = true
         let live = CIImage(cvPixelBuffer: frame.capturedImage)
         let reference = source.image
+        let display = frame.displayTransform(for: orientation, viewportSize: viewport)
+        let size = viewport
         imageQueue.async {
             let result = ImageMatch.compare(live: live, reference: reference)
             Task { @MainActor in
                 self.imageBusy = false
                 self.imageAligned = result?.aligned
+                guard let ballGap, let centre = result?.centre else { return }
+                let shown = centre.applying(display)
+                let gap = CGVector(dx: (shown.x - 0.5) * size.width, dy: (shown.y - 0.5) * size.height)
+                let goal = CGVector(dx: gap.dx - ballGap.dx, dy: gap.dy - ballGap.dy)
+                // A wild answer means Vision paired the wrong things: keep the last one.
+                guard hypot(goal.dx, goal.dy) < 0.2 * max(size.width, size.height) else { return }
+                self.ballShiftGoal = goal
             }
         }
     }
