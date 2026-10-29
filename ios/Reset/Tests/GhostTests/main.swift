@@ -225,23 +225,91 @@ func testDepthBuffers() {
 
 // MARK: Ghost
 
+/// The ghost built the way the app builds it: surfaces and edges from each depth view, edges
+/// kept where enough views agree.
+struct Built {
+    var surface = GhostCore.Cloud()
+    var edges = GhostCore.Cloud()
+    var readings = 0
+}
+
+func build(_ scene: Scene, poses: [simd_float4x4], random: UnsafeMutablePointer<Random>? = nil) -> Built {
+    var built = Built()
+    var filled = [SIMD3<Int32>: Int32]()
+    var edgeCells = [SIMD3<Int32>: Int32]()
+    for (view, pose) in poses.enumerated() {
+        let truth = depthCamera(pose)
+        let shot = scene.capture(truth)
+        var depth = shot.depth
+        var camera = truth
+        if let random {
+            depth = lidar(depth, width: truth.width, height: truth.height, random: &random.pointee)
+            camera = depthCamera(drifted(pose, random: &random.pointee))
+        }
+        built.readings += GhostCore.add(depth: depth, rgba: shot.rgba, camera: camera, maxPoints: 300_000, to: &built.surface, filled: &filled)
+        GhostCore.addEdges(GhostCore.edgePoints(depth: depth, camera: camera), view: view, maxPoints: 300_000, to: &built.edges, filled: &edgeCells)
+    }
+    if poses.count >= 4 { built.edges = GhostCore.agreedEdges(built.edges, filled: edgeCells, minViews: 3) }
+    return built
+}
+
+func isYellow(_ rgba: [UInt8], _ i: Int) -> Bool { rgba[i * 4] > 150 && rgba[i * 4 + 1] > 100 && rgba[i * 4 + 2] < 60 }
+func isBlue(_ rgba: [UInt8], _ i: Int) -> Bool { rgba[i * 4 + 2] > 150 && rgba[i * 4] < 100 }
+
+/// The real edges of the scene in 3D: the boxes' twelve edges and where the floor meets the wall.
+func edgeSegments(_ scene: Scene) -> [(SIMD3<Float>, SIMD3<Float>)] {
+    var segments: [(SIMD3<Float>, SIMD3<Float>)] = [(SIMD3(-20, 0, -3), SIMD3(20, 0, -3))]
+    for box in [scene.box] + (scene.table.map { [$0] } ?? []) {
+        let l = box.low, h = box.high
+        let corners = (0..<8).map { i in SIMD3<Float>(i & 1 == 0 ? l.x : h.x, i & 2 == 0 ? l.y : h.y, i & 4 == 0 ? l.z : h.z) }
+        for i in 0..<8 {
+            for bit in [1, 2, 4] where i & bit == 0 { segments.append((corners[i], corners[i | bit])) }
+        }
+    }
+    return segments
+}
+
+func distance(_ p: SIMD3<Float>, _ segment: (SIMD3<Float>, SIMD3<Float>)) -> Float {
+    let (a, b) = segment
+    let t = max(0, min(1, simd_dot(p - a, b - a) / max(simd_length_squared(b - a), 1e-9)))
+    return simd_length(p - (a + (b - a) * t))
+}
+
+/// Line pixels in all, and those nowhere near a real edge of the scene (clutter).
+func strayLines(_ ghost: [UInt8], scene: Scene, camera: PinholeCamera) -> (lines: Int, stray: Int) {
+    let depth = scene.capture(camera).depth
+    let segments = edgeSegments(scene)
+    let w = camera.width, h = camera.height
+    var lines = 0, stray = 0
+    for i in 0..<(w * h) where isYellow(ghost, i) {
+        lines += 1
+        let x = i % w, y = i / w
+        var near = false
+        search: for dy in stride(from: -6, through: 6, by: 2) where y + dy >= 0 && y + dy < h {
+            for dx in stride(from: -6, through: 6, by: 2) where x + dx >= 0 && x + dx < w {
+                let d = depth[(y + dy) * w + x + dx]
+                guard d > 0 else { continue }
+                let p = camera.unproject(u: Float(x + dx), v: Float(y + dy), depth: d)
+                if segments.contains(where: { distance(p, $0) < 0.06 }) { near = true; break search }
+            }
+        }
+        if !near { stray += 1 }
+    }
+    return (lines, stray)
+}
+
 func testGhost() {
     print("3D ghost")
     let scene = Scene()
     let boxCentre = SIMD3<Float>(0, 0.15, -1.5)
     // The reference: a few views from in front, like a short walk round.
-    var cloud = GhostCore.Cloud()
-    var filled = [SIMD3<Int32>: Int32]()
     let eyes: [SIMD3<Float>] = [SIMD3(0, 1, 0), SIMD3(-0.4, 1, -0.1), SIMD3(0.4, 1, -0.1), SIMD3(0, 0.6, -0.5)]
-    var readings = 0
-    for eye in eyes {
-        let camera = depthCamera(lookAt(eye: eye, target: boxCentre))
-        let shot = scene.capture(camera)
-        readings += GhostCore.add(depth: shot.depth, rgba: shot.rgba, camera: camera, maxPoints: 300_000, to: &cloud, filled: &filled)
-    }
-    expect(cloud.positions.count > 5_000, "built \(cloud.positions.count) points from \(readings) readings")
+    let built = build(scene, poses: eyes.map { lookAt(eye: $0, target: boxCentre) })
+    let cloud = built.surface
+    expect(cloud.positions.count > 5_000, "built \(cloud.positions.count) points from \(built.readings) readings")
+    expect(built.edges.positions.count > 200, "found \(built.edges.positions.count) edge points")
 
-    // Every point lies on a surface of the scene.
+    // Every point lies on a surface of the scene, and every edge point on a real edge.
     var worst: Float = 0
     for p in cloud.positions {
         let onFloor = abs(p.y)
@@ -253,37 +321,37 @@ func testGhost() {
         worst = max(worst, min(onFloor, onWall, onBox))
     }
     expect(worst < 0.01, "points sit on the scene's surfaces (worst \(worst) m)")
+    let segments = edgeSegments(scene)
+    let offEdge = built.edges.positions.filter { p in !segments.contains { distance(p, $0) < 0.05 } }.count
+    expect(offEdge < built.edges.positions.count / 20, "edge points off the real edges: \(offEdge) of \(built.edges.positions.count)")
 
-    // Drawn from the first reference view: outlines round the box, none across the open floor.
+    // Drawn from the first reference view: lines round the box, no clutter.
     let frontPose = lookAt(eye: SIMD3(0, 1, 0), target: boxCentre)
     let front = screenCamera(frontPose)
-    let frontGhost = GhostCore.render(cloud: cloud, states: nil, camera: front, strength: 0.8)
-    let frontPhoto = scene.capture(front).rgba
-    func yellow(_ rgba: [UInt8], _ i: Int) -> Bool { rgba[i * 4] > 150 && rgba[i * 4 + 1] > 100 && rgba[i * 4 + 2] < 60 }
-    func blueAt(_ rgba: [UInt8], _ i: Int) -> Bool { rgba[i * 4 + 2] > 150 && rgba[i * 4] < 100 }
-    let outline = (0..<(front.width * front.height)).filter { yellow(frontGhost, $0) }.count
-    expect(outline > 300, "front view: yellow outline round the box (\(outline) pixels)")
-    // Pixels well away from the box (more than 60 px from where it projects) are open floor or wall.
+    let frontGhost = GhostCore.render(surface: cloud, edges: built.edges, states: nil, camera: front, strength: 0.8)
+    let (frontLines, frontStray) = strayLines(frontGhost, scene: scene, camera: front)
+    expect(frontLines > 300, "front view: \(frontLines) line pixels")
+    expect(frontStray < 40, "front view: \(frontStray) line pixels away from real edges")
     let boxAt = front.project(boxCentre)!
-    let stray = (0..<(front.width * front.height)).filter { i in
-        let x = Float(i % front.width), y = Float(i / front.width)
-        return hypot(x - boxAt.u, y - boxAt.v) > 140 && yellow(frontGhost, i)
+    let roundBox = (0..<(front.width * front.height)).filter { i in
+        hypot(Float(i % front.width) - boxAt.u, Float(i / front.width) - boxAt.v) < 120 && isYellow(frontGhost, i)
     }.count
-    expect(stray < 60, "front view: \(stray) outline pixels away from the box")
+    expect(roundBox > 200, "front view: \(roundBox) line pixels round the box")
     let covered = stride(from: 3, to: frontGhost.count, by: 4).filter { frontGhost[$0] > 0 }.count
-    expect(covered < front.width * front.height / 10, "front view: outlines only, \(covered) pixels drawn")
-    save("1-front-unchecked", ghost: frontGhost, background: frontPhoto, width: front.width, height: front.height)
+    expect(covered < front.width * front.height / 12, "front view: lines only, \(covered) pixels drawn")
+    save("1-front-unchecked", ghost: frontGhost, background: scene.capture(front).rgba, width: front.width, height: front.height)
 
-    // From the side, somewhere the reference never stood: the outline still sits round the box.
+    // From the side, somewhere the reference never stood: the lines still sit round the box.
     let sidePose = lookAt(eye: SIMD3(1.2, 0.9, -0.7), target: boxCentre)
     let side = screenCamera(sidePose)
-    let sideGhost = GhostCore.render(cloud: cloud, states: nil, camera: side, strength: 0.8)
+    let sideGhost = GhostCore.render(surface: cloud, edges: built.edges, states: nil, camera: side, strength: 0.8)
     let sideBox = side.project(boxCentre)!
     let nearBox = (0..<(side.width * side.height)).filter { i in
-        let x = Float(i % side.width), y = Float(i / side.width)
-        return hypot(x - sideBox.u, y - sideBox.v) < 140 && yellow(sideGhost, i)
+        hypot(Float(i % side.width) - sideBox.u, Float(i / side.width) - sideBox.v) < 140 && isYellow(sideGhost, i)
     }.count
-    expect(nearBox > 200, "side view: \(nearBox) outline pixels round the box")
+    expect(nearBox > 150, "side view: \(nearBox) line pixels round the box")
+    let (_, sideStray) = strayLines(sideGhost, scene: scene, camera: side)
+    expect(sideStray < 40, "side view: \(sideStray) line pixels away from real edges")
     save("2-side-unchecked", ghost: sideGhost, background: scene.capture(side).rgba, width: side.width, height: side.height)
 
     let cells = GhostCore.cells(of: cloud.positions)
@@ -301,14 +369,17 @@ func testGhost() {
     let sideDepth = depthCamera(sidePose)
     let same = scene.capture(sideDepth)
     for _ in 0..<4 {
-        GhostCore.check(positions: cloud.positions, scores: &scores, depth: same.depth, confidence: nil, camera: sideDepth)
+        GhostCore.check(positions: cloud.positions, scores: &scores, depth: same.depth, confidence: nil, camera: sideDepth, window: 2)
     }
     var states = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
     let goneWhenSame = states.filter { $0 == .gone }.count
     let matched = states.filter { $0 == .matched }.count
     expect(goneWhenSame == 0, "unchanged set: \(goneWhenSame) points gone")
     expect(matched > cloud.positions.count / 4, "unchanged set: \(matched) of \(cloud.positions.count) points matched")
-    let sameGhost = GhostCore.render(cloud: cloud, states: states, camera: side, strength: 0.8)
+    var edgeStates = GhostCore.edgeStates(edges: built.edges.positions, surfaceStates: states, surfaceCells: cells)
+    let sameGhost = GhostCore.render(surface: cloud, edges: built.edges, states: edgeStates, camera: side, strength: 0.8)
+    let blueSame = (0..<(side.width * side.height)).filter { isBlue(sameGhost, $0) }.count
+    expect(blueSame == 0, "unchanged set: \(blueSame) blue pixels")
     save("3-side-nothing-moved", ghost: sameGhost, background: scene.capture(side).rgba, width: side.width, height: side.height)
 
     // The box moved 40 cm to the left, away from the side camera: its old place shows gone.
@@ -318,18 +389,17 @@ func testGhost() {
     scores = [Int8](repeating: 0, count: cloud.positions.count)
     let movedDepth = moved.capture(sideDepth)
     for _ in 0..<4 {
-        GhostCore.check(positions: cloud.positions, scores: &scores, depth: movedDepth.depth, confidence: nil, camera: sideDepth)
+        GhostCore.check(positions: cloud.positions, scores: &scores, depth: movedDepth.depth, confidence: nil, camera: sideDepth, window: 2)
     }
     states = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
     let (goneOnBox, boxTotal) = boxPoints(states, .gone)
     let goneTotal = states.filter { $0 == .gone }.count
-    expect(goneOnBox > boxTotal / 3, "box moved: \(goneOnBox) of \(boxTotal) old box points gone")
+    expect(goneOnBox > boxTotal / 4, "box moved: \(goneOnBox) of \(boxTotal) old box points gone")
     expect(goneTotal - goneOnBox < goneOnBox / 5, "box moved: only \(goneTotal - goneOnBox) gone points away from the box")
-    let movedGhost = GhostCore.render(cloud: cloud, states: states, camera: side, strength: 0.8)
-    let blue = (0..<(side.width * side.height)).filter { blueAt(movedGhost, $0) }.count
-    expect(blue > 200, "box moved: \(blue) blue outline pixels where it was")
-    let blueSame = (0..<(side.width * side.height)).filter { blueAt(sameGhost, $0) }.count
-    expect(blueSame == 0, "unchanged set: \(blueSame) blue pixels")
+    edgeStates = GhostCore.edgeStates(edges: built.edges.positions, surfaceStates: states, surfaceCells: cells)
+    let movedGhost = GhostCore.render(surface: cloud, edges: built.edges, states: edgeStates, camera: side, strength: 0.8)
+    let blue = (0..<(side.width * side.height)).filter { isBlue(movedGhost, $0) }.count
+    expect(blue > 100, "box moved: \(blue) blue line pixels where it was")
     save("4-side-box-moved", ghost: movedGhost, background: moved.capture(side).rgba, width: side.width, height: side.height)
 
     // Speed: a full-size cloud draws fast enough to follow the phone.
@@ -338,10 +408,17 @@ func testGhost() {
         big.positions.append(SIMD3(Float(i % 600) * 0.003 - 0.9, Float((i / 600) % 500) * 0.002, -1.5 - Float(i % 7) * 0.01))
         big.colors.append(SIMD3(0.5, 0.5, 0.5))
     }
+    var bigEdges = GhostCore.Cloud()
+    bigEdges.positions = Array(big.positions.prefix(60_000))
+    bigEdges.colors = Array(big.colors.prefix(60_000))
     let start = Date()
-    _ = GhostCore.render(cloud: big, states: nil, camera: front, strength: 0.8)
+    _ = GhostCore.render(surface: big, edges: bigEdges, states: nil, camera: front, strength: 0.8)
     let seconds = Date().timeIntervalSince(start)
-    expect(seconds < 0.5, String(format: "300,000 points drawn in %.3f s on the test Mac", seconds))
+    expect(seconds < 0.5, String(format: "300,000 points and 60,000 edge points drawn in %.3f s on the test Mac", seconds))
+    let edgeStart = Date()
+    let depth = scene.capture(depthCamera(frontPose)).depth
+    for _ in 0..<10 { _ = GhostCore.edgePoints(depth: depth, camera: depthCamera(frontPose)) }
+    expect(Date().timeIntervalSince(edgeStart) < 2, String(format: "edges of 10 depth views found in %.2f s", Date().timeIntervalSince(edgeStart)))
 }
 
 // MARK: Real-world depth
@@ -389,68 +466,34 @@ func drifted(_ pose: simd_float4x4, random: inout Random, metres: Float = 0.01, 
     return out
 }
 
-/// Pixels on the true outlines of the scene as `camera` sees it, widened by `margin` pixels.
-func trueEdges(_ scene: Scene, _ camera: PinholeCamera, margin: Int) -> [Bool] {
-    let depth = scene.capture(camera).depth
-    let w = camera.width, h = camera.height
-    var near = [Bool](repeating: false, count: w * h)
-    for y in 0..<h {
-        for x in 0..<w {
-            let d = depth[y * w + x]
-            guard d > 0 else { continue }
-            for (dx, dy) in [(1, 0), (0, 1)] where x + dx < w && y + dy < h {
-                let n = depth[(y + dy) * w + x + dx]
-                if n > 0, abs(n - d) > 0.05 { near[y * w + x] = true }
-            }
-        }
-    }
-    var out = near
-    for y in 0..<h {
-        for x in 0..<w where near[y * w + x] {
-            for dy in -margin...margin where y + dy >= 0 && y + dy < h {
-                for dx in -margin...margin where x + dx >= 0 && x + dx < w { out[(y + dy) * w + x + dx] = true }
-            }
-        }
-    }
-    return out
-}
-
 func testNoisyGhost() {
     print("3D ghost with real-world depth (noise, gaps, drift)")
     var scene = Scene()
     scene.table = Box(low: SIMD3(-1.1, 0.7, -2.4), high: SIMD3(-0.4, 0.74, -1.7))
     let centre = SIMD3<Float>(-0.2, 0.3, -1.7)
     var random = Random(state: 7)
-    // A slow walk round, like a real reference: many views, each with its own small drift.
-    var cloud = GhostCore.Cloud()
-    var filled = [SIMD3<Int32>: Int32]()
-    for k in 0..<30 {
-        let angle = Float(k) / 29 * 1.2 - 0.6
+    // A walk round like Phil's: about 20 views, each with its own small drift.
+    let poses = (0..<20).map { k -> simd_float4x4 in
+        let angle = Float(k) / 19 * 1.2 - 0.6
         let eye = SIMD3<Float>(sin(angle) * 1.4 - 0.2, 0.9 + Float(k % 3) * 0.15, cos(angle) * 1.4 - 1.7)
-        let pose = lookAt(eye: eye, target: centre)
-        let truth = depthCamera(pose)
-        let shot = scene.capture(truth)
-        let noisy = lidar(shot.depth, width: truth.width, height: truth.height, random: &random)
-        let believed = depthCamera(drifted(pose, random: &random))
-        GhostCore.add(depth: noisy, rgba: shot.rgba, camera: believed, maxPoints: 300_000, to: &cloud, filled: &filled)
+        return lookAt(eye: eye, target: centre)
     }
-    cloud = GhostCore.solid(cloud)
-    expect(cloud.positions.count > 20_000, "noisy: built \(cloud.positions.count) points")
-
-    func yellow(_ rgba: [UInt8], _ i: Int) -> Bool { rgba[i * 4] > 150 && rgba[i * 4 + 1] > 100 && rgba[i * 4 + 2] < 60 }
-    func blue(_ rgba: [UInt8], _ i: Int) -> Bool { rgba[i * 4 + 2] > 150 && rgba[i * 4] < 100 }
+    let built = withUnsafeMutablePointer(to: &random) { build(scene, poses: poses, random: $0) }
+    let cloud = built.surface
+    expect(cloud.positions.count > 20_000, "noisy: built \(cloud.positions.count) points, \(built.edges.positions.count) edge points")
+    let segments = edgeSegments(scene)
+    let offEdge = built.edges.positions.filter { p in !segments.contains { distance(p, $0) < 0.06 } }.count
+    expect(offEdge < built.edges.positions.count / 10, "noisy: edge points off the real edges: \(offEdge) of \(built.edges.positions.count)")
     let cells = GhostCore.cells(of: cloud.positions)
 
     for (name, eye) in [("front", SIMD3<Float>(-0.2, 1.1, -0.3)), ("close", SIMD3<Float>(0.3, 0.8, -0.9))] {
         let pose = lookAt(eye: eye, target: centre)
         let camera = screenCamera(pose)
-        let ghost = GhostCore.render(cloud: cloud, states: nil, camera: camera, strength: 0.8)
-        let allowed = trueEdges(scene, camera, margin: 14)
+        let ghost = GhostCore.render(surface: cloud, edges: built.edges, states: nil, camera: camera, strength: 0.8)
         let total = camera.width * camera.height
-        let lines = (0..<total).filter { yellow(ghost, $0) }.count
-        let stray = (0..<total).filter { !allowed[$0] && yellow(ghost, $0) }.count
-        expect(lines > 400, "noisy \(name): \(lines) outline pixels round the props")
-        expect(stray < total / 400, "noisy \(name): \(stray) outline pixels on flat floor or table (clutter)")
+        let (lines, stray) = strayLines(ghost, scene: scene, camera: camera)
+        expect(lines > 400, "noisy \(name): \(lines) line pixels on the props' edges")
+        expect(stray < lines / 20, "noisy \(name): \(stray) line pixels away from real edges (clutter)")
         let photo = scene.capture(camera).rgba
         save("5-noisy-\(name)", ghost: ghost, background: photo, width: camera.width, height: camera.height)
 
@@ -459,11 +502,14 @@ func testNoisyGhost() {
         let liveTruth = depthCamera(pose)
         for _ in 0..<10 {
             let live = lidar(scene.capture(liveTruth).depth, width: liveTruth.width, height: liveTruth.height, random: &random)
-            GhostCore.check(positions: cloud.positions, scores: &scores, depth: live, confidence: nil, camera: depthCamera(drifted(pose, random: &random)))
+            GhostCore.check(
+                positions: cloud.positions, scores: &scores, depth: live, confidence: nil,
+                camera: depthCamera(drifted(pose, random: &random, metres: 0.02)), window: 2)
         }
-        let states = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
-        let checked = GhostCore.render(cloud: cloud, states: states, camera: camera, strength: 0.8)
-        let falseBlue = (0..<total).filter { blue(checked, $0) }.count
+        var states = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
+        var edgeStates = GhostCore.edgeStates(edges: built.edges.positions, surfaceStates: states, surfaceCells: cells)
+        let checked = GhostCore.render(surface: cloud, edges: built.edges, states: edgeStates, camera: camera, strength: 0.8)
+        let falseBlue = (0..<total).filter { isBlue(checked, $0) }.count
         expect(falseBlue == 0, "noisy \(name), nothing moved: \(falseBlue) blue pixels")
         if name == "front" {
             save("6-noisy-front-nothing-moved", ghost: checked, background: photo, width: camera.width, height: camera.height)
@@ -473,12 +519,15 @@ func testNoisyGhost() {
             scores = [Int8](repeating: 0, count: cloud.positions.count)
             for _ in 0..<10 {
                 let live = lidar(gone.capture(liveTruth).depth, width: liveTruth.width, height: liveTruth.height, random: &random)
-                GhostCore.check(positions: cloud.positions, scores: &scores, depth: live, confidence: nil, camera: depthCamera(drifted(pose, random: &random)))
+                GhostCore.check(
+                    positions: cloud.positions, scores: &scores, depth: live, confidence: nil,
+                    camera: depthCamera(drifted(pose, random: &random)), window: 2)
             }
-            let goneStates = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
-            let goneGhost = GhostCore.render(cloud: cloud, states: goneStates, camera: camera, strength: 0.8)
-            let shown = (0..<total).filter { blue(goneGhost, $0) }.count
-            expect(shown > 200, "noisy front, box taken away: \(shown) blue pixels where it stood")
+            states = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
+            edgeStates = GhostCore.edgeStates(edges: built.edges.positions, surfaceStates: states, surfaceCells: cells)
+            let goneGhost = GhostCore.render(surface: cloud, edges: built.edges, states: edgeStates, camera: camera, strength: 0.8)
+            let shown = (0..<total).filter { isBlue(goneGhost, $0) }.count
+            expect(shown > 100, "noisy front, box taken away: \(shown) blue line pixels where it stood")
             save("7-noisy-box-gone", ghost: goneGhost, background: gone.capture(camera).rgba, width: camera.width, height: camera.height)
         }
     }

@@ -13,7 +13,10 @@ enum Ghost3D {
     static let maxKeyframes = 150
 
     struct Built: @unchecked Sendable {
+        /// The surfaces, used to hide edges behind things and to spot what has gone.
         var cloud = GhostCore.Cloud()
+        /// The edges of things: what the ghost draws.
+        var edges = GhostCore.Cloud()
         /// What happened while building, for the feedback log.
         var note = ""
     }
@@ -24,9 +27,10 @@ enum Ghost3D {
         let keyframes = ReportPDF.spread(withDepth, count: maxKeyframes)
         var built = Built()
         var filled = [SIMD3<Int32>: Int32]()
+        var edgeCells = [SIMD3<Int32>: Int32]()
         var noFile = 0, wrongSize = 0, readings = 0, values = 0
 
-        for keyframe in keyframes {
+        for (view, keyframe) in keyframes.enumerated() {
             guard built.cloud.positions.count < maxPoints else { break }
             guard let depthFile = keyframe.depthFile,
                 let data = try? Data(contentsOf: folder.appendingPathComponent(depthFile))
@@ -42,12 +46,15 @@ enum Ghost3D {
                 imageWidth: keyframe.imageWidth, width: w, height: h)
             readings += GhostCore.add(
                 depth: depth, rgba: rgba, camera: camera, maxPoints: maxPoints, to: &built.cloud, filled: &filled)
+            GhostCore.addEdges(
+                GhostCore.edgePoints(depth: depth, camera: camera), view: view, maxPoints: maxPoints, to: &built.edges, filled: &edgeCells)
         }
-        // With a walk round, every real surface is seen from several views; specks seen once go.
-        let all = built.cloud.positions.count
-        if keyframes.count >= 8 { built.cloud = GhostCore.solid(built.cloud) }
+        // With a walk round, every real edge is found from several views; lines only one view
+        // found are noise.
+        let allEdges = built.edges.positions.count
+        if keyframes.count >= 4 { built.edges = GhostCore.agreedEdges(built.edges, filled: edgeCells, minViews: 3) }
         built.note = "\(keyframes.count) depth views (of \(reference.keyframes.count)), missing \(noFile), wrong size \(wrongSize), "
-            + "\(readings) readings of \(values / 4) sampled, \(built.cloud.positions.count) points (of \(all) before dropping specks)"
+            + "\(readings) readings of \(values / 4) sampled, \(built.cloud.positions.count) points, \(built.edges.positions.count) edge points (of \(allEdges) before dropping lone ones)"
         return built
     }
 
@@ -82,12 +89,14 @@ enum Ghost3D {
     /// Keeps each point's score between live checks and draws the ghost. Use from one queue.
     final class Viewer: @unchecked Sendable {
         let cloud: GhostCore.Cloud
+        let edges: GhostCore.Cloud
         private var scores: [Int8]
         private let cells: [SIMD3<Int32>: Int32]
         private(set) var goneCount = 0
 
-        init(cloud: GhostCore.Cloud) {
+        init(cloud: GhostCore.Cloud, edges: GhostCore.Cloud) {
             self.cloud = cloud
+            self.edges = edges
             scores = [Int8](repeating: 0, count: cloud.positions.count)
             cells = GhostCore.cells(of: cloud.positions)
         }
@@ -102,10 +111,11 @@ enum Ghost3D {
                     width: live.width, height: live.height)
                 GhostCore.check(
                     positions: cloud.positions, scores: &scores, depth: live.depth, confidence: live.confidence,
-                    camera: depthCamera)
-                states = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
+                    camera: depthCamera, window: 2)
+                let surface = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
+                states = GhostCore.edgeStates(edges: edges.positions, surfaceStates: surface, surfaceCells: cells)
             }
-            let rgba = GhostCore.render(cloud: cloud, states: states, camera: camera, strength: strength)
+            let rgba = GhostCore.render(surface: cloud, edges: edges, states: states, camera: camera, strength: strength)
             // Counted from the drawing, so the banner only mentions blue lines that are showing.
             var blue = 0
             for o in stride(from: 0, to: rgba.count, by: 4) where rgba[o + 2] > 200 && rgba[o] < 100 { blue += 1 }

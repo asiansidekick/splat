@@ -3,10 +3,10 @@ import SceneKit
 import UIKit
 import simd
 
-/// The alignment guide as two spheres in 3D, each split into hemispheres. One sits in the room
-/// where it would have been in front of the reference camera; the other rides in front of the
-/// phone. Standing and pointing where the reference was taken puts the solid sphere right in the
-/// middle of the glass one, with their hemisphere lines level with each other. So the spheres show
+/// The alignment guide as two identical spheres in 3D, each split into hemispheres. One sits in
+/// the room where it would have been in front of the reference camera; the other, see-through,
+/// rides in front of the phone. Standing and pointing where the reference was taken lays one
+/// exactly over the other, with their hemisphere lines level. So the spheres show
 /// every axis at once: where they sit (aim and step), how big the solid one looks (forward or
 /// back) and how the line tilts (turn).
 @MainActor
@@ -23,7 +23,7 @@ final class GuideSpheres {
     let root = SCNNode()
     private let targetSphere: SCNMaterial
     private var shown = false
-    /// The AR view the glass sphere rides on. Its camera node can appear after the view is made,
+    /// The AR view the see-through sphere rides on. Its camera node can appear after the view is made,
     /// and a new view is made if the screen is rebuilt, so every update checks it.
     private weak var view: ARSCNView?
     private var wasMatched = false
@@ -35,39 +35,19 @@ final class GuideSpheres {
         solid.materials = [targetSphere]
         target.geometry = solid
 
-        // A little bigger, so the solid sphere shows inside it with an even rim when lined up.
-        // Flat lit and mostly opaque so it reads clearly over any set, with a bold white ring
-        // round its edge (it always faces the camera, since the sphere rides on it).
-        let glass = SCNSphere(radius: GuideSpheres.radius * 1.2)
-        glass.segmentCount = 48
-        let glassMaterial = GuideSpheres.material(top: UIColor(white: 1, alpha: 1), bottom: UIColor(white: 0.55, alpha: 1), line: .black)
-        glassMaterial.lightingModel = .constant
-        glassMaterial.transparency = 0.6
-        glassMaterial.writesToDepthBuffer = false
-        glass.materials = [glassMaterial]
-        fixed.geometry = glass
-        let rings: [(radius: CGFloat, pipe: CGFloat, color: UIColor)] = [
-            (GuideSpheres.radius * 1.2 + 0.006, 0.0025, .black),
-            (GuideSpheres.radius * 1.2, 0.005, .white),
-        ]
-        for (radius, pipe, color) in rings {
-            let torus = SCNTorus(ringRadius: radius, pipeRadius: pipe)
-            torus.ringSegmentCount = 96
-            let material = SCNMaterial()
-            material.diffuse.contents = color
-            material.lightingModel = .constant
-            material.readsFromDepthBuffer = false
-            material.writesToDepthBuffer = false
-            torus.materials = [material]
-            let ring = SCNNode(geometry: torus)
-            ring.eulerAngles.x = .pi / 2
-            ring.renderingOrder = 102
-            fixed.addChildNode(ring)
-        }
+        // The same ball riding on the phone, see-through, so lining up means making the two
+        // balls one: same size, same place, the same line across the middle.
+        let live = SCNSphere(radius: GuideSpheres.radius)
+        live.segmentCount = 48
+        let liveMaterial = GuideSpheres.material(top: .systemYellow, bottom: UIColor(white: 0.12, alpha: 1), line: .black)
+        liveMaterial.transparency = 0.5
+        liveMaterial.writesToDepthBuffer = false
+        live.materials = [liveMaterial]
+        fixed.geometry = live
 
-        // Always drawn on top of the set and of any models: the glass sphere first, then the
-        // solid one over it so it shows at full strength, then the ring.
-        for (node, order) in [(fixed, 100), (target, 101)] {
+        // Always drawn on top of the set and of any models: the room's ball first, then the
+        // see-through one over it.
+        for (node, order) in [(target, 100), (fixed, 101)] {
             node.renderingOrder = order
             node.geometry?.firstMaterial?.readsFromDepthBuffer = false
         }
@@ -77,7 +57,7 @@ final class GuideSpheres {
         fixed.opacity = 0
     }
 
-    /// Puts the glass sphere in front of the AR view's camera, so it moves with the phone exactly.
+    /// Puts the see-through sphere in front of the AR view's camera, so it moves with the phone exactly.
     func attach(to view: ARSCNView) {
         self.view = view
         guard let camera = view.pointOfView, fixed.parent !== camera else { return }
@@ -86,7 +66,7 @@ final class GuideSpheres {
     }
 
     /// Places the solid sphere for the reference view and turns both to its up direction.
-    /// `camera` is only used when the glass sphere could not ride on the view's camera node.
+    /// `camera` is only used when the see-through sphere could not ride on the view's camera node.
     func update(target keyframe: Keyframe, camera: simd_float4x4, matched: Bool) {
         let local = GuideSpheres.local(for: keyframe)
         if let view, let eye = view.pointOfView, fixed.parent !== eye { attach(to: view) }
@@ -144,7 +124,7 @@ final class GuideSpheres {
         let material = SCNMaterial()
         material.diffuse.contents = hemispheres(top: top, bottom: bottom, line: line)
         material.lightingModel = .blinn
-        material.specular.contents = UIColor(white: 0.6, alpha: 1)
+        material.specular.contents = UIColor(white: 0.25, alpha: 1)
         // Glows a little so it stays bright in a dim room, keeping some shading to look round.
         material.emission.contents = material.diffuse.contents
         material.emission.intensity = 0.6
