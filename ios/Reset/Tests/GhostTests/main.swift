@@ -259,9 +259,11 @@ func build(
         var photo: [UInt8]?
         if usePhoto {
             var rgba = scene.capture(truth.scaled(by: Float(GhostCore.photoScale))).rgba
-            if let random {
+            if random != nil {
+                // Its own random numbers, so the LiDAR noise and drift stay as before.
+                var grain = Random(state: 1000 + UInt64(built.views.count))
                 for i in rgba.indices where i % 4 != 3 {
-                    rgba[i] = UInt8(max(0, min(255, Float(rgba[i]) + random.pointee.normal() * 3)))
+                    rgba[i] = UInt8(max(0, min(255, Float(rgba[i]) + grain.normal() * 3)))
                 }
             }
             photo = rgba
