@@ -185,45 +185,67 @@ struct HeldCompare: View {
     }
 }
 
-/// REF … NOW along the bottom while paused, with a big knob.
-struct CompareSlider: View {
-    @Binding var toNow: Double
+/// A small cursor showing where a screen swipe has got to: a thin line with a dot and a word at
+/// each end. Only for showing; the swipe itself is on the whole screen.
+struct ScrubCursor: View {
+    let value: Double
+    let start: String
+    let end: String
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text("REF")
-            GeometryReader { geometry in
-                let width = geometry.size.width
-                let knob: CGFloat = 38
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.35)).frame(height: 4)
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: knob, height: knob)
-                        .shadow(color: .black.opacity(0.5), radius: 3)
-                        .offset(x: (width - knob) * toNow)
-                }
-                .frame(maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
-                    toNow = min(1, max(0, Double((drag.location.x - knob / 2) / max(width - knob, 1))))
-                })
+        HStack(spacing: 8) {
+            Text(start)
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.45)).frame(width: 120, height: 2)
+                Circle().fill(Color.white).frame(width: 10, height: 10)
+                    .offset(x: (120 - 10) * CGFloat(min(1, max(0, value))))
             }
-            .frame(height: 44)
-            Text("NOW")
+            .frame(width: 120)
+            Text(end)
         }
-        .font(.footnote.bold())
+        .font(.caption2.bold())
         .foregroundStyle(.white)
-        .shadow(color: .black.opacity(0.7), radius: 2)
-        .accessibilityElement()
-        .accessibilityLabel("Reference to now")
-        .accessibilityValue("\(Int(toNow * 100)) percent now")
-        .accessibilityAdjustableAction { direction in
-            switch direction {
-            case .increment: toNow = min(1, toNow + 0.1)
-            case .decrement: toNow = max(0, toNow - 0.1)
-            @unknown default: break
-            }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.black.opacity(0.3), in: Capsule())
+        .shadow(color: .black.opacity(0.5), radius: 2)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Swiping left or right anywhere sets a value from 0 to 1, a screen width for the full range.
+struct HorizontalSwipe: ViewModifier {
+    @Binding var value: Double
+    /// Called on each change, and with false when the finger lifts.
+    var active: (Bool) -> Void
+    @State private var start: Double?
+
+    init(value: Binding<Double>, active: @escaping (Bool) -> Void = { _ in }) {
+        _value = value
+        self.active = active
+    }
+
+    func body(content: Content) -> some View {
+        GeometryReader { geometry in
+            content
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 12)
+                        .onChanged { drag in
+                            if start == nil {
+                                // Only sideways swipes.
+                                guard abs(drag.translation.width) > abs(drag.translation.height) else { return }
+                                start = value
+                            }
+                            guard let start else { return }
+                            value = min(1, max(0, start + Double(drag.translation.width / max(geometry.size.width, 1))))
+                            active(true)
+                        }
+                        .onEnded { _ in
+                            start = nil
+                            active(false)
+                        })
         }
     }
 }

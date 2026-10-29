@@ -1164,6 +1164,8 @@ struct ResetStage: View {
     /// Compare by wiping across instead of fading.
     @AppStorage("compareWipe") private var wipe = false
     @State private var ghostShown = true
+    /// While swiping the ghost strength, the cursor shows.
+    @State private var swipingStrength = false
     /// While paused: 0 shows the reference, 1 the frozen live picture.
     @State private var toNow = 1.0
     @State private var importingModel = false
@@ -1342,6 +1344,17 @@ struct ResetStage: View {
                             .allowsHitTesting(false)
                     }
                 }
+                if !restorer.paused, reference.models.isEmpty {
+                    // Swipe left or right anywhere for the ghost strength.
+                    Color.clear
+                        .modifier(HorizontalSwipe(value: $ghostOpacity) { active in
+                            if active {
+                                if !swipingStrength { withAnimation(.easeOut(duration: 0.15)) { swipingStrength = true } }
+                            } else {
+                                withAnimation(.easeOut(duration: 0.4).delay(0.8)) { swipingStrength = false }
+                            }
+                        })
+                }
                 if let differences = restorer.differences {
                     Image(uiImage: differences)
                         .resizable()
@@ -1366,24 +1379,13 @@ struct ResetStage: View {
                     }
                     Spacer()
                     if restorer.paused {
-                        CompareSlider(toNow: $toNow)
-                            .frame(maxWidth: 420)
-                            .padding(.horizontal, 12)
+                        ScrubCursor(value: toNow, start: "REF", end: "NOW")
                     } else {
                         ModelOverlay(placer: restorer.placer)
-                        // Always there, small and off to the side, clear of the bottom edge guide.
-                        HStack(spacing: 6) {
-                            Image(systemName: "circle.lefthalf.filled").font(.caption)
-                            Slider(value: $ghostOpacity, in: 0...1)
-                                .accessibilityLabel("Ghost strength")
-                                .tint(.white)
+                        if swipingStrength {
+                            ScrubCursor(value: ghostOpacity, start: "Ghost", end: "\(Int(ghostOpacity * 100))%")
+                                .transition(.opacity)
                         }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.3), in: Capsule())
-                        .frame(width: 150)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .padding(8)
