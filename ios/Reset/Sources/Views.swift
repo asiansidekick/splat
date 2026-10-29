@@ -1336,8 +1336,8 @@ struct ResetStage: View {
                     if let headline, !restorer.paused {
                         Banner(text: headline)
                     }
-                    if restorer.paused, let held = restorer.held {
-                        pausedChip(since: held.since)
+                    if restorer.paused {
+                        pausedChip
                     }
                     if showingStrength, !restorer.paused {
                         Slider(value: $ghostOpacity, in: 0...1, onEditingChanged: { _ in showStrength() })
@@ -1387,17 +1387,15 @@ struct ResetStage: View {
         }
     }
 
-    /// How long the picture has been paused, large, so it is never mistaken for live.
-    private func pausedChip(since: Date) -> some View {
-        TimelineView(.periodic(from: since, by: 1)) { timeline in
-            Text("PAUSED \(max(0, Int(timeline.date.timeIntervalSince(since))))s")
-                .font(.system(size: 26, weight: .heavy).monospacedDigit())
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(Color.orange, in: Capsule())
-                .foregroundStyle(.black)
-        }
-        .allowsHitTesting(false)
+    /// Large, so a paused picture is never mistaken for live.
+    private var pausedChip: some View {
+        Text("PAUSED")
+            .font(.system(size: 26, weight: .heavy))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.orange, in: Capsule())
+            .foregroundStyle(.black)
+            .allowsHitTesting(false)
     }
 
     /// Shows the ghost strength slider for two and a half seconds after the last touch.
