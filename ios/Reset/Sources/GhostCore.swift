@@ -222,8 +222,8 @@ enum GhostCore {
     static let goneColor = SIMD3<Float>(0.25, 0.6, 1)
     /// A silhouette needs a step back of at least this share of the distance, plus `minStep`, so
     /// the gentle slope of a floor or table top never draws a line.
-    static let stepShare: Float = 0.12
-    static let minStep: Float = 0.08
+    static let stepShare: Float = 0.06
+    static let minStep: Float = 0.03
     /// A crease (the edge of a box, where a table top meets its side) turns the surface by at
     /// least this many degrees.
     static let creaseDegrees: Float = 50
@@ -397,28 +397,41 @@ enum GhostCore {
         }
     }
 
-    /// Only the edge points found by at least `minViews` different views, counting nearby points too (the
-    /// same edge lands a voxel or two apart from view to view as tracking drifts).
+    /// Size of the cells edges are matched up in between views: wide enough for the few
+    /// centimetres ARKit's tracking drifts from one view to the next.
+    static let agreeCell: Float = 0.03
+
+    /// Only the edge points found by at least `minViews` different views within a few
+    /// centimetres (the same edge lands a little apart from view to view as tracking drifts).
+    /// If that would leave almost nothing, as with very few views, fewer views must agree.
     static func agreedEdges(_ cloud: Cloud, filled: [SIMD3<Int32>: Int32], minViews: Int) -> Cloud {
-        guard minViews > 1, cloud.views.count == cloud.positions.count else { return cloud }
-        var out = Cloud()
+        guard minViews > 1, cloud.views.count == cloud.positions.count, !cloud.positions.isEmpty else { return cloud }
+        var coarse = [SIMD3<Int32>: UInt64](minimumCapacity: cloud.positions.count / 4)
+        for i in cloud.positions.indices { coarse[cell(cloud.positions[i], size: agreeCell), default: 0] |= cloud.views[i] }
+        var counts = [Int](repeating: 0, count: cloud.positions.count)
         for i in cloud.positions.indices {
-            let c = cell(cloud.positions[i], size: edgeVoxel)
+            let c = cell(cloud.positions[i], size: agreeCell)
             var seen: UInt64 = 0
             for dz: Int32 in -1...1 {
                 for dy: Int32 in -1...1 {
-                    for dx: Int32 in -1...1 {
-                        if let other = filled[c &+ SIMD3(dx, dy, dz)] { seen |= cloud.views[Int(other)] }
-                    }
+                    for dx: Int32 in -1...1 { seen |= coarse[c &+ SIMD3(dx, dy, dz)] ?? 0 }
                 }
             }
-            guard seen.nonzeroBitCount >= minViews else { continue }
-            out.positions.append(cloud.positions[i])
-            out.colors.append(cloud.colors[i])
-            out.hits.append(cloud.hits[i])
-            out.views.append(cloud.views[i])
+            counts[i] = seen.nonzeroBitCount
         }
-        return out
+        for needed in stride(from: minViews, through: 2, by: -1) {
+            var out = Cloud()
+            for i in cloud.positions.indices where counts[i] >= needed {
+                out.positions.append(cloud.positions[i])
+                out.colors.append(cloud.colors[i])
+                out.hits.append(cloud.hits[i])
+                out.views.append(cloud.views[i])
+            }
+            if out.positions.count * 5 >= cloud.positions.count || needed == 2 {
+                return out.positions.count >= 100 ? out : cloud
+            }
+        }
+        return cloud
     }
 
     static func cell(_ point: SIMD3<Float>, size: Float) -> SIMD3<Int32> {

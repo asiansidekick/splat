@@ -21,7 +21,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Where to aim and move, updated every frame for the guidance graphic.
     let aim = AimState()
     /// The two-sphere alignment guide, in 3D.
-    let guide = GuideSpheres()
     @Published var lockedKeyframe: Keyframe?
     /// The LiDAR change colours over the photo ghost. Off at first: on device they flickered and
     /// hid the ghost, and the 3D ghost shows what has gone as outlines instead.
@@ -89,7 +88,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         super.init()
         modelsNode.isHidden = true
         sceneContent.addChildNode(modelsNode)
-        sceneContent.addChildNode(guide.root)
     }
 
     /// Whether the reference has LiDAR depth, which the 3D ghost is built from. Viewing it works on
@@ -228,7 +226,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
                 Diagnostics.log("Reset lost tracking: \(frame.camera.trackingState)")
             }
             modelsNode.isHidden = true
-            guide.hide()
             if !slowToFind, let since = relocalizingSince, Date().timeIntervalSince(since) > 20 {
                 slowToFind = true
                 Diagnostics.log("Reset still looking for the room after 20 s: \(frame.camera.trackingState)")
@@ -247,7 +244,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let screen = Screen.orientation
         if orientation != screen { orientation = screen }
         if show3D {
-            guide.hide()
             // As often as drawing keeps up, so the ghost follows the phone closely.
             draw3D(frame: frame)
         } else if let target = lockedKeyframe ?? current {
@@ -291,7 +287,6 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             imageAligned = nil
         }
         let lined = close && (imageAligned ?? move.isMatched)
-        guide.update(target: target, camera: camera, orientation: orientation, matched: lined)
         let local = camera.inverse * SIMD4<Float>(spot, 1)
         let point: CGPoint
         if local.z < -0.05 {
@@ -306,22 +301,23 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
         let (_, targetUp) = Guidance.screenAxes(target.cameraToWorld, orientation: orientation)
         let roll = atan2(simd_dot(targetUp, right), simd_dot(targetUp, up))
-        // Outlines of both balls, drawn over the photo ghost so the strength slider never fades
-        // them: where each ball is on screen and how big.
-        var rings: AimState.Rings?
+        // The guide balls, drawn flat over the photo ghost so the strength slider never fades
+        // them: where each is on screen and how big. Gone once lined up.
+        var balls: AimState.Balls?
         if !lined, local.z < -0.05 {
-            func ring(_ centre: SIMD3<Float>) -> (CGPoint, CGFloat) {
+            func ball(_ centre: SIMD3<Float>) -> (CGPoint, CGFloat) {
                 let middle = frame.camera.projectPoint(centre, orientation: orientation, viewportSize: viewport)
                 let edge = frame.camera.projectPoint(
-                    centre + up * Float(GuideSpheres.radius), orientation: orientation, viewportSize: viewport)
+                    centre + up * GuideSpheres.radius, orientation: orientation, viewportSize: viewport)
                 return (middle, hypot(edge.x - middle.x, edge.y - middle.y))
             }
-            let liveCentre = (camera * GuideSpheres.local(orientation).columns.3).xyz
-            let (targetPoint, targetRadius) = ring(spot)
-            let (livePoint, liveRadius) = ring(liveCentre)
-            rings = AimState.Rings(target: targetPoint, targetRadius: targetRadius, live: livePoint, liveRadius: liveRadius)
+            let (targetPoint, targetRadius) = ball(spot)
+            let (livePoint, liveRadius) = ball(GuideSpheres.livePosition(camera: camera, orientation: orientation))
+            balls = AimState.Balls(
+                target: targetPoint, targetRadius: targetRadius, live: livePoint, liveRadius: liveRadius,
+                tip: Double(GuideSpheres.tip(camera: camera, keyframe: target, orientation: orientation)))
         }
-        aim.update(point: point, roll: Double(roll), offset: move, rings: rings)
+        aim.update(point: point, roll: Double(roll), offset: move, balls: balls)
         if matched != lined { matched = lined }
     }
 

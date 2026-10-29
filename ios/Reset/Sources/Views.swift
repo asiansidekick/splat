@@ -1210,7 +1210,6 @@ struct ResetStage: View {
             ZStack {
                 CameraView(session: restorer.session, content: restorer.sceneContent) { view in
                     restorer.placer.attachGestures(to: view)
-                    restorer.guide.attach(to: view)
                     holder.view = view
                 }
                 if reference.photoOnly, let photo = restorer.startPhoto {
@@ -1450,7 +1449,7 @@ struct ScanProgressOverlay: View {
 /// Live guidance over the camera, from ARKit's tracking: a ring where the reference camera was
 /// aiming (put it on the cross, ticks level), and a pad and bar showing where to step to stand
 /// where the photo was taken. It fades away once everything lines up.
-/// The guide itself is two spheres in 3D (`GuideSpheres`). When the reference spot is off screen,
+/// The guide itself is two balls (`GuideSpheres`, drawn by `GuideBall`). When the reference spot is off screen,
 /// this points the way to turn to find it.
 struct AimOverlay: View {
     @ObservedObject var state: AimState
@@ -1459,18 +1458,17 @@ struct AimOverlay: View {
         GeometryReader { geometry in
             let size = geometry.size
             let centre = CGPoint(x: size.width / 2, y: size.height / 2)
-            // Crisp outlines of the two guide balls, on top of the photo ghost.
-            if let rings = state.rings {
-                Circle()
-                    .stroke(Color.yellow, lineWidth: 3)
-                    .frame(width: rings.targetRadius * 2, height: rings.targetRadius * 2)
-                    .shadow(color: .black.opacity(0.8), radius: 1.5)
-                    .position(rings.target)
-                Circle()
-                    .stroke(Color.white, lineWidth: 3)
-                    .frame(width: rings.liveRadius * 2, height: rings.liveRadius * 2)
-                    .shadow(color: .black.opacity(0.8), radius: 1.5)
-                    .position(rings.live)
+            // The two guide balls, on top of the photo ghost: the room's ball solid and turned
+            // the way the reference was held, the phone's own ball at half strength, tipping to
+            // show tilt.
+            if let balls = state.balls {
+                GuideBall(roll: state.roll, tip: 0)
+                    .frame(width: balls.targetRadius * 2, height: balls.targetRadius * 2)
+                    .position(balls.target)
+                GuideBall(roll: 0, tip: balls.tip)
+                    .frame(width: balls.liveRadius * 2, height: balls.liveRadius * 2)
+                    .opacity(0.5)
+                    .position(balls.live)
             }
             if let point = state.point, let offset = state.offset, !offset.isMatched {
                 let inset: CGFloat = 50
@@ -1492,3 +1490,46 @@ struct AimOverlay: View {
     }
 }
 
+
+/// A guide ball: yellow on top, dark underneath, a black line between, shaded to look round.
+/// `roll` turns it (radians, clockwise); `tip` leans its top towards you (radians), which moves
+/// the line down and shows more yellow.
+struct GuideBall: View {
+    let roll: Double
+    let tip: Double
+
+    var body: some View {
+        Canvas { context, size in
+            let r = min(size.width, size.height) / 2
+            let disc = Path(ellipseIn: CGRect(x: size.width / 2 - r, y: size.height / 2 - r, width: r * 2, height: r * 2))
+            context.clip(to: disc)
+            context.translateBy(x: size.width / 2, y: size.height / 2)
+            context.rotate(by: .radians(roll))
+            // The line round the middle, seen tipped: the near half of a circle on the ball,
+            // which bows down (more yellow showing) as the top leans towards you.
+            let bow = CGFloat(sin(tip))
+            var line = Path()
+            for step in 0...48 {
+                let x = -r + r * 2 * CGFloat(step) / 48
+                let point = CGPoint(x: x, y: bow * (r * r - x * x).squareRoot())
+                if step == 0 { line.move(to: point) } else { line.addLine(to: point) }
+            }
+            var dark = line
+            dark.addLine(to: CGPoint(x: r, y: r * 2))
+            dark.addLine(to: CGPoint(x: -r, y: r * 2))
+            dark.closeSubpath()
+            context.fill(Path(CGRect(x: -r * 2, y: -r * 2, width: r * 4, height: r * 4)), with: .color(.yellow))
+            context.fill(dark, with: .color(Color(white: 0.12)))
+            context.stroke(line, with: .color(.black), lineWidth: max(2, r * 0.08))
+            context.rotate(by: .radians(-roll))
+            context.translateBy(x: -size.width / 2, y: -size.height / 2)
+            // Light from the top left, darker towards the rim, so it reads as a ball.
+            context.fill(
+                disc,
+                with: .radialGradient(
+                    Gradient(colors: [.white.opacity(0.35), .clear, .black.opacity(0.35)]),
+                    center: CGPoint(x: size.width * 0.35, y: size.height * 0.3), startRadius: 0, endRadius: r * 2.1))
+        }
+        .allowsHitTesting(false)
+    }
+}

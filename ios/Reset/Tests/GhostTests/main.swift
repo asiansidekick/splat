@@ -233,7 +233,9 @@ struct Built {
     var readings = 0
 }
 
-func build(_ scene: Scene, poses: [simd_float4x4], random: UnsafeMutablePointer<Random>? = nil) -> Built {
+func build(
+    _ scene: Scene, poses: [simd_float4x4], random: UnsafeMutablePointer<Random>? = nil, drift: (metres: Float, degrees: Float) = (0.01, 0.4)
+) -> Built {
     var built = Built()
     var filled = [SIMD3<Int32>: Int32]()
     var edgeCells = [SIMD3<Int32>: Int32]()
@@ -244,7 +246,7 @@ func build(_ scene: Scene, poses: [simd_float4x4], random: UnsafeMutablePointer<
         var camera = truth
         if let random {
             depth = lidar(depth, width: truth.width, height: truth.height, random: &random.pointee)
-            camera = depthCamera(drifted(pose, random: &random.pointee))
+            camera = depthCamera(drifted(pose, random: &random.pointee, metres: drift.metres, degrees: drift.degrees))
         }
         built.readings += GhostCore.add(depth: depth, rgba: shot.rgba, camera: camera, maxPoints: 300_000, to: &built.surface, filled: &filled)
         GhostCore.addEdges(GhostCore.edgePoints(depth: depth, camera: camera), view: view, maxPoints: 300_000, to: &built.edges, filled: &edgeCells)
@@ -533,6 +535,51 @@ func testNoisyGhost() {
     }
 }
 
+func testHardCases() {
+    print("3D ghost, hard cases")
+    var scene = Scene()
+    scene.table = Box(low: SIMD3(-1.1, 0.7, -2.4), high: SIMD3(-0.4, 0.74, -1.7))
+    let centre = SIMD3<Float>(-0.2, 0.3, -1.7)
+    var random = Random(state: 11)
+    let poses = (0..<20).map { k -> simd_float4x4 in
+        let angle = Float(k) / 19 * 1.2 - 0.6
+        return lookAt(eye: SIMD3(sin(angle) * 1.4 - 0.2, 0.9 + Float(k % 3) * 0.15, cos(angle) * 1.4 - 1.7), target: centre)
+    }
+    let view = lookAt(eye: SIMD3(-0.2, 1.1, -0.3), target: centre)
+    let camera = screenCamera(view)
+
+    // Tracking drifting 3 cm and a degree between views, worse than the noisy test: the edges
+    // must still agree and draw.
+    let drifty = withUnsafeMutablePointer(to: &random) { build(scene, poses: poses, random: $0, drift: (0.03, 1.0)) }
+    let ghost = GhostCore.render(surface: drifty.surface, edges: drifty.edges, states: nil, camera: camera, strength: 0.8)
+    let (lines, stray) = strayLines(ghost, scene: scene, camera: camera)
+    expect(lines > 400, "3 cm drift: \(lines) line pixels drawn (\(drifty.edges.positions.count) edge points)")
+    expect(stray < lines / 10, "3 cm drift: \(stray) line pixels away from real edges")
+    save("8-drift-3cm", ghost: ghost, background: scene.capture(camera).rgba, width: camera.width, height: camera.height)
+
+    // A one-shot reference (the shutter): a single depth view still draws the props' edges.
+    let single = withUnsafeMutablePointer(to: &random) { build(scene, poses: [view], random: $0) }
+    let one = GhostCore.render(surface: single.surface, edges: single.edges, states: nil, camera: camera, strength: 0.8)
+    let (oneLines, oneStray) = strayLines(one, scene: scene, camera: camera)
+    expect(oneLines > 300, "one view: \(oneLines) line pixels drawn (\(single.edges.positions.count) edge points)")
+    expect(oneStray < oneLines / 10, "one view: \(oneStray) line pixels away from real edges")
+    save("9-one-view", ghost: one, background: scene.capture(camera).rgba, width: camera.width, height: camera.height)
+
+    // Small props on a table: a 6 cm tall box must still be outlined.
+    var small = Scene()
+    small.box = Box(low: SIMD3(-0.1, 0, -1.3), high: SIMD3(0.1, 0.06, -1.15))
+    let smallView = lookAt(eye: SIMD3(0, 0.8, -0.5), target: SIMD3(0, 0.03, -1.22))
+    let smallBuilt = withUnsafeMutablePointer(to: &random) { build(small, poses: [smallView], random: $0) }
+    let smallCamera = screenCamera(smallView)
+    let smallGhost = GhostCore.render(surface: smallBuilt.surface, edges: smallBuilt.edges, states: nil, camera: smallCamera, strength: 0.8)
+    let at = smallCamera.project(SIMD3(0, 0.03, -1.22))!
+    let round = (0..<(smallCamera.width * smallCamera.height)).filter { i in
+        hypot(Float(i % smallCamera.width) - at.u, Float(i / smallCamera.width) - at.v) < 120 && isYellow(smallGhost, i)
+    }.count
+    expect(round > 150, "6 cm box: \(round) line pixels round it")
+    save("10-small-box", ghost: smallGhost, background: small.capture(smallCamera).rgba, width: smallCamera.width, height: smallCamera.height)
+}
+
 // MARK: Picture match
 
 func ciImage(_ rgba: [UInt8], width: Int, height: Int) -> CIImage {
@@ -579,6 +626,7 @@ func testImageMatch() {
 testDepthBuffers()
 testGhost()
 testNoisyGhost()
+testHardCases()
 testImageMatch()
 print(failures == 0 ? "All passed" : "\(failures) failed")
 exit(failures == 0 ? 0 : 1)

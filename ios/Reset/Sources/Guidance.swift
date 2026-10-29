@@ -48,31 +48,35 @@ final class AimState: ObservableObject {
     /// How far to turn the phone about its own axis, radians, clockwise positive.
     @Published private(set) var roll: Double = 0
     @Published private(set) var offset: Offset?
-    /// The two guide balls' outlines on screen, while they are not lined up.
-    @Published private(set) var rings: Rings?
+    /// The two guide balls on screen, while they are not lined up.
+    @Published private(set) var balls: Balls?
 
-    struct Rings: Equatable {
+    struct Balls: Equatable {
+        /// The room's ball: where the reference camera was looking.
         var target: CGPoint
         var targetRadius: CGFloat
+        /// The phone's own ball.
         var live: CGPoint
         var liveRadius: CGFloat
+        /// How far the phone's ball tips, radians: forward (more top showing) means tilt up.
+        var tip: Double
     }
 
-    func update(point: CGPoint, roll: Double, offset: Offset, rings: Rings? = nil) {
+    func update(point: CGPoint, roll: Double, offset: Offset, balls: Balls? = nil) {
         if let old = self.point, hypot(old.x - point.x, old.y - point.y) < 1.5, abs(self.roll - roll) < 0.01,
             let previous = self.offset, simd_distance(previous.vector, offset.vector) < 0.003,
-            (self.rings == nil) == (rings == nil)
+            (self.balls == nil) == (balls == nil), abs((self.balls?.tip ?? 0) - (balls?.tip ?? 0)) < 0.02
         { return }
         self.point = point
         self.roll = roll
         self.offset = offset
-        if self.rings != rings { self.rings = rings }
+        if self.balls != balls { self.balls = balls }
     }
 
     func clear() {
         point = nil
         offset = nil
-        rings = nil
+        balls = nil
     }
 }
 
