@@ -1,10 +1,11 @@
 // Tests for the 3D ghost and depth reading, run on a Mac by CI:
-//   swiftc -O Sources/DepthMap.swift Sources/GhostCore.swift Tests/GhostTests/main.swift -o ghost-tests
+//   swiftc -O Sources/DepthMap.swift Sources/GhostCore.swift Sources/ImageMatch.swift Tests/GhostTests/main.swift -o ghost-tests
 //   ./ghost-tests out
 // A synthetic room (a floor and a red box) is "captured" with depth maps like ARKit's, then the
 // ghost is built, checked against live depth and drawn. Pictures of each step go to `out`.
 
 import CoreGraphics
+import CoreImage
 import CoreVideo
 import Foundation
 import ImageIO
@@ -337,7 +338,51 @@ func testGhost() {
     expect(seconds < 0.5, String(format: "300,000 points drawn in %.3f s on the test Mac", seconds))
 }
 
+// MARK: Picture match
+
+func ciImage(_ rgba: [UInt8], width: Int, height: Int) -> CIImage {
+    let provider = CGDataProvider(data: Data(rgba) as CFData)!
+    let image = CGImage(
+        width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+        provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+    return CIImage(cgImage: image)
+}
+
+func testImageMatch() {
+    print("Picture match")
+    // A busier room than the ghost test, so there is texture to pair up, like a real set.
+    let scene = Scene()
+    let target = SIMD3<Float>(0, 0.15, -1.5)
+    func photo(_ eye: SIMD3<Float>) -> CIImage {
+        let camera = screenCamera(lookAt(eye: eye, target: target))
+        return ciImage(scene.capture(camera).rgba, width: camera.width, height: camera.height)
+    }
+    let reference = photo(SIMD3(0, 1, 0))
+    let cases: [(String, SIMD3<Float>, Bool)] = [
+        ("same place", SIMD3(0, 1, 0), true),
+        ("1 cm to the side", SIMD3(0.01, 1, 0), true),
+        ("15 cm to the side", SIMD3(0.15, 1, 0), false),
+        ("20 cm back", SIMD3(0, 1.08, 0.18), false),
+    ]
+    for (name, eye, expected) in cases {
+        guard let result = ImageMatch.compare(live: photo(eye), reference: reference) else {
+            expect(false, "\(name): pictures could not be paired")
+            continue
+        }
+        expect(result.aligned == expected, String(format: "%@: corner error %.3f of the width, %@", name, result.error, result.aligned ? "lined up" : "not lined up"))
+    }
+    // The photo is stored smaller than the live picture: sizes must not matter.
+    let small = reference.transformed(by: CGAffineTransform(scaleX: 0.5, y: 0.5))
+    if let result = ImageMatch.compare(live: photo(SIMD3(0, 1, 0)), reference: small) {
+        expect(result.aligned, String(format: "different sizes: corner error %.3f", result.error))
+    } else {
+        expect(false, "different sizes: pictures could not be paired")
+    }
+}
+
 testDepthBuffers()
 testGhost()
+testImageMatch()
 print(failures == 0 ? "All passed" : "\(failures) failed")
 exit(failures == 0 ? 0 : 1)

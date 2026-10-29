@@ -67,6 +67,12 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Set after 20 seconds without finding the room, to show tips.
     @Published var slowToFind = false
     private var depthCache: [String: [Float]] = [:]
+    /// Whether the live picture lines up with the reference photo, checked a few times a second
+    /// once the phone is close. Nil when not close or when the pictures could not be paired.
+    private var imageAligned: Bool?
+    private var imageBusy = false
+    private var lastImageCheck = Date.distantPast
+    private let imageQueue = DispatchQueue(label: "image-match")
     private var viewer: Ghost3D.Viewer?
     private var viewerBusy = false
     private let viewerQueue = DispatchQueue(label: "ghost-3d")
@@ -273,7 +279,16 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let (right, up) = Guidance.screenAxes(camera, orientation: orientation)
         // Where the guide's solid sphere sits, in front of where the reference photo was taken.
         let spot = target.position + target.forward * GuideSpheres.distance
-        guide.update(target: target, camera: camera, matched: move.isMatched)
+        // Close: within 25 cm and 10°. Then the pictures decide, since the position ARKit found
+        // the room at can be a few centimetres out; without a picture check, the position does.
+        let close = simd_length(move.vector) < 0.25 && move.turn < 10 * .pi / 180
+        if close {
+            checkImage(frame: frame, keyframe: target)
+        } else {
+            imageAligned = nil
+        }
+        let lined = close && (imageAligned ?? move.isMatched)
+        guide.update(target: target, camera: camera, matched: lined)
         let local = camera.inverse * SIMD4<Float>(spot, 1)
         let point: CGPoint
         if local.z < -0.05 {
@@ -289,7 +304,25 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let (_, targetUp) = Guidance.screenAxes(target.cameraToWorld, orientation: orientation)
         let roll = atan2(simd_dot(targetUp, right), simd_dot(targetUp, up))
         aim.update(point: point, roll: Double(roll), offset: move)
-        if matched != move.isMatched { matched = move.isMatched }
+        if matched != lined { matched = lined }
+    }
+
+    /// Compares the live picture with the reference photo on a background queue.
+    private func checkImage(frame: ARFrame, keyframe: Keyframe) {
+        guard !imageBusy, Date().timeIntervalSince(lastImageCheck) > 0.3,
+            let source = ghostSource, source.id == keyframe.id
+        else { return }
+        lastImageCheck = Date()
+        imageBusy = true
+        let live = CIImage(cvPixelBuffer: frame.capturedImage)
+        let reference = source.image
+        imageQueue.async {
+            let result = ImageMatch.compare(live: live, reference: reference)
+            Task { @MainActor in
+                self.imageBusy = false
+                self.imageAligned = result?.aligned
+            }
+        }
     }
 
     // MARK: Ghost photo
