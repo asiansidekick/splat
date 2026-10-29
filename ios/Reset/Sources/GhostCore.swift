@@ -222,8 +222,8 @@ enum GhostCore {
     static let goneColor = SIMD3<Float>(0.25, 0.6, 1)
     /// A silhouette needs a step back of at least this share of the distance, plus `minStep`, so
     /// the gentle slope of a floor or table top never draws a line.
-    static let stepShare: Float = 0.06
-    static let minStep: Float = 0.03
+    static let stepShare: Float = 0.08
+    static let minStep: Float = 0.04
     /// A crease (the edge of a box, where a table top meets its side) turns the surface by at
     /// least this many degrees.
     static let creaseDegrees: Float = 50
@@ -335,7 +335,21 @@ enum GhostCore {
 
     /// Depth with LiDAR noise smoothed out but edges kept: each reading becomes the median of
     /// its 3 x 3 neighbours, then the average of the 5 x 5 readings close to it in depth.
-    static func smoothed(_ depth: [Float], width w: Int, height h: Int) -> [Float] {
+    static func smoothed(_ raw: [Float], width w: Int, height h: Int) -> [Float] {
+        // First drop the LiDAR's smeared readings: one that sits between its neighbours on
+        // opposite sides, close to neither, is half prop and half background, a point in mid-air.
+        var depth = raw
+        for y in 1..<(h - 1) {
+            for x in 1..<(w - 1) {
+                let z = raw[y * w + x]
+                guard z > 0.1 else { continue }
+                let near = 0.03 + 0.03 * z
+                for (a, b) in [(raw[y * w + x - 1], raw[y * w + x + 1]), (raw[(y - 1) * w + x], raw[(y + 1) * w + x])] {
+                    guard a > 0.1, b > 0.1 else { continue }
+                    if abs(a - b) > 2 * near, abs(z - a) > near, abs(z - b) > near { depth[y * w + x] = 0; break }
+                }
+            }
+        }
         var median = depth
         var window: [Float] = []
         window.reserveCapacity(9)
@@ -521,8 +535,8 @@ enum GhostCore {
         // Many views' worth of edge points scatter a little either side of the true edge: thin
         // what they cover down to its centre line, then drop short bits, for clean lines.
         if !edges.positions.isEmpty {
-            yellow = keepLarge(thinned(yellow, width: W, height: H), width: W, height: H, minSize: minLine / 2)
-            blue = keepLarge(thinned(blue, width: W, height: H), width: W, height: H, minSize: minGoneLine / 2)
+            yellow = keepLarge(pruned(thinned(yellow, width: W, height: H), width: W, height: H), width: W, height: H, minSize: minLine / 2)
+            blue = keepLarge(pruned(thinned(blue, width: W, height: H), width: W, height: H), width: W, height: H, minSize: minGoneLine / 2)
             // Back to a steady width of three pixels.
             yellow = widened(yellow, width: W, height: H)
             blue = widened(blue, width: W, height: H)
@@ -588,6 +602,40 @@ enum GhostCore {
             }
             candidates = candidates.filter { m[$0] }
             if !changed { break }
+        }
+        return m
+    }
+
+    /// Thinned lines with their short whiskers trimmed: line ends are eaten back `length`
+    /// pixels, which takes off small side branches entirely, then the ends of the lines that
+    /// are left grow back along where they were.
+    static func pruned(_ mask: [Bool], width w: Int, height h: Int, length: Int = 6) -> [Bool] {
+        var m = mask
+        func around(_ i: Int) -> [Int] {
+            let x = i % w, y = i / w
+            var out: [Int] = []
+            for dy in -1...1 where y + dy >= 0 && y + dy < h {
+                for dx in -1...1 where (dx != 0 || dy != 0) && x + dx >= 0 && x + dx < w { out.append((y + dy) * w + x + dx) }
+            }
+            return out
+        }
+        var removed = Set<Int>()
+        var live = (0..<(w * h)).filter { m[$0] }
+        for _ in 0..<length {
+            let ends = live.filter { i in around(i).filter { m[$0] }.count <= 1 }
+            for i in ends { m[i] = false; removed.insert(i) }
+            live = live.filter { m[$0] }
+        }
+        var frontier = live.filter { i in around(i).filter { m[$0] }.count <= 1 }
+        for _ in 0..<length {
+            var next: [Int] = []
+            for i in frontier {
+                for n in around(i) where removed.contains(n) && !m[n] {
+                    m[n] = true
+                    next.append(n)
+                }
+            }
+            frontier = next
         }
         return m
     }
