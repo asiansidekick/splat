@@ -131,7 +131,7 @@ struct CameraHome: View {
                         .foregroundStyle(.black)
                 }
                 .padding(.trailing, 16)
-                .padding(.bottom, 130)
+                .padding(.bottom, 100)
                 .transition(.scale.combined(with: .opacity))
             }
         }
@@ -353,7 +353,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
     @ViewBuilder let trailing: () -> Trailing
 
     static var topHeight: CGFloat { 44 }
-    static var bottomHeight: CGFloat { 140 }
+    static var bottomHeight: CGFloat { 108 }
     static var sideWidth: CGFloat { 100 }
 
     var body: some View {
@@ -370,7 +370,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .background(Color.black.opacity(bars ? 0.35 : 0).ignoresSafeArea(edges: .top))
                     Spacer(minLength: 0)
                     if !landscape {
-                        VStack(spacing: 10) {
+                        VStack(spacing: 4) {
                             modes(false)
                             HStack {
                                 leading().frame(width: 84)
@@ -381,8 +381,8 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                             }
                             .padding(.horizontal, 16)
                         }
-                        .padding(.top, 12)
-                        .padding(.bottom, 16)
+                        .padding(.top, 4)
+                        .padding(.bottom, 2)
                         .frame(maxWidth: .infinity, minHeight: Self.bottomHeight)
                         .background(Color.black.opacity(bars ? 0.35 : 0).ignoresSafeArea(edges: .bottom))
                     }
