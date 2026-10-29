@@ -423,7 +423,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             Task { @MainActor in
                 self.checkBusy = false
                 guard let result else { return }
-                display.show(faint: result.faint, missing: result.missing)
+                display.show(faint: result.faint, matched: result.matched, missing: result.missing)
                 if self.missingPoints != result.missing.count { self.missingPoints = result.missing.count }
             }
         }

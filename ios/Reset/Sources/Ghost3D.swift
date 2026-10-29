@@ -105,9 +105,10 @@ enum Ghost3D {
         SIMD3<Int32>(point / voxel, rounding: .down)
     }
 
-    /// Draws the cloud as unlit dots in two groups: faint for parts not checked yet (or every
-    /// point when there is no live LiDAR), and solid with a blue halo for parts the live LiDAR
-    /// finds are gone. Parts it finds still in place are left out, so only what changed shows.
+    /// Draws the cloud as unlit dots in three groups: at the ghost strength for parts not checked
+    /// yet (or every point when there is no live LiDAR), fainter for parts the live LiDAR finds
+    /// still in place, and solid with a blue halo for parts it finds are gone. The ghost stays in
+    /// view so it can be lined up, and what changed stands out.
     @MainActor
     final class Display {
         let node = SCNNode()
@@ -116,6 +117,7 @@ enum Ghost3D {
         private let vertices: SCNGeometrySource
         private let colors: SCNGeometrySource
         private let faintMaterial = Display.material()
+        private let matchedMaterial = Display.material()
         private let solidMaterial = Display.material()
         private let haloMaterial = Display.material()
         static let haloColor = UIColor(red: 0.25, green: 0.6, blue: 1, alpha: 1)
@@ -123,7 +125,10 @@ enum Ghost3D {
         /// How strong the faint group is (the ghost strength slider).
         var faintOpacity: CGFloat {
             get { faintMaterial.transparency }
-            set { faintMaterial.transparency = newValue }
+            set {
+                faintMaterial.transparency = newValue
+                matchedMaterial.transparency = newValue * 0.4
+            }
         }
 
         init(cloud: Cloud) {
@@ -134,6 +139,7 @@ enum Ghost3D {
                 componentsPerVector: 4, bytesPerComponent: MemoryLayout<Float>.size, dataOffset: 0,
                 dataStride: MemoryLayout<SIMD4<Float>>.stride)
             faintMaterial.transparency = 0.5
+            matchedMaterial.transparency = 0.2
             haloMaterial.diffuse.contents = Display.haloColor
             // The halo is drawn first and the dots on top of it, so each gone dot gets a blue rim.
             haloMaterial.writesToDepthBuffer = false
@@ -141,12 +147,16 @@ enum Ghost3D {
             ghostNode.renderingOrder = 11
             node.addChildNode(haloNode)
             node.addChildNode(ghostNode)
-            show(faint: (0..<Int32(cloud.positions.count)).map { $0 }, missing: [])
+            show(faint: (0..<Int32(cloud.positions.count)).map { $0 }, matched: [], missing: [])
         }
 
-        func show(faint: [Int32], missing: [Int32]) {
+        func show(faint: [Int32], matched: [Int32], missing: [Int32]) {
             var elements: [SCNGeometryElement] = []
             var materials: [SCNMaterial] = []
+            if !matched.isEmpty {
+                elements.append(Display.element(matched, size: 0.012, minRadius: 1.5, maxRadius: 12))
+                materials.append(matchedMaterial)
+            }
             if !faint.isEmpty {
                 elements.append(Display.element(faint, size: 0.012, minRadius: 1.5, maxRadius: 12))
                 materials.append(faintMaterial)
@@ -208,8 +218,9 @@ enum Ghost3D {
             self.cells = cells
         }
 
-        /// Call from one queue at a time. Returns the points to show faint and the gone ones.
-        func update(live: DepthView) -> (faint: [Int32], missing: [Int32])? {
+        /// Call from one queue at a time. Returns the points not checked yet, those still in place,
+        /// and the gone ones.
+        func update(live: DepthView) -> (faint: [Int32], matched: [Int32], missing: [Int32])? {
             let w = live.width
             let h = live.height
             guard w > 0, h > 0, live.depth.count == w * h else { return nil }
@@ -238,12 +249,15 @@ enum Ghost3D {
             }
 
             var faint: [Int32] = []
+            var matched: [Int32] = []
             var gone = [Bool](repeating: false, count: positions.count)
             for index in positions.indices {
                 if score[index] >= 2 {
                     gone[index] = true
                 } else if score[index] >= 0 {
                     faint.append(Int32(index))
+                } else {
+                    matched.append(Int32(index))
                 }
             }
             var missing: [Int32] = []
@@ -263,7 +277,7 @@ enum Ghost3D {
                     faint.append(Int32(index))
                 }
             }
-            return (faint, missing)
+            return (faint, matched, missing)
         }
     }
 }

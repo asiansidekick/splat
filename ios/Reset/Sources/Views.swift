@@ -1254,7 +1254,7 @@ struct ResetStage: View {
                 if !restorer.usesDepth { return "3D ghost: line the props up with the dots" }
                 return restorer.missingPoints > 0
                     ? "Blue-ringed dots: something has gone from there"
-                    : "3D ghost: dots vanish where the set still matches"
+                    : "3D ghost: dots dim where the set still matches"
             }
             return restorer.matched
                 ? "Matched. Line the props up with the ghost"
