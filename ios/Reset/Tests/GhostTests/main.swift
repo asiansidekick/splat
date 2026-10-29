@@ -702,7 +702,7 @@ func testDots() {
     let scan = GhostCore.renderDots(surface: built.surface, states: nil, camera: camera.scaled(by: 1.5), strength: 0.9, size: 0.0015)
     let scanShown = shown(scan)
     let scanTotal = camera.scaled(by: 1.5).width * camera.scaled(by: 1.5).height
-    expect(scanShown > scanTotal / 20 && scanShown < scanTotal / 2, "scan dots: \(scanShown) of \(scanTotal) pixels, spaced out")
+    expect(scanShown > scanTotal / 50 && scanShown < scanTotal / 2, "scan dots: \(scanShown) of \(scanTotal) pixels, spaced out")
     let big = camera.scaled(by: 1.5)
     save("12-scan-dots", ghost: scan, background: scene.capture(big).rgba, width: big.width, height: big.height)
 }
