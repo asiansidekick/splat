@@ -21,7 +21,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Where to aim and move, updated every frame for the guidance graphic.
     let aim = AimState()
     @Published var lockedKeyframe: Keyframe?
-    @Published var showDifferences = true
+    /// The LiDAR change colours over the photo ghost. Off at first: on device they flickered and
+    /// hid the ghost, and the 3D ghost shows what has gone as outlines instead.
+    @Published var showDifferences = false
     /// The 3D ghost, built from the reference's LiDAR depth and photos, instead of the photo ghost.
     @Published var show3D = false {
         didSet { if !show3D { ghost3D = nil } }
@@ -249,7 +251,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         if !show3D { updateGhost(keyframe, frame: frame) }
         // Less often when the phone is hot, so it does not throttle or shut the camera down.
         let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
-        if usesDepth && showDifferences && (!hot || now.timeIntervalSince(lastDiff) > 0.5) {
+        if usesDepth && showDifferences && !show3D && (!hot || now.timeIntervalSince(lastDiff) > 0.5) {
             lastDiff = now
             updateDifferences(frame: frame, around: camera)
         } else if differences != nil {

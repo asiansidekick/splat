@@ -1261,8 +1261,8 @@ struct ResetStage: View {
                 if !restorer.cloudReady { return "Building the 3D ghost…" }
                 if !restorer.usesDepth { return "3D ghost: line the props up with the dots" }
                 return restorer.missingPoints > 0
-                    ? "Blue: something has gone from there"
-                    : "3D ghost: yellow outlines, dots dim where it matches"
+                    ? "Blue outline: something has gone from there"
+                    : "3D ghost: outlines of the props as they were"
             }
             return restorer.matched
                 ? "Matched. Line the props up with the ghost"

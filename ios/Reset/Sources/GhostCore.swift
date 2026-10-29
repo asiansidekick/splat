@@ -158,13 +158,14 @@ enum GhostCore {
     static let outlineColor = SIMD3<Float>(1, 0.84, 0.1)
     static let goneColor = SIMD3<Float>(0.25, 0.6, 1)
 
-    /// Draws the cloud as the camera sees it: RGBA bytes, premultiplied, top row first, at the
-    /// camera's size. Dots grow nearer the camera and the nearest dot wins each pixel. Edges where
-    /// the cloud steps back (the outline of a prop against what is behind it) are drawn in yellow,
-    /// and the edge of anything gone in blue. `strength` is the ghost strength slider.
+    /// Draws the cloud as the camera sees it, as outlines only so the set stays visible: RGBA
+    /// bytes, premultiplied, top row first, at the camera's size. Yellow lines where the cloud
+    /// steps back (the edges of props against what is behind them), blue lines round anything
+    /// gone. `strength` is the ghost strength slider.
     static func render(cloud: Cloud, states: [State]?, camera: PinholeCamera, strength: Float) -> [UInt8] {
         let w = camera.width
         let h = camera.height
+        // Nearest point per pixel, dots growing nearer the camera.
         var near = [Float](repeating: .infinity, count: w * h)
         var owner = [Int32](repeating: -1, count: w * h)
         near.withUnsafeMutableBufferPointer { near in
@@ -189,70 +190,93 @@ enum GhostCore {
             }
         }
 
+        // Close the gaps between dots: each pixel takes the nearest depth around it, so the far
+        // side showing through a gap does not draw a ring of outline round every gap.
+        let surface = minFilter(near, width: w, height: h, radius: 2)
+
+        // 1 outline, 2 edge of something gone.
+        var edges = [UInt8](repeating: 0, count: w * h)
+        func gone(_ i: Int) -> Bool {
+            guard let states, owner[i] >= 0 else { return false }
+            return states[Int(owner[i])] == .gone
+        }
+        for y in 0..<h {
+            for x in 0..<w {
+                let i = y * w + x
+                let z = surface[i]
+                guard z.isFinite else { continue }
+                let isGone = gone(i)
+                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let nx = x + dx
+                    let ny = y + dy
+                    guard nx >= 0, nx < w, ny >= 0, ny < h else { continue }
+                    let n = ny * w + nx
+                    if isGone, !gone(n) { edges[i] = 2; break }
+                    if surface[n].isFinite, surface[n] > z * 1.08 + 0.03 { edges[i] = 1 }
+                }
+            }
+        }
+        // Lone edge pixels are LiDAR noise: a line needs neighbours along it.
+        var kept = edges
+        for y in 0..<h {
+            for x in 0..<w where edges[y * w + x] == 1 {
+                var neighbours = 0
+                for dy in -1...1 {
+                    for dx in -1...1 where dx != 0 || dy != 0 {
+                        let nx = x + dx
+                        let ny = y + dy
+                        if nx >= 0, nx < w, ny >= 0, ny < h, edges[ny * w + nx] != 0 { neighbours += 1 }
+                    }
+                }
+                if neighbours < 2 { kept[y * w + x] = 0 }
+            }
+        }
+
         var out = [UInt8](repeating: 0, count: w * h * 4)
-        let outlineAlpha = max(0.7, strength)
-        func put(_ i: Int, _ color: SIMD3<Float>, _ alpha: Float) {
-            let a = min(1, max(0, alpha))
+        let alpha = min(1, max(0.5, strength))
+        func put(_ i: Int, _ color: SIMD3<Float>, _ a: Float) {
             let o = i * 4
             out[o] = UInt8(min(255, color.x * a * 255))
             out[o + 1] = UInt8(min(255, color.y * a * 255))
             out[o + 2] = UInt8(min(255, color.z * a * 255))
             out[o + 3] = UInt8(a * 255)
         }
-        // 1 outline, 2 edge of something gone; drawn after the dots, a pixel wider each way.
-        var edges = [UInt8](repeating: 0, count: w * h)
-        func state(_ i: Int) -> State {
-            guard let states, owner[i] >= 0 else { return .unchecked }
-            return states[Int(owner[i])]
-        }
+        // Lines a pixel wider each way, so they read at arm's length. Blue wins where they meet.
+        var painted = [UInt8](repeating: 0, count: w * h)
         for y in 0..<h {
             for x in 0..<w {
-                let i = y * w + x
-                let index = Int(owner[i])
-                guard index >= 0 else { continue }
-                let z = near[i]
-                let s = state(i)
-                // Outlines: a neighbour much further back, or (for gone parts) not gone.
-                var steps = false
-                var goneEdge = false
-                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                    let nx = x + dx
-                    let ny = y + dy
-                    guard nx >= 0, nx < w, ny >= 0, ny < h else { continue }
-                    let n = ny * w + nx
-                    if owner[n] >= 0, near[n] > z + 0.04 + 0.03 * z { steps = true }
-                    if s == .gone, owner[n] < 0 || state(n) != .gone { goneEdge = true }
-                }
-                if goneEdge {
-                    edges[i] = 2
-                } else if steps {
-                    edges[i] = 1
-                }
-                do {
-                    let color = cloud.colors[index]
-                    switch s {
-                    case .unchecked: put(i, color, strength)
-                    case .matched: put(i, color, strength * 0.45)
-                    case .gone: put(i, color * 0.4 + goneColor * 0.6, 1)
-                    }
-                }
-            }
-        }
-        // Thick enough to see at arm's length: each edge pixel also paints its four neighbours.
-        for y in 0..<h {
-            for x in 0..<w {
-                let kind = edges[y * w + x]
+                let kind = kept[y * w + x]
                 guard kind > 0 else { continue }
                 for (dx, dy) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
                     let nx = x + dx
                     let ny = y + dy
                     guard nx >= 0, nx < w, ny >= 0, ny < h else { continue }
                     let n = ny * w + nx
-                    // A gone edge wins over an outline where they meet.
-                    if kind == 2 || edges[n] != 2 {
-                        put(n, kind == 2 ? goneColor : outlineColor, kind == 2 ? 1 : outlineAlpha)
-                    }
+                    guard kind > painted[n] else { continue }
+                    painted[n] = kind
+                    put(n, kind == 2 ? goneColor : outlineColor, kind == 2 ? 1 : alpha)
                 }
+            }
+        }
+        return out
+    }
+
+    /// Each pixel's smallest value within `radius`, done as two passes (rows, then columns).
+    static func minFilter(_ values: [Float], width w: Int, height h: Int, radius: Int) -> [Float] {
+        var rows = values
+        for y in 0..<h {
+            for x in 0..<w {
+                var m = Float.infinity
+                for dx in -radius...radius where x + dx >= 0 && x + dx < w { m = min(m, values[y * w + x + dx]) }
+                rows[y * w + x] = m
+            }
+        }
+        var out = rows
+        for y in 0..<h {
+            for x in 0..<w {
+                var m = Float.infinity
+                for dy in -radius...radius where y + dy >= 0 && y + dy < h { m = min(m, rows[(y + dy) * w + x]) }
+                out[y * w + x] = m
             }
         }
         return out

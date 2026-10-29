@@ -247,25 +247,36 @@ func testGhost() {
     }
     expect(worst < 0.01, "points sit on the scene's surfaces (worst \(worst) m)")
 
-    // Drawn from the first reference view: the box is red where it was photographed.
+    // Drawn from the first reference view: outlines round the box, none across the open floor.
     let frontPose = lookAt(eye: SIMD3(0, 1, 0), target: boxCentre)
     let front = screenCamera(frontPose)
     let frontGhost = GhostCore.render(cloud: cloud, states: nil, camera: front, strength: 0.8)
     let frontPhoto = scene.capture(front).rgba
-    let middle = pixel(frontGhost, front, at: SIMD3(0, 0.3, -1.5))
-    expect(middle.r > middle.g * 2 && middle.a > 150, "front view: box top drawn red at the box (\(middle))")
+    func yellow(_ rgba: [UInt8], _ i: Int) -> Bool { rgba[i * 4] > 150 && rgba[i * 4 + 1] > 100 && rgba[i * 4 + 2] < 60 }
+    func blueAt(_ rgba: [UInt8], _ i: Int) -> Bool { rgba[i * 4 + 2] > 150 && rgba[i * 4] < 100 }
+    let outline = (0..<(front.width * front.height)).filter { yellow(frontGhost, $0) }.count
+    expect(outline > 300, "front view: yellow outline round the box (\(outline) pixels)")
+    // Pixels well away from the box (more than 60 px from where it projects) are open floor or wall.
+    let boxAt = front.project(boxCentre)!
+    let stray = (0..<(front.width * front.height)).filter { i in
+        let x = Float(i % front.width), y = Float(i / front.width)
+        return hypot(x - boxAt.u, y - boxAt.v) > 140 && yellow(frontGhost, i)
+    }.count
+    expect(stray < 60, "front view: \(stray) outline pixels away from the box")
     let covered = stride(from: 3, to: frontGhost.count, by: 4).filter { frontGhost[$0] > 0 }.count
-    expect(covered > front.width * front.height / 2, "front view: ghost covers \(covered) of \(front.width * front.height) pixels")
-    let outline = (0..<(front.width * front.height)).filter { frontGhost[$0 * 4] > 200 && frontGhost[$0 * 4 + 1] > 150 && frontGhost[$0 * 4 + 2] < 60 }.count
-    expect(outline > 100, "front view: yellow outline round the box (\(outline) pixels)")
+    expect(covered < front.width * front.height / 10, "front view: outlines only, \(covered) pixels drawn")
     save("1-front-unchecked", ghost: frontGhost, background: frontPhoto, width: front.width, height: front.height)
 
-    // From the side, somewhere the reference never stood: the box still lands on the box.
+    // From the side, somewhere the reference never stood: the outline still sits round the box.
     let sidePose = lookAt(eye: SIMD3(1.2, 0.9, -0.7), target: boxCentre)
     let side = screenCamera(sidePose)
     let sideGhost = GhostCore.render(cloud: cloud, states: nil, camera: side, strength: 0.8)
-    let sideBox = pixel(sideGhost, side, at: SIMD3(0, 0.3, -1.5))
-    expect(sideBox.r > sideBox.g * 2, "side view: box top drawn red at the box (\(sideBox))")
+    let sideBox = side.project(boxCentre)!
+    let nearBox = (0..<(side.width * side.height)).filter { i in
+        let x = Float(i % side.width), y = Float(i / side.width)
+        return hypot(x - sideBox.u, y - sideBox.v) < 140 && yellow(sideGhost, i)
+    }.count
+    expect(nearBox > 200, "side view: \(nearBox) outline pixels round the box")
     save("2-side-unchecked", ghost: sideGhost, background: scene.capture(side).rgba, width: side.width, height: side.height)
 
     let cells = GhostCore.cells(of: cloud.positions)
@@ -308,8 +319,10 @@ func testGhost() {
     expect(goneOnBox > boxTotal / 3, "box moved: \(goneOnBox) of \(boxTotal) old box points gone")
     expect(goneTotal - goneOnBox < goneOnBox / 5, "box moved: only \(goneTotal - goneOnBox) gone points away from the box")
     let movedGhost = GhostCore.render(cloud: cloud, states: states, camera: side, strength: 0.8)
-    let blue = (0..<(side.width * side.height)).filter { movedGhost[$0 * 4 + 2] > 150 && movedGhost[$0 * 4] < 150 }.count
-    expect(blue > 200, "box moved: \(blue) blue pixels where it was")
+    let blue = (0..<(side.width * side.height)).filter { blueAt(movedGhost, $0) }.count
+    expect(blue > 200, "box moved: \(blue) blue outline pixels where it was")
+    let blueSame = (0..<(side.width * side.height)).filter { blueAt(sameGhost, $0) }.count
+    expect(blueSame == 0, "unchanged set: \(blueSame) blue pixels")
     save("4-side-box-moved", ghost: movedGhost, background: moved.capture(side).rgba, width: side.width, height: side.height)
 
     // Speed: a full-size cloud draws fast enough to follow the phone.
