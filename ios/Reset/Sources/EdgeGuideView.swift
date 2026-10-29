@@ -103,6 +103,7 @@ struct PauseButton: View {
 
     var body: some View {
         Button {
+            Diagnostics.log("Pause button tapped (\(paused ? "paused" : "live"))")
             Haptics.tap()
             action()
         } label: {
@@ -292,7 +293,10 @@ struct CaptureButtonAction: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 18.0, *) {
             content.onCameraCaptureEvent { event in
-                if event.phase == .ended { action() }
+                if event.phase == .ended {
+                    Diagnostics.log("Capture button pressed")
+                    action()
+                }
             }
         } else {
             content

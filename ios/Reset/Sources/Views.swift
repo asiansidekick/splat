@@ -1445,6 +1445,7 @@ struct ResetStage: View {
     }
 
     private func togglePause() {
+        Diagnostics.log("Pause toggled: \(restorer.paused ? "resume" : "pause"), \(Screen.orientation.isLandscape ? "landscape" : "portrait"), status \(restorer.status)")
         if restorer.paused {
             restorer.resume()
         } else {
