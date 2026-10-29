@@ -74,6 +74,11 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// ghost hides (it only turns) but the balls show. Set from each picture check, eased in.
     private var ballShiftGoal: CGVector = .zero
     private var ballShift: CGVector = .zero
+    /// The last few picture checks' answers: the middle one is used, since a single check can
+    /// pair the wrong things and would make the ball jump.
+    private var ballShiftSamples: [CGVector] = []
+    private var ballShiftKeyframe: String?
+    private var lastBallEase = Date()
     /// When the ghost last moved to another reference view.
     private var lastSwitch = Date.distantPast
     private var imageBusy = false
@@ -295,6 +300,11 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
         let (targetPoint, targetRadius) = ball(spot)
         let (livePoint, liveRadius) = ball(GuideSpheres.livePosition(camera: camera, orientation: orientation))
+        // A new reference view has its own correction: start that one afresh.
+        if ballShiftKeyframe != target.id {
+            ballShiftKeyframe = target.id
+            ballShiftSamples.removeAll()
+        }
         if close {
             let gap: CGVector? = local.z < -0.05
                 ? CGVector(dx: targetPoint.x - livePoint.x, dy: targetPoint.y - livePoint.y) : nil
@@ -302,9 +312,14 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         } else {
             imageAligned = nil
             ballShiftGoal = .zero
+            ballShiftSamples.removeAll()
         }
-        ballShift.dx += (ballShiftGoal.dx - ballShift.dx) * 0.3
-        ballShift.dy += (ballShiftGoal.dy - ballShift.dy) * 0.3
+        // Eased over about half a second, however fast frames come, so the ball glides.
+        let now = Date()
+        let ease = CGFloat(min(1, now.timeIntervalSince(lastBallEase) / 0.5))
+        lastBallEase = now
+        ballShift.dx += (ballShiftGoal.dx - ballShift.dx) * ease
+        ballShift.dy += (ballShiftGoal.dy - ballShift.dy) * ease
         let lined = close && (imageAligned ?? move.isMatched)
         let point: CGPoint
         if local.z < -0.05 {
@@ -370,8 +385,16 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
                 let gap = CGVector(dx: (shown.x - 0.5) * size.width, dy: (shown.y - 0.5) * size.height)
                 let goal = CGVector(dx: gap.dx - ballGap.dx, dy: gap.dy - ballGap.dy)
                 // A wild answer means Vision paired the wrong things: keep the last one.
-                guard hypot(goal.dx, goal.dy) < 0.2 * max(size.width, size.height) else { return }
-                self.ballShiftGoal = goal
+                guard hypot(goal.dx, goal.dy) < 0.2 * max(size.width, size.height),
+                    self.ballShiftKeyframe == keyframe.id
+                else { return }
+                self.ballShiftSamples.append(goal)
+                if self.ballShiftSamples.count > 5 { self.ballShiftSamples.removeFirst() }
+                // Needs a few checks that agree before the ball moves.
+                guard self.ballShiftSamples.count >= 3 else { return }
+                func median(_ values: [CGFloat]) -> CGFloat { values.sorted()[values.count / 2] }
+                self.ballShiftGoal = CGVector(
+                    dx: median(self.ballShiftSamples.map(\.dx)), dy: median(self.ballShiftSamples.map(\.dy)))
             }
         }
     }
