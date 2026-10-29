@@ -401,6 +401,43 @@ enum GhostCore {
                 }
             }
         }
+        // Which way each LiDAR edge runs, from the edge pixels round it, so photo edges that
+        // cross it (the pattern on a floor running up to a prop) are not taken for it.
+        var along = [SIMD2<Float>](repeating: .zero, count: w * h)
+        for y in 0..<h {
+            for x in 0..<w where edge[y * w + x] {
+                var sxx: Float = 0, sxy: Float = 0, syy: Float = 0, count = 0
+                for ny in max(0, y - 2)...min(h - 1, y + 2) {
+                    for nx in max(0, x - 2)...min(w - 1, x + 2) where edge[ny * w + nx] {
+                        let dx = Float(nx - x), dy = Float(ny - y)
+                        sxx += dx * dx; sxy += dx * dy; syy += dy * dy
+                        count += 1
+                    }
+                }
+                guard count >= 3 else { continue }
+                let angle = 0.5 * atan2(2 * sxy, sxx - syy)
+                // Only when the pixels make a line, not a blob or a corner.
+                let spread = ((sxx - syy) * (sxx - syy) + 4 * sxy * sxy).squareRoot() / max(sxx + syy, 1e-6)
+                if spread > 0.6 { along[y * w + x] = SIMD2(cos(angle), sin(angle)) }
+            }
+        }
+        // The LiDAR edge pixel nearest a photo pixel, within reach.
+        func nearestEdge(_ X: Int, _ Y: Int) -> Int? {
+            let fx = (Float(X) + 0.5) / Float(f) - 0.5
+            let fy = (Float(Y) + 0.5) / Float(f) - 0.5
+            let x = X / f, y = Y / f
+            var best: Int?
+            var bestDistance = Float.infinity
+            for ny in max(0, y - photoReach)...min(h - 1, y + photoReach) {
+                for nx in max(0, x - photoReach)...min(w - 1, x + photoReach) where edge[ny * w + nx] {
+                    let d = (Float(nx) - fx) * (Float(nx) - fx) + (Float(ny) - fy) * (Float(ny) - fy)
+                    if d < bestDistance { bestDistance = d; best = ny * w + nx }
+                }
+            }
+            return best
+        }
+        var owner = [Int32](repeating: -1, count: W * H)
+
         // Thin to the ridge across the edge, then keep weak ridges joined to strong ones.
         var ridge = [Bool](repeating: false, count: W * H)
         var stack: [Int] = []
@@ -416,7 +453,14 @@ enum GhostCore {
                 if gx > 2.414 * gy { step = 1 }
                 else if gy > 2.414 * gx { step = W }
                 else { step = gradX[I] * gradY[I] > 0 ? W + 1 : W - 1 }
-                guard m >= magnitude[I - step], m >= magnitude[I + step] else { continue }
+                guard m >= magnitude[I - step], m >= magnitude[I + step], let e = nearestEdge(X, Y) else { continue }
+                // A photo edge runs along the LiDAR edge when its colour change is across it.
+                let line = along[e]
+                if line != .zero {
+                    let across = abs(gradX[I] * line.x + gradY[I] * line.y) / max(m * 255, 1e-6)
+                    guard across < 0.5 else { continue }
+                }
+                owner[I] = Int32(e)
                 ridge[I] = true
                 if m > photoStrong { kept[I] = true; stack.append(I) }
             }
@@ -429,25 +473,17 @@ enum GhostCore {
         }
         kept = keepLarge(kept, width: W, height: H, minSize: 4 * f)
 
-        // Depth for a photo pixel: the nearest reading within two depth pixels.
-        func nearDepth(_ x: Int, _ y: Int) -> Float? {
-            var best = Float.infinity
-            for ny in max(0, y - 2)...min(h - 1, y + 2) {
-                for nx in max(0, x - 2)...min(w - 1, x + 2) {
-                    let d = depth[ny * w + nx]
-                    if d > 0.1, d < maxRange, d < best { best = d }
-                }
-            }
-            return best.isFinite ? best : nil
-        }
         var out: [SIMD3<Float>] = []
         var covered = [Bool](repeating: false, count: w * h)
         let scale = Float(f)
         for Y in 0..<H {
             for X in 0..<W where kept[Y * W + X] {
-                let x = X / f
-                let y = Y / f
-                guard let d = nearDepth(x, y) else { continue }
+                // At the depth of the LiDAR edge it runs beside.
+                let e = Int(owner[Y * W + X])
+                guard e >= 0 else { continue }
+                let d = depth[e]
+                let x = e % w
+                let y = e / w
                 out.append(camera.unproject(u: (Float(X) + 0.5) / scale - 0.5, v: (Float(Y) + 0.5) / scale - 0.5, depth: d))
                 for ny in max(0, y - 2)...min(h - 1, y + 2) {
                     for nx in max(0, x - 2)...min(w - 1, x + 2) { covered[ny * w + nx] = true }
