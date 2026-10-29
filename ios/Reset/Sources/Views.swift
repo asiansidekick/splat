@@ -1163,7 +1163,15 @@ struct ResetStage: View {
                         .clipped()
                         .opacity(ghostOpacity)
                         .allowsHitTesting(false)
-                } else if !restorer.show3D, let ghost = restorer.ghost {
+                } else if restorer.show3D {
+                    // Drawn at the ghost strength already, with outlines and gone parts solid.
+                    if let ghost = restorer.ghost3D {
+                        Image(uiImage: ghost)
+                            .resizable()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .allowsHitTesting(false)
+                    }
+                } else if let ghost = restorer.ghost {
                     Image(uiImage: ghost)
                         .resizable()
                         .frame(width: geometry.size.width, height: geometry.size.height)
@@ -1253,8 +1261,8 @@ struct ResetStage: View {
                 if !restorer.cloudReady { return "Building the 3D ghost…" }
                 if !restorer.usesDepth { return "3D ghost: line the props up with the dots" }
                 return restorer.missingPoints > 0
-                    ? "Blue-ringed dots: something has gone from there"
-                    : "3D ghost: dots dim where the set still matches"
+                    ? "Blue: something has gone from there"
+                    : "3D ghost: yellow outlines, dots dim where it matches"
             }
             return restorer.matched
                 ? "Matched. Line the props up with the ghost"

@@ -255,6 +255,8 @@ struct FrameSnapshot: @unchecked Sendable {
     let depth: Data?
     let depthWidth: Int
     let depthHeight: Int
+    /// The first saved depth map's format and contents go in the feedback log once per launch.
+    static var loggedDepth = false
 
     init(_ frame: ARFrame) {
         let pixels = frame.capturedImage
@@ -267,7 +269,14 @@ struct FrameSnapshot: @unchecked Sendable {
             let depthMap = sceneDepth.depthMap
             // Unsure LiDAR readings (edges, dark or shiny surfaces) are dropped: they cause false
             // highlights and stray 3D ghost points.
-            depth = DepthMap.copy(depthMap, keepingOnly: sceneDepth.confidenceMap)
+            let kept = DepthMap.copy(depthMap, keepingOnly: sceneDepth.confidenceMap)
+            if !FrameSnapshot.loggedDepth {
+                FrameSnapshot.loggedDepth = true
+                let raw = DepthMap.floats(DepthMap.copy(depthMap))
+                let confidence = sceneDepth.confidenceMap.map(DepthMap.bytes)
+                Diagnostics.log("Depth \(DepthMap.describe(depthMap)): raw \(DepthMap.stats(raw, confidence: confidence)); kept \(DepthMap.stats(DepthMap.floats(kept), confidence: nil))")
+            }
+            depth = kept
             depthWidth = CVPixelBufferGetWidth(depthMap)
             depthHeight = CVPixelBufferGetHeight(depthMap)
         } else {
@@ -317,55 +326,5 @@ extension CIImage {
     func copyRendered() -> CIImage {
         guard let cg = snapshotContext.createCGImage(self, from: extent) else { return self }
         return CIImage(cgImage: cg)
-    }
-}
-
-enum DepthMap {
-    /// Copies a Float32 depth buffer (metres) into tightly packed Data.
-    /// Copies depth, setting readings below high confidence to 0 (no reading).
-    static func copy(_ buffer: CVPixelBuffer, keepingOnly confidence: CVPixelBuffer?) -> Data {
-        var data = copy(buffer)
-        guard let confidence else { return data }
-        let levels = bytes(confidence)
-        data.withUnsafeMutableBytes { raw in
-            let depth = raw.bindMemory(to: Float.self)
-            guard depth.count == levels.count else { return }
-            for i in 0..<depth.count where levels[i] < 2 { depth[i] = 0 }
-        }
-        return data
-    }
-
-    static func copy(_ buffer: CVPixelBuffer) -> Data {
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        let width = CVPixelBufferGetWidth(buffer)
-        let height = CVPixelBufferGetHeight(buffer)
-        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return Data() }
-        var data = Data(capacity: width * height * 4)
-        for row in 0..<height {
-            data.append(base.advanced(by: row * rowBytes).assumingMemoryBound(to: UInt8.self), count: width * 4)
-        }
-        return data
-    }
-
-    /// Copies an 8-bit buffer, such as ARKit's depth confidence map, row by row.
-    static func bytes(_ buffer: CVPixelBuffer) -> [UInt8] {
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-        let width = CVPixelBufferGetWidth(buffer)
-        let height = CVPixelBufferGetHeight(buffer)
-        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return [] }
-        var out = [UInt8](repeating: 0, count: width * height)
-        for row in 0..<height {
-            let source = base.advanced(by: row * rowBytes).assumingMemoryBound(to: UInt8.self)
-            for column in 0..<width { out[row * width + column] = source[column] }
-        }
-        return out
-    }
-
-    static func floats(_ data: Data) -> [Float] {
-        data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
     }
 }

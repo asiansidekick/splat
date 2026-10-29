@@ -24,15 +24,15 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     @Published var showDifferences = true
     /// The 3D ghost, built from the reference's LiDAR depth and photos, instead of the photo ghost.
     @Published var show3D = false {
-        didSet { cloudNode.isHidden = !show3D }
+        didSet { if !show3D { ghost3D = nil } }
     }
+    /// The 3D ghost drawn for where the phone is now, laid over the screen like the photo ghost.
+    @Published var ghost3D: UIImage?
     @Published var cloudReady = false
     /// Set when the reference has nothing to build the 3D ghost from.
     @Published var cloudFailed = false
     /// How many points of the 3D ghost the live LiDAR finds gone from where they were.
     @Published var missingPoints = 0
-    /// Added to the AR scene; sits in the reference's room coordinates once relocalised.
-    let cloudNode = SCNNode()
     /// Placed USDZ models, shown once the room is recognised so they appear in the right place.
     let modelsNode = SCNNode()
     /// Everything this screen draws in 3D.
@@ -63,21 +63,19 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Set after 20 seconds without finding the room, to show tips.
     @Published var slowToFind = false
     private var depthCache: [String: [Float]] = [:]
-    private var ghostDisplay: Ghost3D.Display?
-    private var checker: Ghost3D.Checker?
-    private var checkBusy = false
-    private var lastCheck = Date.distantPast
-    private let checkQueue = DispatchQueue(label: "ghost-check")
-    private var faintOpacity: CGFloat = 0.5
+    private var viewer: Ghost3D.Viewer?
+    private var viewerBusy = false
+    private let viewerQueue = DispatchQueue(label: "ghost-3d")
+    private var ghostStrength: Float = 0.5
+    /// The room map's tracked points, for a 3D ghost when the reference has no usable depth.
+    private var mapPoints: [SIMD3<Float>] = []
 
     var usesDepth: Bool { reference.hasDepth && Recorder.lidarAvailable }
 
     init(reference: Reference) {
         self.reference = reference
         super.init()
-        cloudNode.isHidden = true
         modelsNode.isHidden = true
-        sceneContent.addChildNode(cloudNode)
         sceneContent.addChildNode(modelsNode)
     }
 
@@ -86,35 +84,29 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     var can3D: Bool { reference.hasDepth }
 
     func setGhostOpacity(_ value: Double) {
-        faintOpacity = CGFloat(value)
-        ghostDisplay?.faintOpacity = faintOpacity
+        ghostStrength = Float(value)
     }
 
     private func buildCloud() {
         guard can3D, !cloudReady else { return }
         let saved = reference
-        let check = usesDepth
+        let points = mapPoints
         Task {
-            let (cloud, checker) = await Task.detached(priority: .utility) {
-                var cloud = Ghost3D.build(reference: saved)
-                Diagnostics.log("3D ghost from depth: \(cloud.note)")
-                if cloud.positions.isEmpty {
-                    cloud = Ghost3D.mapPoints(reference: saved)
-                    Diagnostics.log("3D ghost from the room map: \(cloud.note)")
+            let viewer = await Task.detached(priority: .utility) { () -> Ghost3D.Viewer? in
+                var built = Ghost3D.build(reference: saved)
+                Diagnostics.log("3D ghost from depth: \(built.note)")
+                if built.cloud.positions.count < 500 {
+                    built = Ghost3D.mapPoints(points)
+                    Diagnostics.log("3D ghost from the room map instead: \(built.note)")
                 }
-                return (cloud, check && !cloud.positions.isEmpty ? Ghost3D.Checker(cloud: cloud) : nil)
+                return built.cloud.positions.isEmpty ? nil : Ghost3D.Viewer(cloud: built.cloud)
             }.value
-            guard !cloud.positions.isEmpty else {
+            guard let viewer else {
                 cloudFailed = true
                 return
             }
-            let display = Ghost3D.Display(cloud: cloud)
-            display.faintOpacity = faintOpacity
-            cloudNode.addChildNode(display.node)
-            ghostDisplay = display
-            self.checker = checker
+            self.viewer = viewer
             cloudReady = true
-            Diagnostics.log("3D ghost: \(cloud.positions.count) points, live check \(checker != nil)")
         }
     }
 
@@ -135,6 +127,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             let map = try ReferenceStore.loadWorldMap(for: reference.id)
             let config = ARWorldTrackingConfiguration()
             config.initialWorldMap = map
+            mapPoints = map.rawFeaturePoints.points
             if usesDepth {
                 config.frameSemantics.insert(.sceneDepth)
                 // Temporally smoothed depth is steadier for spotting changes (Apple's advice).
@@ -239,7 +232,12 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         // Read every frame: during a rotation the new orientation arrives after the size change.
         let screen = Screen.orientation
         if orientation != screen { orientation = screen }
-        if !show3D, let target = lockedKeyframe ?? current { updateAim(frame: frame, target: target) }
+        if show3D {
+            // As often as drawing keeps up, so the ghost follows the phone closely.
+            draw3D(frame: frame)
+        } else if let target = lockedKeyframe ?? current {
+            updateAim(frame: frame, target: target)
+        }
         let now = Date()
         guard now.timeIntervalSince(lastUpdate) > 0.1, viewport != .zero else { return }
         lastUpdate = now
@@ -248,11 +246,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let keyframe = lockedKeyframe ?? Guidance.closest(to: camera, in: reference.keyframes)
         guard let keyframe else { return }
         current = keyframe
-        if show3D {
-            checkCloud(frame: frame)
-        } else {
-            updateGhost(keyframe, frame: frame)
-        }
+        if !show3D { updateGhost(keyframe, frame: frame) }
         // Less often when the phone is hot, so it does not throttle or shut the camera down.
         let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
         if usesDepth && showDifferences && (!hot || now.timeIntervalSince(lastDiff) > 0.5) {
@@ -410,21 +404,29 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     // MARK: 3D ghost
 
-    /// A few times a second: which parts of the 3D ghost the live LiDAR still finds in place
-    /// (hidden), and which are gone (shown solid, ringed in blue), from wherever the phone is.
-    private func checkCloud(frame: ARFrame) {
-        guard let checker, let display = ghostDisplay, !checkBusy, Date().timeIntervalSince(lastCheck) > 0.25,
-            let live = liveDepth(frame)
-        else { return }
-        lastCheck = Date()
-        checkBusy = true
-        checkQueue.async {
-            let result = checker.update(live: live)
+    /// Checks the 3D ghost against the live LiDAR (parts still in place dim, parts gone turn
+    /// blue) and draws it for where the phone is, as often as it keeps up.
+    private func draw3D(frame: ARFrame) {
+        guard let viewer, !viewerBusy else { return }
+        let live = usesDepth ? liveDepth(frame) : nil
+        let resolution = frame.camera.imageResolution
+        // A third of the camera's resolution: sharp enough on screen and quick to draw.
+        let camera = PinholeCamera(
+            cameraToWorld: frame.camera.transform, intrinsics: frame.camera.intrinsics,
+            imageWidth: Int(resolution.width), width: Int(resolution.width) / 3, height: Int(resolution.height) / 3)
+        let placement = Placement(display: frame.displayTransform(for: orientation, viewportSize: viewport), viewport: viewport)
+        let strength = ghostStrength
+        let context = ciContext
+        viewerBusy = true
+        viewerQueue.async {
+            let image = viewer.draw(live: live, camera: camera, strength: strength)
+                .flatMap { Restorer.render($0, placement: placement, context: context) }
+            let gone = viewer.goneCount
             Task { @MainActor in
-                self.checkBusy = false
-                guard let result else { return }
-                display.show(faint: result.faint, matched: result.matched, missing: result.missing)
-                if self.missingPoints != result.missing.count { self.missingPoints = result.missing.count }
+                self.viewerBusy = false
+                guard self.show3D else { return }
+                self.ghost3D = image
+                if self.missingPoints != gone { self.missingPoints = gone }
             }
         }
     }
