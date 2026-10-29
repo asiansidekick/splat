@@ -342,14 +342,14 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
 
     static var topHeight: CGFloat { 44 }
     static var bottomHeight: CGFloat { 140 }
-    static var sideWidth: CGFloat { 110 }
+    static var sideWidth: CGFloat { 100 }
 
     var body: some View {
         GeometryReader { geometry in
             let landscape = geometry.size.width > geometry.size.height
             let safe = geometry.safeAreaInsets
             let insets = landscape
-                ? EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom, trailing: safe.trailing + Self.sideWidth)
+                ? EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom, trailing: max(safe.trailing, Self.sideWidth))
                 : EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom + Self.bottomHeight, trailing: safe.trailing)
             ZStack {
                 VStack(spacing: 0) {
@@ -375,7 +375,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .background(Color.black.opacity(0.35).ignoresSafeArea(edges: .bottom))
                     }
                 }
-                .padding(.trailing, landscape ? Self.sideWidth : 0)
+                .padding(.trailing, landscape ? max(0, Self.sideWidth - safe.trailing) : 0)
                 if landscape {
                     HStack(spacing: 0) {
                         Spacer(minLength: 0)
@@ -390,8 +390,11 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .padding(.vertical, 8)
                         .frame(width: Self.sideWidth)
                         .frame(maxHeight: .infinity)
-                        .background(Color.black.opacity(0.35).ignoresSafeArea(edges: [.top, .bottom, .trailing]))
+                        .background(Color.black.opacity(0.35).ignoresSafeArea(edges: [.top, .bottom]))
                     }
+                    // Right against the edge of the screen, like the Camera app, not inset by the
+                    // safe area, which only leaves an empty strip.
+                    .ignoresSafeArea(edges: .trailing)
                 }
             }
             .background {
@@ -447,6 +450,8 @@ struct ModePicker<Mode: Hashable>: View {
                 } label: {
                     Text(label(mode))
                         .font(.footnote.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                         .foregroundStyle(selection == mode ? Color.yellow : Color.white)
                 }
             }
