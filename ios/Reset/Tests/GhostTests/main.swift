@@ -699,11 +699,20 @@ func testDots() {
     let blue = (0..<total).filter { isBlue(gone, $0) }.count
     expect(blue > 300, "box gone: \(blue) blue dot pixels")
     // The scan's small dots: many separate dots, not a solid sheet.
-    let scan = GhostCore.renderDots(surface: built.surface, states: nil, camera: camera.scaled(by: 1.5), strength: 0.9, size: 0.0015)
+    // Spaced like the scan's cloud (one per 3 cm) and one pixel each.
+    var spaced = GhostCore.Cloud()
+    var seen = Set<SIMD3<Int32>>()
+    for p in built.surface.positions {
+        let q = (p / 0.03).rounded(.down)
+        guard seen.insert(SIMD3<Int32>(Int32(q.x), Int32(q.y), Int32(q.z))).inserted else { continue }
+        spaced.positions.append(p)
+        spaced.colors.append(SIMD3(1, 0.84, 0.1))
+    }
+    let big = camera
+    let scan = GhostCore.renderDots(surface: spaced, states: nil, camera: big, strength: 0.9, size: 0)
     let scanShown = shown(scan)
-    let scanTotal = camera.scaled(by: 1.5).width * camera.scaled(by: 1.5).height
-    expect(scanShown > scanTotal / 50 && scanShown < scanTotal / 2, "scan dots: \(scanShown) of \(scanTotal) pixels, spaced out")
-    let big = camera.scaled(by: 1.5)
+    let scanTotal = big.width * big.height
+    expect(scanShown > scanTotal / 100 && scanShown < scanTotal / 8, "scan dots: \(scanShown) of \(scanTotal) pixels, the set shows between them")
     save("12-scan-dots", ghost: scan, background: scene.capture(big).rgba, width: big.width, height: big.height)
 }
 

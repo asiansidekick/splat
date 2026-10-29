@@ -268,7 +268,9 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
 
 /// The points a scan has covered so far. Only touched on the recorder's dots queue.
 final class ScanCloud: @unchecked Sendable {
-    static let maxPoints = 200_000
+    static let maxPoints = 100_000
+    /// One dot per cube this size, so the dots stay spaced out and the set shows between them.
+    static let spacing: Float = 0.03
     static let color = SIMD3<Float>(1, 0.84, 0.1)
     private(set) var cloud = GhostCore.Cloud()
     private var filled = [SIMD3<Int32>: Int32]()
@@ -279,12 +281,24 @@ final class ScanCloud: @unchecked Sendable {
     }
 
     func add(depth: [Float], camera: PinholeCamera) {
-        _ = GhostCore.add(depth: depth, rgba: nil, camera: camera, maxPoints: ScanCloud.maxPoints, to: &cloud, filled: &filled)
+        let w = camera.width
+        let h = camera.height
+        guard depth.count == w * h else { return }
+        var points: [SIMD3<Float>] = []
+        for v in stride(from: 0, to: h, by: 4) {
+            for u in stride(from: 0, to: w, by: 4) {
+                let d = depth[v * w + u]
+                guard d > 0.1, d < GhostCore.maxRange else { continue }
+                points.append(camera.unproject(u: Float(u), v: Float(v), depth: d))
+            }
+        }
+        add(points: points)
     }
 
     func add(points: [SIMD3<Float>]) {
         for point in points where cloud.positions.count < ScanCloud.maxPoints {
-            let c = GhostCore.cell(point)
+            let q = (point / ScanCloud.spacing).rounded(.down)
+            let c = SIMD3<Int32>(Int32(q.x), Int32(q.y), Int32(q.z))
             guard filled[c] == nil else { continue }
             filled[c] = Int32(cloud.positions.count)
             cloud.positions.append(point)
@@ -320,12 +334,12 @@ extension Recorder {
                     cameraToWorld: transform, intrinsics: intrinsics, imageWidth: full, width: depth.width, height: depth.height))
             }
             scan.add(points: tracked)
-            // Half the camera's size: small, sharp dots.
+            // A third of the camera's size, one pixel per dot: small dots with the set between them.
             let screen = PinholeCamera(
-                cameraToWorld: transform, intrinsics: intrinsics, imageWidth: full, width: full / 2, height: fullHeight / 2)
+                cameraToWorld: transform, intrinsics: intrinsics, imageWidth: full, width: full / 3, height: fullHeight / 3)
             var cloud = scan.cloud
             cloud.colors = Array(repeating: ScanCloud.color, count: cloud.positions.count)
-            let drawn = GhostCore.renderDots(surface: cloud, states: nil, camera: screen, strength: 0.9, size: 0.0015)
+            let drawn = GhostCore.renderDots(surface: cloud, states: nil, camera: screen, strength: 0.9, size: 0)
             let image = Ghost3D.image(drawn, width: screen.width, height: screen.height)
                 .flatMap { Restorer.render($0, placement: placement, context: context) }
             Task { @MainActor in
