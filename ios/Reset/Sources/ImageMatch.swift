@@ -9,7 +9,9 @@ import simd
 /// again. Kept free of ARKit so the tests can run it on a Mac.
 enum ImageMatch {
     /// Lined up when no corner of the picture needs to move more than this share of its width.
-    static let tolerance: CGFloat = 0.02
+    static let tolerance: CGFloat = 0.03
+    /// The ghost photo snaps onto the live picture when no corner needs to move more than this.
+    static let snapLimit: CGFloat = 0.12
     /// Pictures are compared this wide, which is quick and plenty for the check.
     static let width: CGFloat = 480
 
@@ -20,7 +22,45 @@ enum ImageMatch {
         /// and down (top left is 0, 0), in the sensor's orientation like `ARFrame.capturedImage`.
         /// The guide balls use it so they meet when the pictures do.
         let centre: CGPoint?
+        /// Takes the live picture onto the reference, in the compared (480 wide) pixels.
+        let warp: simd_float3x3
+        let referenceSize: CGSize
+        let liveSize: CGSize
         var aligned: Bool { error < ImageMatch.tolerance }
+
+        /// Where the reference photo's corners land in the live picture, in its own pixels and
+        /// Core Image's way up (y from the bottom): top left, top right, bottom right, bottom
+        /// left. Stretching the photo onto these lays it exactly over what the camera sees.
+        func corners(reference full: CGSize, live fullLive: CGSize) -> [CGPoint]? {
+            guard abs(warp.determinant) > 1e-9, full.width > 0, liveSize.width > 0 else { return nil }
+            let toCompared = Float(referenceSize.width / full.width)
+            let toLive = Float(fullLive.width / liveSize.width)
+            let inverse = warp.inverse
+            var out: [CGPoint] = []
+            for corner in [CGPoint(x: 0, y: full.height), CGPoint(x: full.width, y: full.height), CGPoint(x: full.width, y: 0), .zero] {
+                let p = inverse * SIMD3<Float>(Float(corner.x) * toCompared, Float(corner.y) * toCompared, 1)
+                guard abs(p.z) > 1e-6 else { return nil }
+                out.append(CGPoint(x: CGFloat(p.x / p.z * toLive), y: CGFloat(p.y / p.z * toLive)))
+            }
+            return out
+        }
+
+        /// The reference photo stretched onto the live picture, the live picture's size.
+        func snapped(_ photo: CIImage, live fullLive: CGSize) -> CIImage? {
+            let extent = photo.extent
+            let origin = photo.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
+            guard let c = corners(reference: extent.size, live: fullLive),
+                let filter = CIFilter(name: "CIPerspectiveTransform")
+            else { return nil }
+            filter.setValue(origin, forKey: kCIInputImageKey)
+            filter.setValue(CIVector(cgPoint: c[0]), forKey: "inputTopLeft")
+            filter.setValue(CIVector(cgPoint: c[1]), forKey: "inputTopRight")
+            filter.setValue(CIVector(cgPoint: c[2]), forKey: "inputBottomRight")
+            filter.setValue(CIVector(cgPoint: c[3]), forKey: "inputBottomLeft")
+            guard let output = filter.outputImage else { return nil }
+            let canvas = CGRect(origin: .zero, size: fullLive)
+            return output.cropped(to: canvas).composited(over: CIImage(color: .clear).cropped(to: canvas))
+        }
     }
 
     /// Both pictures in the camera's sensor orientation. Nil when Vision cannot pair them up, for
@@ -39,7 +79,8 @@ enum ImageMatch {
         let warp = observation.warpTransform
         return Result(
             error: cornerError(warp, size: b.extent.size),
-            centre: centre(warp, reference: b.extent.size, live: a.extent.size))
+            centre: centre(warp, reference: b.extent.size, live: a.extent.size),
+            warp: warp, referenceSize: b.extent.size, liveSize: a.extent.size)
     }
 
     /// The warp takes the live picture onto the reference, so its inverse takes the reference's

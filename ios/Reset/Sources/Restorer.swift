@@ -71,7 +71,14 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// made a turning ghost impossible to line up perfectly). Further off it turns with the phone
     /// to lead the way back.
     private var ghostPinned = false
-    private var pinnedLayout: (id: String, orientation: UIInterfaceOrientation, viewport: CGSize)?
+    private var pinnedLayout: (id: String, orientation: UIInterfaceOrientation, viewport: CGSize, snap: Int)?
+    /// The latest picture check, when close enough to snap the ghost photo onto the live view by
+    /// stretching it (scale, skew and perspective), so it lies exactly over what is still in
+    /// place and only what has moved shows double.
+    private var snap: (id: String, result: ImageMatch.Result, version: Int)?
+    private var snapVersion = 0
+    /// Whether the ghost on screen is snapped on, for the banner.
+    @Published private(set) var snapped = false
     private var lastUpdate = Date.distantPast
     private var diffBusy = false
     private let ciContext = CIContext()
@@ -331,6 +338,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             checkImage(frame: frame, keyframe: target, ballGap: gap)
         } else {
             imageAligned = nil
+            snap = nil
             ballShiftGoal = .zero
             ballShiftSamples.removeAll()
         }
@@ -425,6 +433,10 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             Task { @MainActor in
                 self.imageBusy = false
                 self.imageAligned = result?.aligned
+                if let result {
+                    self.snapVersion += 1
+                    self.snap = result.error < ImageMatch.snapLimit ? (keyframe.id, result, self.snapVersion) : nil
+                }
                 guard let ballGap, let centre = result?.centre else { return }
                 let shown = centre.applying(display)
                 let gap = CGVector(dx: (shown.x - 0.5) * size.width, dy: (shown.y - 0.5) * size.height)
@@ -462,7 +474,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
         if ghostPinned {
             if let layout = pinnedLayout, layout.id == keyframe.id, layout.orientation == orientation,
-                layout.viewport == viewport, ghostSource?.id == keyframe.id, ghost != nil
+                layout.viewport == viewport, layout.snap == currentSnap(for: keyframe)?.version ?? -1,
+                ghostSource?.id == keyframe.id, ghost != nil
             { return }
         } else {
             pinnedLayout = nil
@@ -483,17 +496,26 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             live: ghostPinned ? keyframe.cameraToWorld : camera, liveIntrinsics: frame.camera.intrinsics, liveSize: resolution)
         let placement = Placement(display: frame.displayTransform(for: orientation, viewportSize: viewport), viewport: viewport)
         let context = ciContext
+        let snapping = ghostPinned ? currentSnap(for: keyframe) : nil
         lastGhostPose = camera
-        pinnedLayout = ghostPinned ? (keyframe.id, orientation, viewport) : nil
+        pinnedLayout = ghostPinned ? (keyframe.id, orientation, viewport, snapping?.version ?? -1) : nil
         ghostBusy = true
         ghostQueue.async {
-            let image = warp.apply(to: source).flatMap { Restorer.render($0, placement: placement, context: context) }
+            let placed = snapping.flatMap { $0.result.snapped(source, live: resolution) } ?? warp.apply(to: source)
+            let image = placed.flatMap { Restorer.render($0, placement: placement, context: context) }
             Task { @MainActor in
                 self.ghostBusy = false
+                let isSnapped = snapping != nil && image != nil
+                if self.snapped != isSnapped { self.snapped = isSnapped }
                 // Nil when the phone faces away from where the photo was taken; the aim ring guides back.
                 self.ghost = image
             }
         }
+    }
+
+    private func currentSnap(for keyframe: Keyframe) -> (id: String, result: ImageMatch.Result, version: Int)? {
+        guard let snap, snap.id == keyframe.id else { return nil }
+        return snap
     }
 
     private static func angle(between a: simd_float4x4, and b: simd_float4x4) -> Float {

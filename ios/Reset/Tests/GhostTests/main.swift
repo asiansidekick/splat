@@ -666,6 +666,35 @@ func testImageMatch() {
             abs(centre.x - x) < 0.01 && abs(centre.y - y) < 0.01,
             String(format: "%@: reference middle shows at %.3f, %.3f (should be %.3f, %.3f)", name, centre.x, centre.y, x, y))
     }
+    // Snapping: the reference stretched onto a slightly turned and stepped live view lies over
+    // it far better than the unstretched photo.
+    let context = CIContext()
+    func grey(_ image: CIImage, _ w: Int, _ h: Int) -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: w * h * 4)
+        context.render(image, toBitmap: &bytes, rowBytes: w * 4, bounds: CGRect(x: 0, y: 0, width: w, height: h), format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
+        return bytes
+    }
+    func difference(_ a: [UInt8], _ b: [UInt8]) -> Double {
+        var sum = 0.0, count = 0
+        for i in stride(from: 0, to: min(a.count, b.count), by: 4) where a[i + 3] > 0 && b[i + 3] > 0 {
+            sum += Double(abs(Int(a[i]) - Int(b[i])) + abs(Int(a[i + 1]) - Int(b[i + 1])) + abs(Int(a[i + 2]) - Int(b[i + 2])))
+            count += 1
+        }
+        return count == 0 ? 999 : sum / Double(count) / 3
+    }
+    let nearCamera = screenCamera(lookAt(eye: SIMD3(0.03, 1.02, 0.01), target: SIMD3(0.04, 0.17, -1.5)))
+    let nearLive = ciImage(scene.capture(nearCamera).rgba, width: nearCamera.width, height: nearCamera.height)
+    if let result = ImageMatch.compare(live: nearLive, reference: reference),
+        let snapped = result.snapped(reference, live: nearLive.extent.size)
+    {
+        let w = nearCamera.width, h = nearCamera.height
+        let live = grey(nearLive, w, h)
+        let before = difference(grey(reference, w, h), live)
+        let after = difference(grey(snapped, w, h), live)
+        expect(after < before * 0.5, String(format: "snapped ghost: average difference %.1f, unsnapped %.1f", after, before))
+    } else {
+        expect(false, "snapped ghost: could not snap")
+    }
     // The photo is stored smaller than the live picture: sizes must not matter.
     let small = reference.transformed(by: CGAffineTransform(scaleX: 0.5, y: 0.5))
     if let result = ImageMatch.compare(live: photo(SIMD3(0, 1, 0)), reference: small) {
