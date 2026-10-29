@@ -72,13 +72,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// The decoded photo of the keyframe the ghost shows, kept so each redraw only warps it.
     private var ghostSource: (id: String, image: CIImage)?
     private var lastGhostPose: simd_float4x4?
-    /// Near where the photo was taken the ghost is the photo exactly as shot, held still on the
-    /// screen, so lining it up depends only on the picture and never on where ARKit thinks the
-    /// phone is (that can be a few centimetres or a degree out after finding the room, which
-    /// made a turning ghost impossible to line up perfectly). Further off it turns with the phone
-    /// to lead the way back.
-    private var ghostPinned = false
-    private var pinnedLayout: (id: String, orientation: UIInterfaceOrientation, viewport: CGSize)?
+    /// How the screen was turned and sized for the ghost on screen: turning the phone lays it
+    /// out again even when the phone has not moved.
+    private var lastGhostLayout: (orientation: UIInterfaceOrientation, viewport: CGSize)?
     private var lastUpdate = Date.distantPast
     private var diffBusy = false
     private let ciContext = CIContext()
@@ -304,7 +300,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let (right, up) = Guidance.screenAxes(camera, orientation: orientation)
         // Close: within 35 cm and 20°. Then the pictures decide, since the position ARKit found
         // the room at can be a few centimetres out.
-        let close = simd_length(move.vector) < 0.35 && move.turn < 20 * .pi / 180
+        // The full turn, roll included: a phone held landscape against a portrait reference
+        // must not be matched picture to picture (Vision can pair them wrongly).
+        let close = simd_length(move.vector) < 0.35 && Restorer.angle(between: target.cameraToWorld, and: camera) < 20 * .pi / 180
         if close {
             checkImage(frame: frame, keyframe: target)
         } else {
@@ -423,7 +421,10 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Freezes the live picture and stretches the reference onto that same frame (from its own
     /// picture check, or by the phone's turn when the pictures cannot be paired).
     func pause() {
-        guard !paused, let frame = session.currentFrame, viewport != .zero else { return }
+        guard !paused, let frame = session.currentFrame, viewport != .zero else {
+            Diagnostics.log("Pause ignored: paused \(paused), frame \(session.currentFrame != nil), viewport \(viewport)")
+            return
+        }
         paused = true
         held = nil
         edges.update(nil, canSeat: false, time: frame.timestamp)
@@ -499,23 +500,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     private func updateGhost(_ keyframe: Keyframe, frame: ARFrame) {
         guard !ghostBusy, !paused else { return }
         let camera = frame.camera.transform
-        // Held still within 25 cm and 10°, turning again past 35 cm or 15°, so it does not flip.
-        let distance = simd_distance(camera.columns.3.xyz, keyframe.position)
-        let turned = Restorer.angle(between: keyframe.cameraToWorld, and: camera)
-        if ghostPinned {
-            if distance > 0.35 || turned > 15 * .pi / 180 { ghostPinned = false }
-        } else if distance < 0.25 && turned < 10 * .pi / 180 {
-            ghostPinned = true
-        }
-        if ghostPinned {
-            if let layout = pinnedLayout, layout.id == keyframe.id, layout.orientation == orientation,
-                layout.viewport == viewport,
-                ghostSource?.id == keyframe.id, ghost != nil
-            { return }
-        } else {
-            pinnedLayout = nil
-        }
-        if !ghostPinned, let last = lastGhostPose, ghostSource?.id == keyframe.id, ghost != nil,
+        if let last = lastGhostPose, ghostSource?.id == keyframe.id, ghost != nil,
+            let layout = lastGhostLayout, layout.orientation == orientation, layout.viewport == viewport,
             Restorer.angle(between: last, and: camera) < 0.002, simd_distance(last.columns.3, camera.columns.3) < 0.002
         { return }
         if ghostSource?.id != keyframe.id {
@@ -528,11 +514,11 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let warp = Warp(
             reference: keyframe.cameraToWorld, referenceIntrinsics: keyframe.cameraIntrinsics,
             referenceSize: CGSize(width: keyframe.imageWidth, height: keyframe.imageHeight),
-            live: ghostPinned ? keyframe.cameraToWorld : camera, liveIntrinsics: frame.camera.intrinsics, liveSize: resolution)
+            live: camera, liveIntrinsics: frame.camera.intrinsics, liveSize: resolution)
         let placement = Placement(display: frame.displayTransform(for: orientation, viewportSize: viewport), viewport: viewport)
         let context = ciContext
         lastGhostPose = camera
-        pinnedLayout = ghostPinned ? (keyframe.id, orientation, viewport) : nil
+        lastGhostLayout = (orientation, viewport)
         ghostBusy = true
         ghostQueue.async {
             let image = warp.apply(to: source).flatMap { Restorer.render($0, placement: placement, context: context) }

@@ -1244,7 +1244,6 @@ struct ResetStage: View {
 
     private var pauseButton: some View {
         PauseButton(paused: restorer.paused) { togglePause() }
-            .disabled(restorer.status != .ready && !restorer.paused)
     }
 
     private var topBar: some View {
@@ -1430,7 +1429,6 @@ struct ResetStage: View {
         if restorer.paused {
             restorer.resume()
         } else {
-            guard restorer.status == .ready else { return }
             toNow = 1
             restorer.pause()
         }

@@ -13,15 +13,10 @@ struct HeldFrame {
     /// The screen size it was laid out for: turning the phone lays it out again.
     let viewport: CGSize
 
-    /// The reference in the live picture's sensor layout, the live picture's size: stretched by
-    /// the pictures when they pair up, otherwise turned by `fallback`, the phone's attitude.
+    /// The reference in the live picture's sensor layout, the live picture's size, turned by the
+    /// phone's attitude like the live ghost (no picture matching: Phil found it snapped).
     static func place(live: CIImage, reference: CIImage?, fallback: Restorer.Warp?) -> (image: CIImage?, registered: Bool) {
         guard let reference else { return (nil, false) }
-        if let match = ImageMatch.compare(live: live, reference: reference), match.error < ImageMatch.guideLimit,
-            let stretched = match.snapped(reference, live: live.extent.size)
-        {
-            return (stretched, true)
-        }
         return (fallback?.apply(to: reference), false)
     }
 
