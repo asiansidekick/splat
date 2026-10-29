@@ -9,7 +9,7 @@ import simd
 /// set from wherever you stand, unlike a photo, which only lines up from where it was taken. The
 /// maths lives in `GhostCore`, where the tests can reach it.
 enum Ghost3D {
-    static let maxPoints = 300_000
+    static let maxPoints = 500_000
     static let maxKeyframes = 150
 
     struct Built: @unchecked Sendable {
@@ -27,7 +27,7 @@ enum Ghost3D {
         let keyframes = ReportPDF.spread(withDepth, count: maxKeyframes)
         var built = Built()
         var filled = [SIMD3<Int32>: Int32]()
-        var noFile = 0, wrongSize = 0, readings = 0, values = 0, withPhoto = 0
+        var noFile = 0, wrongSize = 0, readings = 0, values = 0
 
         for keyframe in keyframes {
             guard let depthFile = keyframe.depthFile,
@@ -44,15 +44,9 @@ enum Ghost3D {
                 imageWidth: keyframe.imageWidth, width: w, height: h)
             readings += GhostCore.add(
                 depth: depth, rgba: rgba, camera: camera, maxPoints: maxPoints, to: &built.cloud, filled: &filled)
-            // The photo again at a larger size, so the outlines follow its sharp edges.
-            let f = GhostCore.photoScale
-            let photo = pixels(of: folder.appendingPathComponent(keyframe.imageFile), width: w * f, height: h * f)
-            if photo != nil { withPhoto += 1 }
-            built.views.append(GhostCore.edgeView(GhostCore.edgePoints(depth: depth, camera: camera, photo: photo), camera: camera))
         }
-        let edgeCounts = built.views.map(\.edges.positions.count)
         built.note = "\(keyframes.count) depth views (of \(reference.keyframes.count)), missing \(noFile), wrong size \(wrongSize), "
-            + "\(readings) readings of \(values / 4) sampled, \(built.cloud.positions.count) points, edge points per view \(edgeCounts.min() ?? 0)-\(edgeCounts.max() ?? 0), \(withPhoto) views outlined from the photo"
+            + "\(readings) readings of \(values / 4) sampled, \(built.cloud.positions.count) points (dots)"
         return built
     }
 
@@ -108,8 +102,6 @@ enum Ghost3D {
         /// Checks against the live LiDAR (when there is any) and draws the ghost in the live
         /// camera's image layout, ready to lay over the screen like the camera feed.
         func draw(live: DepthView?, camera: PinholeCamera, strength: Float) -> CIImage? {
-            current = GhostCore.nearestView(views, to: camera.cameraToWorld, current: current)
-            let edges = current.map { views[$0].edges } ?? GhostCore.Cloud()
             var states: [GhostCore.State]?
             if let live {
                 let depthCamera = PinholeCamera(
@@ -118,14 +110,10 @@ enum Ghost3D {
                 GhostCore.check(
                     positions: cloud.positions, scores: &scores, depth: live.depth, confidence: live.confidence,
                     camera: depthCamera, window: 2)
-                let surface = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
-                states = GhostCore.edgeStates(edges: edges.positions, surfaceStates: surface, surfaceCells: cells)
+                states = GhostCore.states(scores: scores, positions: cloud.positions, cells: cells)
             }
-            let rgba = GhostCore.render(surface: cloud, edges: edges, states: states, camera: camera, strength: strength)
-            // Counted from the drawing, so the banner only mentions blue lines that are showing.
-            var blue = 0
-            for o in stride(from: 0, to: rgba.count, by: 4) where rgba[o + 2] > 200 && rgba[o] < 100 { blue += 1 }
-            goneCount = blue
+            let rgba = GhostCore.renderDots(surface: cloud, states: states, camera: camera, strength: strength)
+            goneCount = states?.reduce(0) { $0 + ($1 == .gone ? 1 : 0) } ?? 0
             return Ghost3D.image(rgba, width: camera.width, height: camera.height)
         }
     }

@@ -53,18 +53,24 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     @Published var pointCount = 0
     /// Whether a reference is being captured (the shutter was tapped and it is not saved yet).
     @Published var capturing = false
-    /// Yellow outlines of what the LiDAR sees, laid out over the screen, drawn while scanning so
-    /// the edges the 3D ghost will have build up as you go.
-    @Published private(set) var liveEdges: UIImage?
-    /// Set by the screen: outlines are drawn only while this is on.
-    var showEdges = false {
-        didSet { if !showEdges, liveEdges != nil { liveEdges = nil } }
+    /// Dots on everything the scan has covered, laid over the screen and building up as you
+    /// walk round: dense from the LiDAR when it is on, from ARKit's tracked points otherwise.
+    @Published private(set) var scanDots: UIImage?
+    /// Set by the screen: dots are drawn only while this is on, and start afresh each scan.
+    var showDots = false {
+        didSet {
+            guard showDots != oldValue else { return }
+            if !showDots, scanDots != nil { scanDots = nil }
+            let cloud = scanCloud
+            dotsQueue.async { cloud.reset() }
+        }
     }
-    /// The camera view's size, for laying the outlines over it.
+    /// The camera view's size, for laying the dots over it.
     var viewport: CGSize = .zero
-    private var edgesBusy = false
-    private var lastEdges = Date.distantPast
-    private let edgesQueue = DispatchQueue(label: "live-edges")
+    private var dotsBusy = false
+    private var lastDots = Date.distantPast
+    private let dotsQueue = DispatchQueue(label: "scan-dots")
+    private let scanCloud = ScanCloud()
 
     /// Starts the camera and mapping the room, before any reference exists, so the map is
     /// usually ready by the time the shutter is tapped.
@@ -168,7 +174,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         reference = nil
         capturing = false
         pendingSave = false
-        showEdges = false
+        showDots = false
     }
 
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -221,7 +227,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         if mappingStatus != frame.worldMappingStatus { mappingStatus = frame.worldMappingStatus }
         updateScanProgress(frame)
         saveIfReady()
-        updateEdges(frame)
+        updateDots(frame)
         guard isNormal, var reference, reference.keyframes.count < maxKeyframes, pendingWrites < 3 else { return }
 
         let transform = frame.camera.transform
@@ -260,45 +266,71 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     }
 }
 
+/// The points a scan has covered so far. Only touched on the recorder's dots queue.
+final class ScanCloud: @unchecked Sendable {
+    static let maxPoints = 200_000
+    static let color = SIMD3<Float>(1, 0.84, 0.1)
+    private(set) var cloud = GhostCore.Cloud()
+    private var filled = [SIMD3<Int32>: Int32]()
+
+    func reset() {
+        cloud = GhostCore.Cloud()
+        filled = [:]
+    }
+
+    func add(depth: [Float], camera: PinholeCamera) {
+        _ = GhostCore.add(depth: depth, rgba: nil, camera: camera, maxPoints: ScanCloud.maxPoints, to: &cloud, filled: &filled)
+    }
+
+    func add(points: [SIMD3<Float>]) {
+        for point in points where cloud.positions.count < ScanCloud.maxPoints {
+            let c = GhostCore.cell(point)
+            guard filled[c] == nil else { continue }
+            filled[c] = Int32(cloud.positions.count)
+            cloud.positions.append(point)
+            cloud.colors.append(ScanCloud.color)
+        }
+    }
+}
+
 extension Recorder {
-    /// Finds the outlines in the live LiDAR depth and photo, the same way the 3D ghost does, a
-    /// few times a second on a background queue.
-    fileprivate func updateEdges(_ frame: ARFrame) {
-        guard showEdges, !edgesBusy, viewport != .zero, Date().timeIntervalSince(lastEdges) > 0.25,
-            let depthMap = frame.sceneDepth?.depthMap
-        else { return }
-        lastEdges = Date()
-        edgesBusy = true
-        let depth = DepthMap.floats(DepthMap.copy(depthMap))
-        let w = CVPixelBufferGetWidth(depthMap)
-        let h = CVPixelBufferGetHeight(depthMap)
+    /// Adds what the camera sees now to the scan's dots and draws them all, a few times a
+    /// second on a background queue.
+    fileprivate func updateDots(_ frame: ARFrame) {
+        guard showDots, !dotsBusy, viewport != .zero, Date().timeIntervalSince(lastDots) > 0.2 else { return }
+        if case .normal = frame.camera.trackingState {} else { return }
+        lastDots = Date()
+        dotsBusy = true
         let full = CVPixelBufferGetWidth(frame.capturedImage)
         let fullHeight = CVPixelBufferGetHeight(frame.capturedImage)
         let transform = frame.camera.transform
         let intrinsics = frame.camera.intrinsics
-        let f = GhostCore.photoScale
-        // The photo, scaled down and copied now so ARKit can reuse its buffer.
-        let source = CIImage(cvPixelBuffer: frame.capturedImage)
-        let scaled = source.transformed(by: CGAffineTransform(
-            scaleX: CGFloat(w * f) / source.extent.width, y: CGFloat(h * f) / source.extent.height))
-        let photo = ciContext.createCGImage(scaled, from: CGRect(x: 0, y: 0, width: w * f, height: h * f))
+        var depth: (values: [Float], width: Int, height: Int)?
+        if let depthMap = frame.sceneDepth?.depthMap {
+            depth = (DepthMap.floats(DepthMap.copy(depthMap)), CVPixelBufferGetWidth(depthMap), CVPixelBufferGetHeight(depthMap))
+        }
+        let tracked = frame.rawFeaturePoints?.points ?? []
         let placement = Restorer.Placement(
             display: frame.displayTransform(for: Screen.orientation, viewportSize: viewport), viewport: viewport)
         let context = ciContext
-        edgesQueue.async {
-            let camera = PinholeCamera(cameraToWorld: transform, intrinsics: intrinsics, imageWidth: full, width: w, height: h)
-            let rgba = photo.flatMap { Ghost3D.pixels(of: $0, width: w * f, height: h * f) }
-            var edges = GhostCore.Cloud()
-            edges.positions = GhostCore.edgePoints(depth: depth, camera: camera, photo: rgba)
-            edges.colors = Array(repeating: GhostCore.outlineColor, count: edges.positions.count)
+        let scan = scanCloud
+        dotsQueue.async {
+            if let depth {
+                scan.add(depth: depth.values, camera: PinholeCamera(
+                    cameraToWorld: transform, intrinsics: intrinsics, imageWidth: full, width: depth.width, height: depth.height))
+            }
+            scan.add(points: tracked)
+            // Half the camera's size: small, sharp dots.
             let screen = PinholeCamera(
-                cameraToWorld: transform, intrinsics: intrinsics, imageWidth: full, width: full / 3, height: fullHeight / 3)
-            let drawn = GhostCore.render(surface: GhostCore.Cloud(), edges: edges, states: nil, camera: screen, strength: 1)
+                cameraToWorld: transform, intrinsics: intrinsics, imageWidth: full, width: full / 2, height: fullHeight / 2)
+            var cloud = scan.cloud
+            cloud.colors = Array(repeating: ScanCloud.color, count: cloud.positions.count)
+            let drawn = GhostCore.renderDots(surface: cloud, states: nil, camera: screen, strength: 0.9, size: 0.0015)
             let image = Ghost3D.image(drawn, width: screen.width, height: screen.height)
                 .flatMap { Restorer.render($0, placement: placement, context: context) }
             Task { @MainActor in
-                self.edgesBusy = false
-                if self.showEdges { self.liveEdges = image }
+                self.dotsBusy = false
+                if self.showDots { self.scanDots = image }
             }
         }
     }

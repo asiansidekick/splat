@@ -962,15 +962,15 @@ struct CaptureStage: View {
                     recorder.placer.attachGestures(to: view)
                     holder.view = view
                 }
-                // The outlines the LiDAR finds while scanning, as the 3D ghost will draw them.
+                // Dots on everything the scan has covered, building up as you walk round.
                 GeometryReader { geometry in
                     Color.clear
                         .onAppear { recorder.viewport = geometry.size }
                         .onChange(of: geometry.size) { _, size in recorder.viewport = size }
                 }
                 .allowsHitTesting(false)
-                if let edges = recorder.liveEdges {
-                    Image(uiImage: edges)
+                if let dots = recorder.scanDots {
+                    Image(uiImage: dots)
                         .resizable()
                         .allowsHitTesting(false)
                         .transition(.opacity)
@@ -1035,7 +1035,7 @@ struct CaptureStage: View {
         .onChange(of: showPoints) { _, show in
             holder.view?.debugOptions = show ? [.showFeaturePoints] : []
         }
-        .onChange(of: showPoints || justSaved) { _, show in recorder.showEdges = show }
+        .onChange(of: showPoints || justSaved) { _, show in recorder.showDots = show }
         .onChange(of: useLiDAR) { _, on in
             recorder.stop()
             recorder.prepare(useLiDAR: on)
@@ -1245,7 +1245,7 @@ struct ResetStage: View {
                         .opacity(ghostOpacity)
                         .allowsHitTesting(false)
                 } else if restorer.show3D {
-                    // Drawn at the ghost strength already, with outlines and gone parts solid.
+                    // Drawn at the ghost strength already, dots in the photos' colours, gone parts blue.
                     if let ghost = restorer.ghost3D {
                         Image(uiImage: ghost)
                             .resizable()
@@ -1341,10 +1341,10 @@ struct ResetStage: View {
             if restorer.show3D {
                 if restorer.cloudFailed { return "No 3D points in this reference. Send the feedback log from ? please" }
                 if !restorer.cloudReady { return "Building the 3D ghost…" }
-                if !restorer.usesDepth { return "3D ghost: line the props up with the outlines" }
+                if !restorer.usesDepth { return "3D ghost: line the props up with the dots" }
                 return restorer.missingPoints > 0
-                    ? "Blue outline: something has gone from there"
-                    : "3D ghost: outlines of the props as they were"
+                    ? "Blue dots: something has gone from there"
+                    : "3D ghost: dots on the props as they were"
             }
             return restorer.matched
                 ? "Matched. Line the props up with the ghost"

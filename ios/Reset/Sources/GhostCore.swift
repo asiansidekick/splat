@@ -604,6 +604,52 @@ enum GhostCore {
 
     // MARK: Drawing
 
+    /// Draws the cloud as dots in the colours the photos saw, nearest in front, as the camera
+    /// sees them: RGBA bytes, premultiplied, top row first. Parts still in place (`matched`) are
+    /// dimmer, parts gone are blue. `strength` is the ghost strength slider.
+    /// `size` is each dot's half width in metres.
+    static func renderDots(surface: Cloud, states: [State]?, camera: PinholeCamera, strength: Float, size: Float = voxel * 0.4) -> [UInt8] {
+        let W = camera.width
+        let H = camera.height
+        var nearest = [Float](repeating: .infinity, count: W * H)
+        var owner = [Int32](repeating: -1, count: W * H)
+        for (index, point) in surface.positions.enumerated() {
+            guard let p = camera.project(point), p.depth < maxRange else { continue }
+            let z = p.depth
+            // Dots a little smaller than the gap between points, so the set shows between them.
+            let r = Int(min(3, max(0, (camera.fx * size / z).rounded())))
+            let x0 = Int(p.u.rounded())
+            let y0 = Int(p.v.rounded())
+            guard x0 >= -r, x0 < W + r, y0 >= -r, y0 < H + r else { continue }
+            for y in max(0, y0 - r)...min(H - 1, y0 + r) {
+                for x in max(0, x0 - r)...min(W - 1, x0 + r) where z < nearest[y * W + x] {
+                    nearest[y * W + x] = z
+                    owner[y * W + x] = Int32(index)
+                }
+            }
+        }
+        var out = [UInt8](repeating: 0, count: W * H * 4)
+        let base = min(1, max(0.15, strength))
+        for i in 0..<(W * H) {
+            let index = Int(owner[i])
+            guard index >= 0 else { continue }
+            let state = states?[index] ?? .unchecked
+            let color: SIMD3<Float>
+            let a: Float
+            switch state {
+            case .gone: color = goneColor; a = 1
+            case .matched: color = index < surface.colors.count ? surface.colors[index] : outlineColor; a = base * 0.4
+            case .unchecked: color = index < surface.colors.count ? surface.colors[index] : outlineColor; a = base
+            }
+            let o = i * 4
+            out[o] = UInt8(min(255, color.x * a * 255))
+            out[o + 1] = UInt8(min(255, color.y * a * 255))
+            out[o + 2] = UInt8(min(255, color.z * a * 255))
+            out[o + 3] = UInt8(a * 255)
+        }
+        return out
+    }
+
     /// Draws the edges as the camera sees them, as thin clean lines with a dark rim so they read
     /// over any set: RGBA bytes, premultiplied, top row first, at the camera's size. Yellow for
     /// the props as they were, blue for edges of things that have gone. The surface cloud only

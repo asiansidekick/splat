@@ -675,10 +675,43 @@ func testImageMatch() {
     }
 }
 
+func testDots() {
+    print("Dots (3D ghost and the scan)")
+    let scene = Scene()
+    let centre = SIMD3<Float>(0, 0.15, -1.5)
+    let poses = (0..<8).map { k -> simd_float4x4 in
+        let angle = Float(k) / 7 * 1.0 - 0.5
+        return lookAt(eye: SIMD3(sin(angle) * 1.4, 1, cos(angle) * 1.4 - 1.5), target: centre)
+    }
+    let built = build(scene, poses: poses, usePhoto: false)
+    let camera = screenCamera(lookAt(eye: SIMD3(0.1, 1.05, 0), target: centre))
+    let total = camera.width * camera.height
+    func shown(_ rgba: [UInt8]) -> Int { (0..<total).filter { rgba[$0 * 4 + 3] > 0 }.count }
+    let dots = GhostCore.renderDots(surface: built.surface, states: nil, camera: camera, strength: 0.8)
+    let covered = shown(dots)
+    expect(covered > total / 3, "3D ghost dots cover \(covered) of \(total) pixels")
+    expect(covered < total, "3D ghost dots leave the set showing between them")
+    save("11-dots", ghost: dots, background: scene.capture(camera).rgba, width: camera.width, height: camera.height)
+    // Gone points draw blue.
+    var states = [GhostCore.State](repeating: .matched, count: built.surface.positions.count)
+    for (i, p) in built.surface.positions.enumerated() where p.y > 0.02 && abs(p.x) < 0.2 && p.z > -1.7 && p.z < -1.3 { states[i] = .gone }
+    let gone = GhostCore.renderDots(surface: built.surface, states: states, camera: camera, strength: 0.8)
+    let blue = (0..<total).filter { isBlue(gone, $0) }.count
+    expect(blue > 300, "box gone: \(blue) blue dot pixels")
+    // The scan's small dots: many separate dots, not a solid sheet.
+    let scan = GhostCore.renderDots(surface: built.surface, states: nil, camera: camera.scaled(by: 1.5), strength: 0.9, size: 0.0015)
+    let scanShown = shown(scan)
+    let scanTotal = camera.scaled(by: 1.5).width * camera.scaled(by: 1.5).height
+    expect(scanShown > scanTotal / 20 && scanShown < scanTotal / 2, "scan dots: \(scanShown) of \(scanTotal) pixels, spaced out")
+    let big = camera.scaled(by: 1.5)
+    save("12-scan-dots", ghost: scan, background: scene.capture(big).rgba, width: big.width, height: big.height)
+}
+
 testDepthBuffers()
 testGhost()
 testNoisyGhost()
 testHardCases()
 testImageMatch()
+testDots()
 print(failures == 0 ? "All passed" : "\(failures) failed")
 exit(failures == 0 ? 0 : 1)
