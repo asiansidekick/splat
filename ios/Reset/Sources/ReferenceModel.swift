@@ -46,6 +46,8 @@ struct Reference: Codable, Identifiable, Equatable {
     var notes: [RoomNote] = []
     /// Measurements and notes deleted on any phone, so syncing does not bring them back.
     var removedMarks: [UUID] = []
+    /// The torch level it was shot with, nil when the torch was off.
+    var torch: Float?
 
     var hasDepth: Bool { keyframes.contains { $0.depthFile != nil } }
     var slate: String { scene + setup }
@@ -75,6 +77,7 @@ extension Reference {
         measurements = try c.decodeIfPresent([RoomMeasurement].self, forKey: .measurements) ?? []
         notes = try c.decodeIfPresent([RoomNote].self, forKey: .notes) ?? []
         removedMarks = try c.decodeIfPresent([UUID].self, forKey: .removedMarks) ?? []
+        torch = try c.decodeIfPresent(Float.self, forKey: .torch)
     }
 }
 

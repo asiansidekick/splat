@@ -8,7 +8,7 @@ import simd
 /// with the reference, each with its length; with Axes on, also its level and upright parts, so
 /// several sizes show at once. Uses LiDAR depth where there is some, ARKit's surfaces otherwise.
 @MainActor
-final class Measurer: ObservableObject {
+final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     @Published var active = false {
         didSet { if active != oldValue { activeChanged() } }
     }
@@ -21,6 +21,10 @@ final class Measurer: ObservableObject {
     @Published private(set) var start: SIMD3<Float>?
     /// Bumped when the person adds or deletes something, so the reference is saved.
     @Published private(set) var revision = 0
+    /// The line or note tapped, ready to delete on its own.
+    @Published private(set) var selected: UUID? {
+        didSet { if selected != oldValue { rebuild() } }
+    }
     @Published var showAxes = UserDefaults.standard.object(forKey: "measureAxes") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(showAxes, forKey: "measureAxes")
@@ -35,12 +39,53 @@ final class Measurer: ObservableObject {
 
     static let lineColour = UIColor(red: 1, green: 0.84, blue: 0.1, alpha: 1)
     static let noteColour = UIColor(red: 1, green: 0.55, blue: 0.15, alpha: 1)
+    static let pickedColour = UIColor(red: 1, green: 0.25, blue: 0.25, alpha: 1)
 
     init(session: ARSession, parent: SCNNode) {
         self.session = session
+        super.init()
         root.name = "measurements"
         parent.addChildNode(root)
         parent.addChildNode(preview)
+    }
+
+    /// While measuring, a tap on a line, its length or a note picks it; a tap elsewhere lets go.
+    func attachGestures(to view: ARSCNView) {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        tap.delegate = self
+        view.addGestureRecognizer(tap)
+    }
+
+    nonisolated func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
+    }
+
+    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        guard active, let view = gesture.view as? ARSCNView else { return }
+        let hits = view.hitTest(gesture.location(in: view), options: [.searchMode: SCNHitTestSearchMode.all.rawValue])
+        let picked = hits.lazy.compactMap { Measurer.markID(of: $0.node) }.first
+        if picked != nil { Haptics.tap() }
+        selected = picked
+    }
+
+    /// The id of the line or note a drawn node belongs to.
+    private static func markID(of node: SCNNode) -> UUID? {
+        var current: SCNNode? = node
+        while let candidate = current {
+            if let name = candidate.name, name.hasPrefix("mark:") { return UUID(uuidString: String(name.dropFirst(5))) }
+            current = candidate.parent
+        }
+        return nil
+    }
+
+    /// Deletes the picked line or note.
+    func deleteSelected() {
+        guard let id = selected else { return }
+        measurements.removeAll { $0.id == id }
+        notes.removeAll { $0.id == id }
+        removed.append(id)
+        selected = nil
+        changed()
     }
 
     /// Shows what a reference has saved.
@@ -48,11 +93,15 @@ final class Measurer: ObservableObject {
         self.measurements = measurements
         self.notes = notes
         self.removed = removed
+        if let selected, !measurements.contains(where: { $0.id == selected }) && !notes.contains(where: { $0.id == selected }) {
+            self.selected = nil
+        }
         rebuild()
     }
 
     /// What the readout under the crosshair says.
     var readout: String {
+        if selected != nil { return "Tap Delete to remove it" }
         guard let cursor else { return "Aim at a surface" }
         if let start { return Measurer.text(simd_distance(start, cursor)) }
         return measurements.isEmpty && notes.isEmpty ? "Tap + at one end" : "Tap + to measure"
@@ -112,6 +161,7 @@ final class Measurer: ObservableObject {
 
     func clear() {
         start = nil
+        selected = nil
         removed += measurements.map(\.id) + notes.map(\.id)
         measurements = []
         notes = []
@@ -131,6 +181,7 @@ final class Measurer: ObservableObject {
         timer = nil
         start = nil
         cursor = nil
+        selected = nil
         updatePreview()
         guard active else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
@@ -211,29 +262,34 @@ final class Measurer: ObservableObject {
     private func rebuild() {
         root.childNodes.forEach { $0.removeFromParentNode() }
         for measurement in measurements {
-            root.addChildNode(node(for: measurement.start, measurement.end, axes: showAxes))
+            let picked = measurement.id == selected
+            let line = node(for: measurement.start, measurement.end, axes: showAxes && !picked, colour: picked ? Measurer.pickedColour : Measurer.lineColour)
+            line.name = "mark:\(measurement.id.uuidString)"
+            root.addChildNode(line)
         }
         for note in notes {
             let pin = SCNNode()
+            pin.name = "mark:\(note.id.uuidString)"
+            let colour = note.id == selected ? Measurer.pickedColour : Measurer.noteColour
             let height = labelHeight(at: note.spot)
-            pin.addChildNode(Measurer.dot(at: note.spot, radius: max(height * 0.18, 0.004), colour: Measurer.noteColour))
-            pin.addChildNode(Measurer.line(from: note.spot, to: note.spot + SIMD3(0, height * 1.2, 0), radius: max(height * 0.04, 0.001), colour: Measurer.noteColour))
-            pin.addChildNode(ModelDimensions.tag(note.text, colour: Measurer.noteColour, height: height, at: note.spot + SIMD3(0, height * 1.8, 0)))
+            pin.addChildNode(Measurer.dot(at: note.spot, radius: max(height * 0.18, 0.004), colour: colour))
+            pin.addChildNode(Measurer.line(from: note.spot, to: note.spot + SIMD3(0, height * 1.2, 0), radius: max(height * 0.04, 0.001), colour: colour))
+            pin.addChildNode(ModelDimensions.tag(note.text, colour: colour, height: height, at: note.spot + SIMD3(0, height * 1.8, 0)))
             root.addChildNode(pin)
         }
         ModelDimensions.onTop(root)
     }
 
     /// A measured line with its length; with axes, its level part and upright part beside it.
-    private func node(for a: SIMD3<Float>, _ b: SIMD3<Float>, axes: Bool) -> SCNNode {
+    private func node(for a: SIMD3<Float>, _ b: SIMD3<Float>, axes: Bool, colour: UIColor = Measurer.lineColour) -> SCNNode {
         let node = SCNNode()
         let middle = (a + b) / 2
         let height = labelHeight(at: middle)
         let radius = max(height * 0.05, 0.0012)
-        node.addChildNode(Measurer.line(from: a, to: b, radius: radius, colour: Measurer.lineColour))
+        node.addChildNode(Measurer.line(from: a, to: b, radius: radius, colour: colour))
         node.addChildNode(Measurer.dot(at: a, radius: radius * 3, colour: .white))
         node.addChildNode(Measurer.dot(at: b, radius: radius * 3, colour: .white))
-        node.addChildNode(ModelDimensions.tag(Measurer.text(simd_distance(a, b)), colour: Measurer.lineColour, height: height, at: middle + SIMD3(0, height * 0.9, 0)))
+        node.addChildNode(ModelDimensions.tag(Measurer.text(simd_distance(a, b)), colour: colour, height: height, at: middle + SIMD3(0, height * 0.9, 0)))
         guard axes else { return node }
         let low = a.y <= b.y ? a : b
         let high = a.y <= b.y ? b : a
@@ -339,8 +395,12 @@ struct MeasureBar: View {
                     writing = true
                 }
                 .disabled(measurer.cursor == nil)
-                small("trash", "Clear") { confirmingClear = true }
-                    .disabled(measurer.isEmpty)
+                if measurer.selected != nil {
+                    small("trash.fill", "Delete", tint: .red) { measurer.deleteSelected() }
+                } else {
+                    small("trash", "Clear") { confirmingClear = true }
+                        .disabled(measurer.isEmpty)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
@@ -356,14 +416,14 @@ struct MeasureBar: View {
         }
     }
 
-    private func small(_ symbol: String, _ title: String, action: @escaping () -> Void) -> some View {
+    private func small(_ symbol: String, _ title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 2) {
                 Image(systemName: symbol).font(.title3)
                 Text(title).font(.system(size: 10, weight: .semibold))
             }
             .frame(minWidth: 40)
-            .foregroundStyle(.white)
+            .foregroundStyle(tint)
         }
         .accessibilityLabel(title)
     }

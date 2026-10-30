@@ -79,6 +79,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     func prepare(useLiDAR: Bool) {
         // A new session has new coordinates, so models placed in the old one are cleared.
         placer.removeAll()
+        measurer.load(measurements: [], notes: [], removed: [])
         try? FileManager.default.removeItem(at: Recorder.staging)
         let config = ARWorldTrackingConfiguration()
         if useLiDAR && Recorder.lidarAvailable {
@@ -86,6 +87,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         }
         session.delegate = self
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        Torch.shared.applySoon()
         Diagnostics.log("Camera start: LiDAR \(config.frameSemantics.contains(.sceneDepth))")
     }
 
@@ -151,6 +153,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
                 reference.models = placer.models
             }
             reference.measurements = measurer.measurements
+            reference.torch = Torch.shared.savedLevel
             reference.notes = measurer.notes
             try ReferenceStore.save(reference)
             // The session keeps running, so the next reference starts with the room already mapped.

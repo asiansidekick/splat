@@ -1020,6 +1020,7 @@ struct CaptureStage: View {
                     .disabled(recorder.capturing)
                     .accessibilityLabel(useLiDAR ? "LiDAR on" : "LiDAR off")
                 }
+                TorchButton()
                 MeasureToggle(measurer: recorder.measurer)
                     .disabled(recorder.capturing)
                 Button { open(.help) } label: { Image(systemName: "questionmark.circle").font(.title3) }
@@ -1031,6 +1032,7 @@ struct CaptureStage: View {
             ZStack {
                 CameraView(session: recorder.session, content: recorder.modelsNode) { view in
                     recorder.placer.attachGestures(to: view)
+                    recorder.measurer.attachGestures(to: view)
                     holder.view = view
                 }
                 // Dots on everything the scan has covered, building up as you walk round.
@@ -1060,6 +1062,7 @@ struct CaptureStage: View {
                         .onAppear { timeBearingsHint(recorder.trackingNormal) }
                         .onChange(of: recorder.trackingNormal) { _, normal in timeBearingsHint(normal) }
                     Spacer()
+                    TorchDial()
                     MeasureBar(measurer: recorder.measurer)
                     ModelOverlay(placer: recorder.placer)
                     if let error = recorder.error {
@@ -1308,7 +1311,14 @@ struct ResetStage: View {
         .onChange(of: restorer.matched) { _, matched in
             if matched { Diagnostics.log("Edge guides all seated") }
         }
-        .onAppear { tapCatcher.install() }
+        .onAppear {
+            tapCatcher.install()
+            // Checked under the same light it was shot with.
+            if let level = reference.torch, Torch.shared.available {
+                Torch.shared.set(on: true, level: level)
+                showToast("Torch on at \(Int((level * 100).rounded()))%, as when this was shot")
+            }
+        }
         .onDisappear {
             tapCatcher.remove()
             restorer.stop()
@@ -1382,6 +1392,7 @@ struct ResetStage: View {
                 }
             }
             if !restorer.paused {
+                TorchButton()
                 MeasureToggle(measurer: restorer.measurer)
                     .disabled(restorer.status != .ready)
             }
@@ -1411,6 +1422,7 @@ struct ResetStage: View {
             ZStack {
                 CameraView(session: restorer.session, content: restorer.sceneContent) { view in
                     restorer.placer.attachGestures(to: view)
+                    restorer.measurer.attachGestures(to: view)
                     holder.view = view
                 }
                 if ghostShown {
@@ -1475,6 +1487,7 @@ struct ResetStage: View {
                     if restorer.paused {
                         ScrubCursor(value: toNow, start: "THEN", end: "NOW")
                     } else {
+                        TorchDial()
                         MeasureBar(measurer: restorer.measurer)
                         ModelOverlay(placer: restorer.placer)
                         if swipingStrength {

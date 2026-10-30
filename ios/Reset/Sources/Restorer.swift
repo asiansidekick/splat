@@ -156,6 +156,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             let config = ARWorldTrackingConfiguration()
             session.delegate = self
             session.run(config, options: [.resetTracking, .removeExistingAnchors])
+            Torch.shared.applySoon()
             loadStartPhoto()
             placer.load(reference.models)
             measurer.load(measurements: reference.measurements, notes: reference.notes, removed: reference.removedMarks)
@@ -178,6 +179,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             }
             session.delegate = self
             session.run(config, options: [.resetTracking, .removeExistingAnchors])
+            Torch.shared.applySoon()
             status = .relocalizing
             relocalizingSince = Date()
             if Restorer.offers3D { buildCloud() }
