@@ -31,6 +31,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// While dragging: from where the finger's ray meets the model's floor height to the model,
     /// so the model keeps its place under the finger instead of jumping to it.
     private var dragOffset: SIMD3<Float>?
+    /// True while something else (measuring) uses one-finger drags on the camera view.
+    var isSuspended: () -> Bool = { false }
     let session: ARSession
     /// Models are added under this node, in the session's world coordinates.
     let root: SCNNode
@@ -166,7 +168,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// (or the only one) when none is selected. Works with no surface found, unlike a raycast,
     /// which often finds nothing and had left the model stuck.
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        guard let view = gesture.view as? ARSCNView else { return }
+        guard !isSuspended(), let view = gesture.view as? ARSCNView else { return }
         let location = gesture.location(in: view)
         if gesture.state == .began {
             let touched = view.hitTest(location, options: nil).lazy.compactMap { self.modelID(of: $0.node) }.first

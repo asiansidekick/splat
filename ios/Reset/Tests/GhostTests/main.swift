@@ -176,6 +176,11 @@ func testMiddleDepth() {
     depth[4 * width + 4] = 0
     expect(DepthMap.middle(depth, width: width, height: height) == nil, "four are not")
     expect(DepthMap.middle([1, 2, 3], width: 2, height: 2) == nil, "a map of the wrong size is refused")
+    var grid = [Float](repeating: 1.2, count: width * height)
+    expect(DepthMap.sample(grid, width: width, height: height, x: 0, y: 0) == nil, "a corner has too few neighbours")
+    expect(DepthMap.sample(grid, width: width, height: height, x: 2, y: 2) == 1.2, "an inner point reads its median")
+    grid[2 * width + 2] = 9
+    expect(DepthMap.sample(grid, width: width, height: height, x: 2, y: 2) == 1.2, "a single outlier is ignored")
 }
 
 func testDepthBuffers() {

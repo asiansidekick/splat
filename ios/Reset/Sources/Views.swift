@@ -1218,6 +1218,8 @@ final class LastTime {
 /// up. The shutter saves a snapshot, Log logs the take, and Pause freezes the picture to fade or
 /// wipe between the reference and now.
 struct ResetStage: View {
+    /// Whether the ruler is on: drags then draw lines, so the swipe for ghost strength steps aside.
+    @State private var measuring = false
     @StateObject private var restorer: Restorer
     @Binding var reference: Reference
     @ObservedObject var thumbnails: Thumbnails
@@ -1295,6 +1297,7 @@ struct ResetStage: View {
             reference.models = models
             save()
         }
+        .onReceive(restorer.measurer.$active) { measuring = $0 }
         .onReceive(restorer.measurer.$revision.dropFirst()) { _ in
             reference.measurements = restorer.measurer.measurements
             reference.notes = restorer.measurer.notes
@@ -1449,8 +1452,8 @@ struct ResetStage: View {
                             .allowsHitTesting(false)
                     }
                 }
-                if !restorer.paused, reference.models.isEmpty {
-                    // Swipe left or right anywhere for the ghost strength.
+                if !restorer.paused, reference.models.isEmpty, !measuring {
+                    // Swipe left or right anywhere for the ghost strength (not while measuring: drags draw lines).
                     Color.clear
                         .modifier(HorizontalSwipe(value: Binding(get: { 1 - ghostOpacity }, set: { ghostOpacity = 1 - $0 })) { active in
                             if active {

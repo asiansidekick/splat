@@ -20,7 +20,12 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     let session = ARSession()
     /// 3D models placed before recording; each reference saved afterwards keeps them.
     let modelsNode = SCNNode()
-    lazy var placer = ModelPlacer(session: session, root: modelsNode, folder: Recorder.staging)
+    lazy var placer: ModelPlacer = {
+        let placer = ModelPlacer(session: session, root: modelsNode, folder: Recorder.staging)
+        // One-finger drags draw measurements while measuring, instead of moving models.
+        placer.isSuspended = { [unowned self] in self.measurer.active }
+        return placer
+    }()
     /// Measurements and notes made while recording go into each reference saved.
     lazy var measurer = Measurer(session: session, parent: modelsNode)
 

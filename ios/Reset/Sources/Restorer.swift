@@ -67,7 +67,12 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     let modelsNode = SCNNode()
     /// Everything this screen draws in 3D.
     let sceneContent = SCNNode()
-    lazy var placer = ModelPlacer(session: session, root: modelsNode, folder: ReferenceStore.folder(for: reference.id))
+    lazy var placer: ModelPlacer = {
+        let placer = ModelPlacer(session: session, root: modelsNode, folder: ReferenceStore.folder(for: reference.id))
+        // One-finger drags draw measurements while measuring, instead of moving models.
+        placer.isSuspended = { [unowned self] in self.measurer.active }
+        return placer
+    }()
     /// Measurements and notes in the room, shown with the models once the room is found.
     lazy var measurer = Measurer(session: session, parent: modelsNode)
 

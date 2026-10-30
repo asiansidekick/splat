@@ -88,12 +88,20 @@ enum DepthMap {
     /// The depth at the middle of a map, in metres: the median of the real readings (between
     /// `range`) within `radius` pixels of the centre. Nil with fewer than 5 of the 9 around the middle.
     static func middle(_ depth: [Float], width: Int, height: Int, radius: Int = 1, range: ClosedRange<Float> = 0.05...6) -> Float? {
+        sample(depth, width: width, height: height, x: width / 2, y: height / 2, radius: radius, range: range)
+    }
+
+    /// The depth around pixel (`x`, `y`) (kept inside the map): the median of the real readings
+    /// within `radius` pixels. Nil with fewer than half of them real.
+    static func sample(_ depth: [Float], width: Int, height: Int, x centreX: Int, y centreY: Int, radius: Int = 1, range: ClosedRange<Float> = 0.05...6) -> Float? {
         guard width > 0, height > 0, depth.count == width * height else { return nil }
+        let cx = min(max(centreX, 0), width - 1)
+        let cy = min(max(centreY, 0), height - 1)
         var readings: [Float] = []
         for dy in -radius...radius {
             for dx in -radius...radius {
-                let x = width / 2 + dx
-                let y = height / 2 + dy
+                let x = cx + dx
+                let y = cy + dy
                 guard x >= 0, y >= 0, x < width, y < height else { continue }
                 let value = depth[y * width + x]
                 if value.isFinite && range.contains(value) { readings.append(value) }

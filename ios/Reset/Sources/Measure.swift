@@ -20,6 +20,13 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// Whether the crosshair's distance comes from LiDAR or only from ARKit's estimated surfaces,
     /// which can be well out; shown under the reading.
     @Published private(set) var fromLiDAR = false
+    /// A line being drawn with a finger, both ends read from one camera frame.
+    struct DragLine: Equatable {
+        var a: SIMD3<Float>
+        var b: SIMD3<Float>
+    }
+    @Published private(set) var drag: DragLine?
+    private var drawStart: CGPoint = .zero
     private var loggedSource: Bool?
     /// Why there is no distance when tracking isn't ready, shown in place of the reading.
     @Published private(set) var trackingNote: String?
@@ -61,6 +68,64 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.delegate = self
         view.addGestureRecognizer(tap)
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleDraw(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = self
+        view.addGestureRecognizer(pan)
+    }
+
+    nonisolated func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer is UIPanGestureRecognizer else { return true }
+        return MainActor.assumeIsolated { self.active }
+    }
+
+    /// Drag a line across the screen: both ends are read from the same camera frame, so the length
+    /// is the LiDAR's own, whatever the phone's tracking is doing. Hold the phone still.
+    @objc private func handleDraw(_ gesture: UIPanGestureRecognizer) {
+        guard active, let view = gesture.view as? ARSCNView else { return }
+        let location = gesture.location(in: view)
+        switch gesture.state {
+        case .began:
+            // The pan starts a few points into the drag: the line starts where the finger went down.
+            let moved = gesture.translation(in: view)
+            drawStart = CGPoint(x: location.x - moved.x, y: location.y - moved.y)
+            start = nil
+            selected = nil
+            updateDrag(to: location, in: view)
+        case .changed:
+            updateDrag(to: location, in: view)
+        case .ended:
+            updateDrag(to: location, in: view)
+            finishDrag(screenLength: hypot(location.x - drawStart.x, location.y - drawStart.y))
+        default:
+            drag = nil
+            updatePreview()
+        }
+    }
+
+    private func updateDrag(to location: CGPoint, in view: ARSCNView) {
+        guard let frame = session.currentFrame, case .normal = frame.camera.trackingState, let depth = Measurer.depth(of: frame),
+            let a = Measurer.point(in: frame, depth: depth, at: drawStart, view: view),
+            let b = Measurer.point(in: frame, depth: depth, at: location, view: view)
+        else {
+            drag = nil
+            updatePreview()
+            return
+        }
+        drag = DragLine(a: a, b: b)
+        updatePreview()
+    }
+
+    private func finishDrag(screenLength: CGFloat) {
+        defer {
+            drag = nil
+            updatePreview()
+        }
+        guard let drag, screenLength > 24, simd_distance(drag.a, drag.b) > 0.005 else { return }
+        measurements.append(RoomMeasurement(a: array(drag.a), b: array(drag.b), created: Date()))
+        Haptics.success()
+        Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (drawn on the screen, one frame)")
+        changed()
     }
 
     nonisolated func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
@@ -122,10 +187,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     /// What the readout under the crosshair says.
     var readout: String {
+        if let drag { return Measurer.text(simd_distance(drag.a, drag.b)) }
         if selected != nil { return "Edit or delete the red one" }
         guard let cursor else { return trackingNote ?? "Aim at a surface" }
         if let start { return Measurer.text(simd_distance(start, cursor)) }
-        return measurements.isEmpty && notes.isEmpty ? "Tap + at one end" : "Tap + to measure"
+        return measurements.isEmpty && notes.isEmpty ? "Drag a line across it, or aim and tap +" : "Drag a line, or aim and tap +"
     }
 
     /// Starts a line at the crosshair, or finishes the one started.
@@ -208,6 +274,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         loggedSource = nil
         trackingNote = nil
         loggedNote = nil
+        drag = nil
         updatePreview()
         guard active else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
@@ -269,16 +336,44 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// The LiDAR depth in the middle of the picture (the median of the middle 3 by 3 readings),
     /// along the ray through the middle of the screen.
     static func depthPoint(_ frame: ARFrame) -> SIMD3<Float>? {
+        guard let depth = depth(of: frame) else { return nil }
+        return point(in: frame, depth: depth, normalized: CGPoint(x: 0.5, y: 0.5))
+    }
+
+    /// A frame's LiDAR depth as metres, whatever format ARKit sends (32 or 16 bit, depth or disparity).
+    struct Depth {
+        let values: [Float]
+        let width: Int
+        let height: Int
+    }
+
+    static func depth(of frame: ARFrame) -> Depth? {
         guard let map = (frame.smoothedSceneDepth ?? frame.sceneDepth)?.depthMap else { return nil }
-        // Whatever format ARKit sends (32 or 16 bit, depth or disparity) comes out as metres.
-        let values = DepthMap.floats(DepthMap.copy(map))
-        guard let depth = DepthMap.middle(values, width: CVPixelBufferGetWidth(map), height: CVPixelBufferGetHeight(map)) else { return nil }
+        return Depth(values: DepthMap.floats(DepthMap.copy(map)), width: CVPixelBufferGetWidth(map), height: CVPixelBufferGetHeight(map))
+    }
+
+    /// The point in the room under a point of the view, from this frame's depth.
+    static func point(in frame: ARFrame, depth: Depth, at location: CGPoint, view: UIView) -> SIMD3<Float>? {
+        let size = view.bounds.size
+        guard size.width > 0, size.height > 0 else { return nil }
+        // From the view's points to the camera picture's own 0 to 1 coordinates.
+        let toImage = frame.displayTransform(for: Screen.orientation, viewportSize: size).inverted()
+        let n = CGPoint(x: location.x / size.width, y: location.y / size.height).applying(toImage)
+        return point(in: frame, depth: depth, normalized: n)
+    }
+
+    /// `normalized`: where in the camera picture, 0 to 1 across and down in the sensor's layout.
+    static func point(in frame: ARFrame, depth: Depth, normalized n: CGPoint) -> SIMD3<Float>? {
+        guard (0...1).contains(n.x), (0...1).contains(n.y),
+            let metres = DepthMap.sample(depth.values, width: depth.width, height: depth.height,
+                                         x: Int(n.x * CGFloat(depth.width)), y: Int(n.y * CGFloat(depth.height)))
+        else { return nil }
         let k = frame.camera.intrinsics
         let size = frame.camera.imageResolution
         // ARKit's camera looks down -z with y up; the picture counts y down.
-        let x = (Float(size.width) / 2 - k[2][0]) / k[0][0]
-        let y = -(Float(size.height) / 2 - k[2][1]) / k[1][1]
-        let world = frame.camera.transform * SIMD4(x * depth, y * depth, -depth, 1)
+        let x = (Float(n.x) * Float(size.width) - k[2][0]) / k[0][0]
+        let y = -(Float(n.y) * Float(size.height) - k[2][1]) / k[1][1]
+        let world = frame.camera.transform * SIMD4(x * metres, y * metres, -metres, 1)
         return SIMD3(world.x, world.y, world.z)
     }
 
@@ -358,7 +453,14 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// The line being drawn: from where it started to the crosshair, with its length.
     private func updatePreview() {
         preview.childNodes.forEach { $0.removeFromParentNode() }
-        guard active, let start else { return }
+        guard active else { return }
+        if let drag {
+            preview.addChildNode(Measurer.dot(at: drag.a, radius: 0.004, colour: .white))
+            preview.addChildNode(node(for: drag.a, drag.b, axes: false))
+            ModelDimensions.onTop(preview)
+            return
+        }
+        guard let start else { return }
         preview.addChildNode(Measurer.dot(at: start, radius: 0.004, colour: .white))
         if let cursor, simd_distance(start, cursor) > 0.002 {
             preview.addChildNode(node(for: start, cursor, axes: false))
