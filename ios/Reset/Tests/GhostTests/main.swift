@@ -183,6 +183,41 @@ func testMiddleDepth() {
     expect(DepthMap.sample(grid, width: width, height: height, x: 2, y: 2) == 1.2, "a single outlier is ignored")
 }
 
+func testPlaneDepth() {
+    print("Plane depth")
+    let width = 40, height = 30
+    // A tilted flat surface: its inverse depth is a straight function of the pixel.
+    var tilted = [Float](repeating: 0, count: width * height)
+    for y in 0..<height { for x in 0..<width { tilted[y * width + x] = 1 / (0.8 + 0.01 * Float(x) + 0.02 * Float(y)) } }
+    let truth = 1 / (0.8 + 0.01 * 20 + 0.02 * 15)  // the middle of pixel (20, 15)
+    expect(abs((DepthMap.planeDepth(tilted, width: width, height: height, x: 20.5, y: 15.5) ?? 0) - truth) < 0.002, "a tilted plane reads true between pixels")
+    // A sheet at 1 m with the floor 1.5 m away beyond its edge, a point right at the edge.
+    var edge = [Float](repeating: 1, count: width * height)
+    for y in 0..<height { for x in 22..<width { edge[y * width + x] = 1.5 } }
+    let near = DepthMap.planeDepth(edge, width: width, height: height, x: 21.2, y: 15) ?? 0
+    expect(abs(near - 1) < 0.03, "at the edge of a sheet it reads the sheet (\(near) m), not the floor behind")
+    var noisy = tilted
+    for i in stride(from: 0, to: noisy.count, by: 7) { noisy[i] *= 1.3 }
+    expect(abs((DepthMap.planeDepth(noisy, width: width, height: height, x: 20.5, y: 15.5) ?? 0) - truth) < 0.02, "odd readings are dropped")
+    expect(DepthMap.planeDepth(tilted, width: width, height: height, x: 0, y: 0, radius: 1) == nil, "too few readings, no depth")
+}
+
+func testCornerSnap() {
+    print("Corner snap")
+    let width = 140, height = 140
+    var picture = [Float](repeating: 30, count: width * height)
+    for y in 40..<100 { for x in 30..<90 { picture[y * width + x] = 220 } }
+    // Where a finger might land: a few pixels in from the top left corner.
+    let found = CornerSnap.corner(luma: picture, width: width, height: height, near: SIMD2(36, 47), within: 20)
+    expect(found != nil && simd_distance(found!, SIMD2(30, 40)) < 2.5, "the corner of a bright sheet is found (\(String(describing: found)))")
+    let along = CornerSnap.corner(luma: picture, width: width, height: height, near: SIMD2(60, 42), within: 8)
+    expect(along == nil, "a straight edge is not a corner")
+    let flat = [Float](repeating: 100, count: width * height)
+    expect(CornerSnap.corner(luma: flat, width: width, height: height, near: SIMD2(70, 70), within: 30) == nil, "a flat area has none")
+    let far = CornerSnap.corner(luma: picture, width: width, height: height, near: SIMD2(60, 70), within: 10)
+    expect(far == nil, "a corner outside the reach is left alone")
+}
+
 func testDepthBuffers() {
     print("Depth buffers")
     let width = 256, height = 192
@@ -886,6 +921,8 @@ func testDots() {
 
 testDepthBuffers()
 testMiddleDepth()
+testPlaneDepth()
+testCornerSnap()
 testGhost()
 testNoisyGhost()
 testHardCases()

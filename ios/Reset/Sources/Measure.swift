@@ -44,6 +44,13 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// What the last drag was made of, written to the log when the line is kept so a wrong length
     /// can be traced to the depth, the mapping or the pose.
     private var dragDetail = ""
+    private var dragView: ARSCNView?
+    private var dragLocation: CGPoint?
+    private var dragSamples: [DragLine] = []
+    private var dragSampleTime: TimeInterval = 0
+    private var dragTooClose = false
+    /// The crosshair is nearer than the LiDAR can read.
+    @Published private(set) var tooClose = false
     private var drawStart: CGPoint = .zero
     private var loggedSource: Bool?
     /// Why there is no distance when tracking isn't ready, shown in place of the reading.
@@ -164,38 +171,66 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             updateDrag(to: location, in: view)
             finishDrag(screenLength: hypot(location.x - drawStart.x, location.y - drawStart.y))
         default:
-            drag = nil
-            updatePreview()
+            endDrag()
         }
     }
 
+    private func endDrag() {
+        drag = nil
+        dragLocation = nil
+        dragView = nil
+        dragSamples = []
+        dragTooClose = false
+        updatePreview()
+    }
+
     private func updateDrag(to location: CGPoint, in view: ARSCNView) {
-        guard let frame = session.currentFrame, case .normal = frame.camera.trackingState, let depth = Measurer.depth(of: frame),
-            let a = Measurer.point(in: frame, depth: depth, at: drawStart, view: view),
-            let b = Measurer.point(in: frame, depth: depth, at: location, view: view)
+        // Moving the finger starts the averaging again; holding it still builds it up.
+        if let last = dragLocation, hypot(last.x - location.x, last.y - location.y) > 1.5 { dragSamples = [] }
+        dragLocation = location
+        dragView = view
+        sampleDrag()
+    }
+
+    /// Reads both ends from the newest camera frame and averages the last few, so a hand held
+    /// still gives a steadier line than any one frame.
+    private func sampleDrag() {
+        guard let view = dragView, let location = dragLocation, let frame = session.currentFrame, frame.timestamp != dragSampleTime else { return }
+        dragSampleTime = frame.timestamp
+        guard case .normal = frame.camera.trackingState, let depth = Measurer.depth(of: frame),
+            let a = Measurer.locate(in: frame, depth: depth, at: drawStart, view: view, snap: true),
+            let b = Measurer.locate(in: frame, depth: depth, at: location, view: view, snap: true)
         else {
+            dragSamples = []
             drag = nil
             updatePreview()
             return
         }
-        drag = DragLine(a: a, b: b)
-        dragDetail = Measurer.detail(frame: frame, depth: depth, view: view, from: drawStart, to: location, a: a, b: b)
+        dragSamples.append(DragLine(a: a.point, b: b.point))
+        if dragSamples.count > 8 { dragSamples.removeFirst() }
+        let line = DragLine(a: Measurer.median(dragSamples.map(\.a)), b: Measurer.median(dragSamples.map(\.b)))
+        drag = line
+        let camera = frame.camera.transform.columns.3
+        let eye = SIMD3(camera.x, camera.y, camera.z)
+        dragTooClose = min(simd_distance(line.a, eye), simd_distance(line.b, eye)) < Measurer.minimumRange
+        dragDetail = Measurer.detail(frame: frame, depth: depth, view: view, from: drawStart, to: location, a: line.a, b: line.b)
+            + String(format: ", snapped %@/%@, averaged over %ld frames", a.snapped ? "yes" : "no", b.snapped ? "yes" : "no", dragSamples.count)
         updatePreview()
     }
 
     private func finishDrag(screenLength: CGFloat) {
-        defer {
-            drag = nil
-            updatePreview()
-        }
+        defer { endDrag() }
         guard let drag, screenLength > 24, simd_distance(drag.a, drag.b) > 0.005 else { return }
         let line = RoomMeasurement(a: array(drag.a), b: array(drag.b), created: Date())
         measurements.append(line)
         Haptics.success()
-        Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (drawn on the screen, one frame)")
+        Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (drawn on the screen)")
         Diagnostics.log("Drag detail: \(dragDetail)")
         changed()
     }
+
+    /// The nearest the LiDAR reads reliably.
+    static let minimumRange: Float = 0.25
 
     nonisolated func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         true
@@ -263,10 +298,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     /// What the readout under the crosshair says.
     var readout: String {
-        if let drag { return "~" + Measurer.text(simd_distance(drag.a, drag.b)) }
+        if let drag { return "~" + Measurer.text(simd_distance(drag.a, drag.b)) + (dragTooClose ? " · too close" : "") }
         if moving != nil { return "Aim where it goes, tap ✓" }
         if selected != nil { return "Edit, move or delete the red one" }
         guard let cursor else { return trackingNote ?? "Aim at a surface" }
+        if tooClose { return "Too close: step back a little" }
         if let start { return "~" + Measurer.text(simd_distance(start, cursor)) }
         return measurements.isEmpty && notes.isEmpty ? "Drag a line across it, or hold to add a note" : "Drag a line, or hold to add a note"
     }
@@ -407,6 +443,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     }
 
     private func tick() {
+        if dragLocation != nil { sampleDrag() }
         guard let frame = session.currentFrame else {
             cursor = nil
             updatePreview()
@@ -437,7 +474,12 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             Diagnostics.log("Measure: distance from \(fromLiDAR ? "LiDAR depth" : "estimated surfaces (no LiDAR depth)")")
         }
         if let cursor, let camera = session.currentFrame?.camera.transform.columns.3 {
-            airDistance = min(max(simd_distance(cursor, SIMD3(camera.x, camera.y, camera.z)), 0.4), 4)
+            let away = simd_distance(cursor, SIMD3(camera.x, camera.y, camera.z))
+            airDistance = min(max(away, 0.4), 4)
+            let close = fromLiDAR && away < Measurer.minimumRange
+            if tooClose != close { tooClose = close }
+        } else if tooClose {
+            tooClose = false
         }
         if let id = moving, let index = notes.firstIndex(where: { $0.id == id }), let spot = cursor ?? airPoint() {
             notes[index].position = array(spot)
@@ -485,12 +527,59 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     /// The point in the room under a point of the view, from this frame's depth.
     static func point(in frame: ARFrame, depth: Depth, at location: CGPoint, view: UIView) -> SIMD3<Float>? {
+        locate(in: frame, depth: depth, at: location, view: view, snap: false)?.point
+    }
+
+    /// Like `point`, and with `snap` first moves the place onto the sharp corner nearest to it in
+    /// the camera picture, if there is a clear one. Says whether it moved.
+    static func locate(in frame: ARFrame, depth: Depth, at location: CGPoint, view: UIView, snap: Bool) -> (point: SIMD3<Float>, snapped: Bool)? {
         let size = view.bounds.size
         guard size.width > 0, size.height > 0 else { return nil }
         // From the view's points to the camera picture's own 0 to 1 coordinates.
         let toImage = frame.displayTransform(for: Screen.orientation, viewportSize: size).inverted()
-        let n = CGPoint(x: location.x / size.width, y: location.y / size.height).applying(toImage)
-        return point(in: frame, depth: depth, normalized: n)
+        var n = CGPoint(x: location.x / size.width, y: location.y / size.height).applying(toImage)
+        var moved = false
+        if snap, let corner = snapped(frame, to: n) {
+            n = corner
+            moved = true
+        }
+        guard let point = point(in: frame, depth: depth, normalized: n) else { return nil }
+        return (point, moved)
+    }
+
+    /// The sharp corner nearest `n` (0 to 1 across the camera picture), found in the picture's
+    /// brightness around it; nil when there is none that is clear.
+    static func snapped(_ frame: ARFrame, to n: CGPoint, radius: Float = 56) -> CGPoint? {
+        let buffer = frame.capturedImage
+        guard CVPixelBufferGetPlaneCount(buffer) >= 1 else { return nil }
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return nil }
+        let width = CVPixelBufferGetWidthOfPlane(buffer, 0)
+        let height = CVPixelBufferGetHeightOfPlane(buffer, 0)
+        let rowBytes = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+        let half = Int(radius) + 10
+        let cx = Int(n.x * CGFloat(width)), cy = Int(n.y * CGFloat(height))
+        let x0 = max(0, cx - half), y0 = max(0, cy - half)
+        let x1 = min(width, cx + half), y1 = min(height, cy + half)
+        let w = x1 - x0, h = y1 - y0
+        guard w > 24, h > 24 else { return nil }
+        var patch = [Float](repeating: 0, count: w * h)
+        let bytes = base.assumingMemoryBound(to: UInt8.self)
+        for y in 0..<h {
+            let row = bytes + (y0 + y) * rowBytes + x0
+            for x in 0..<w { patch[y * w + x] = Float(row[x]) }
+        }
+        guard let corner = CornerSnap.corner(luma: patch, width: w, height: h, near: SIMD2(Float(cx - x0), Float(cy - y0)), within: radius) else { return nil }
+        return CGPoint(x: (CGFloat(x0) + CGFloat(corner.x) + 0.5) / CGFloat(width), y: (CGFloat(y0) + CGFloat(corner.y) + 0.5) / CGFloat(height))
+    }
+
+    private static func median(_ points: [SIMD3<Float>]) -> SIMD3<Float> {
+        func middle(_ values: [Float]) -> Float {
+            let sorted = values.sorted()
+            return sorted.count % 2 == 1 ? sorted[sorted.count / 2] : (sorted[sorted.count / 2 - 1] + sorted[sorted.count / 2]) / 2
+        }
+        return SIMD3(middle(points.map(\.x)), middle(points.map(\.y)), middle(points.map(\.z)))
     }
 
     /// A line of numbers for the log: where each end fell in the picture, the depth there, the
@@ -528,10 +617,13 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     /// `normalized`: where in the camera picture, 0 to 1 across and down in the sensor's layout.
     static func point(in frame: ARFrame, depth: Depth, normalized n: CGPoint) -> SIMD3<Float>? {
-        guard (0...1).contains(n.x), (0...1).contains(n.y),
-            let metres = DepthMap.sample(depth.values, width: depth.width, height: depth.height,
-                                         x: Int(n.x * CGFloat(depth.width)), y: Int(n.y * CGFloat(depth.height)))
-        else { return nil }
+        guard (0...1).contains(n.x), (0...1).contains(n.y) else { return nil }
+        // A plane fitted to the depth round the place, falling back to its middle reading.
+        let metres = DepthMap.planeDepth(depth.values, width: depth.width, height: depth.height,
+                                          x: Float(n.x) * Float(depth.width), y: Float(n.y) * Float(depth.height))
+            ?? DepthMap.sample(depth.values, width: depth.width, height: depth.height,
+                               x: Int(n.x * CGFloat(depth.width)), y: Int(n.y * CGFloat(depth.height)))
+        guard let metres else { return nil }
         let k = frame.camera.intrinsics
         let size = frame.camera.imageResolution
         // ARKit's camera looks down -z with y up; the picture counts y down.

@@ -112,6 +112,73 @@ enum DepthMap {
         return readings.sorted()[readings.count / 2]
     }
 
+    /// The depth at a place between depth pixels, from a plane fitted to the readings round it.
+    /// A plane's distance changes smoothly (its inverse is a straight function of the pixel), so
+    /// this reads a flat thing more steadily than one pixel or a median, and readings from another
+    /// surface behind or in front (the edge of a sheet of paper) are dropped as outliers.
+    /// `x` and `y` are in depth pixels, with 0.5 the middle of the first one.
+    static func planeDepth(_ depth: [Float], width: Int, height: Int, x: Float, y: Float, radius: Int = 3, range: ClosedRange<Float> = 0.05...6) -> Float? {
+        guard width > 0, height > 0, depth.count == width * height else { return nil }
+        let cx = Int(x.rounded(.down)), cy = Int(y.rounded(.down))
+        var points: [(dx: Double, dy: Double, inverse: Double)] = []
+        for j in -radius...radius {
+            for i in -radius...radius {
+                let px = cx + i, py = cy + j
+                guard px >= 0, py >= 0, px < width, py < height else { continue }
+                let value = depth[py * width + px]
+                guard value.isFinite, range.contains(value) else { continue }
+                points.append((Double(px) + 0.5 - Double(x), Double(py) + 0.5 - Double(y), 1 / Double(value)))
+            }
+        }
+        guard points.count >= 8 else { return nil }
+        // The plane most readings agree with, found by trying every plane through three of a dozen
+        // of them (always the same ones, so the answer is steady). In inverse metres a limit of
+        // 0.012 is about 1 cm at 1 m, the LiDAR's own noise.
+        let limit = 0.012
+        let step = max(1, Int((Double(points.count) / 12).rounded(.up)))
+        let sample = stride(from: 0, to: points.count, by: step).map { points[$0] }
+        var best: [(dx: Double, dy: Double, inverse: Double)] = []
+        for i in 0..<sample.count {
+            for j in (i + 1)..<sample.count {
+                for k in (j + 1)..<sample.count {
+                    guard let plane = fitPlane([sample[i], sample[j], sample[k]]) else { continue }
+                    let agree = points.filter { abs(plane.a * $0.dx + plane.b * $0.dy + plane.c - $0.inverse) <= limit }
+                    if agree.count > best.count { best = agree }
+                }
+            }
+        }
+        guard best.count >= 6, let fit = fitPlane(best), fit.c > 0 else { return nil }
+        let metres = Float(1 / fit.c)
+        return range.contains(metres) ? metres : nil
+    }
+
+    /// Least squares for inverse = a * dx + b * dy + c.
+    private static func fitPlane(_ points: [(dx: Double, dy: Double, inverse: Double)]) -> (a: Double, b: Double, c: Double)? {
+        var sxx = 0.0, sxy = 0.0, sx = 0.0, syy = 0.0, sy = 0.0, n = 0.0
+        var sxz = 0.0, syz = 0.0, sz = 0.0
+        for p in points {
+            sxx += p.dx * p.dx; sxy += p.dx * p.dy; sx += p.dx
+            syy += p.dy * p.dy; sy += p.dy; n += 1
+            sxz += p.dx * p.inverse; syz += p.dy * p.inverse; sz += p.inverse
+        }
+        // Solve [[sxx sxy sx] [sxy syy sy] [sx sy n]] * [a b c] = [sxz syz sz] by Cramer's rule.
+        func det(_ m: [[Double]]) -> Double {
+            m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+        }
+        let matrix = [[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, n]]
+        let d = det(matrix)
+        guard abs(d) > 1e-9 else { return nil }
+        let rhs = [sxz, syz, sz]
+        func replaced(_ column: Int) -> [[Double]] {
+            var m = matrix
+            for row in 0..<3 { m[row][column] = rhs[row] }
+            return m
+        }
+        return (det(replaced(0)) / d, det(replaced(1)) / d, det(replaced(2)) / d)
+    }
+
     /// IEEE half precision to Float, without relying on the Float16 type.
     static func halfToFloat(_ bits: UInt16) -> Float {
         let sign: UInt32 = UInt32(bits & 0x8000) << 16
