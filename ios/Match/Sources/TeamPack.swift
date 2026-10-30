@@ -140,6 +140,7 @@ enum TeamPack {
         for shot in arriving {
             if let index = board.shots.firstIndex(where: { $0.id == shot.id }) {
                 if board.shots[index].note.isEmpty { board.shots[index].note = shot.note }
+                if board.shots[index].fit == nil { board.shots[index].fit = shot.fit }
             } else if !have.contains(shot.id) {
                 board.shots.append(shot)
             }

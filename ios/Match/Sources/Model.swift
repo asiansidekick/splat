@@ -96,7 +96,8 @@ final class BoardStore: ObservableObject {
         let thumbnail = shot.thumbnailFile
         let depthFile = shot.depthFile
         let saved = await Task.detached(priority: .userInitiated) {
-            let written = ImageFile.write(data, to: folder, file: file, thumbnail: thumbnail, crop: crop)
+            // Imported pictures lose any black bars, so they size up to the camera properly.
+            let written = ImageFile.write(data, to: folder, file: file, thumbnail: thumbnail, crop: crop, trimBars: source == .imported)
             if written, let depth { try? depth.data.write(to: folder.appending(path: depthFile), options: .atomic) }
             return written
         }.value
@@ -151,10 +152,10 @@ enum ImageFile {
 
     /// Writes the photo upright as a JPEG, plus a small thumbnail for the grids. Decodes straight
     /// to the reduced size, so a 48 MP or RAW photo never sits in memory at full size.
-    static func write(_ data: Data, to folder: URL, file: String, thumbnail: String, crop: CGFloat? = nil) -> Bool {
+    static func write(_ data: Data, to folder: URL, file: String, thumbnail: String, crop: CGFloat? = nil, trimBars: Bool = false) -> Bool {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-            let full = downsample(source, maxPixels: maxPixels).flatMap({ centred($0, aspect: crop) }),
-            let small = downsample(source, maxPixels: 640).flatMap({ centred($0, aspect: crop) }),
+            let full = downsample(source, maxPixels: maxPixels).flatMap({ trimBars ? trimmed($0) : centred($0, aspect: crop) }),
+            let small = downsample(source, maxPixels: 640).flatMap({ trimBars ? trimmed($0) : centred($0, aspect: crop) }),
             let fullData = UIImage(cgImage: full).jpegData(compressionQuality: 0.85),
             let smallData = UIImage(cgImage: small).jpegData(compressionQuality: 0.8)
         else { return false }
@@ -166,6 +167,13 @@ enum ImageFile {
         } catch {
             return false
         }
+    }
+
+    /// Without black bars round it (letterboxing on a screenshot).
+    static func trimmed(_ image: CGImage) -> CGImage? {
+        let rect = BorderTrim.content(of: image)
+        guard rect.width < CGFloat(image.width) || rect.height < CGFloat(image.height) else { return image }
+        return image.cropping(to: rect) ?? image
     }
 
     /// The middle of the picture at the given width over height, as the screen fills with it.

@@ -48,6 +48,8 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
     var note = ""
     var isReference = false
     var source: Source = .camera
+    /// An imported photo's size and place over the live camera, once worked out.
+    var fit: OverlayFit?
 
     init(taken: Date, take: Int, angle: String = "", source: Source = .camera) {
         self.taken = taken
@@ -66,6 +68,7 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
         note = (try? c.decode(String.self, forKey: .note)) ?? ""
         isReference = (try? c.decode(Bool.self, forKey: .isReference)) ?? false
         source = (try? c.decode(Source.self, forKey: .source)) ?? .camera
+        fit = (try? c.decode(OverlayFit.self, forKey: .fit)).flatMap { $0.isSensible ? $0 : nil }
     }
 
     var file: String { "\(id.uuidString).jpg" }

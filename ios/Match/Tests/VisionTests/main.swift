@@ -1,6 +1,6 @@
 // Tests that run Apple's Vision on real pictures, on a Mac, as the phone does:
 //   swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/ActorVision.swift \
-//     Sources/Registration.swift Tests/VisionTests/main.swift -o vision-tests
+//     Sources/Registration.swift Sources/OverlayFit.swift Tests/VisionTests/main.swift -o vision-tests
 //   ./vision-tests [face.jpg]
 // The room guide is checked on a made-up textured picture that is shifted, zoomed and turned.
 // The actor lock is checked on a photo of a face (downloaded by CI; skipped if missing).
@@ -114,6 +114,35 @@ if let photo = CIImage(contentsOf: URL(fileURLWithPath: facePath)) {
             print("      photo turned: tilt \(r.tilt)")
             expect(r.cues.contains { $0.cue == .rotate(clockwise: true) }, "room on a photo: turned clockwise says rotate clockwise")
         } else { expect(false, "room on a photo: turned gives a reading") }
+        // An imported photo from a longer lens: a tighter, off-centre part of the view, graded
+        // differently. Fitting must find it at about 1/1.6 the size, right and down of the middle.
+        func region(dx: CGFloat, dy: CGFloat, size k: CGFloat, grade: Bool) -> CIImage {
+            let w = frame.width * k, h = frame.height * k
+            let r = CGRect(x: frame.midX + dx * frame.width - w / 2, y: frame.midY - dy * frame.height - h / 2, width: w, height: h)
+            var picture = upright.cropped(to: r).transformed(by: CGAffineTransform(translationX: -r.minX, y: -r.minY)
+                .concatenating(CGAffineTransform(scaleX: frame.width / w, y: frame.height / h)))
+            if grade {
+                picture = picture.applyingFilter("CIColorControls", parameters: [kCIInputContrastKey: 1.3, kCIInputBrightnessKey: 0.06])
+            }
+            return flat(picture)
+        }
+        let liveView = Registration.prepared(view(upright, frame: frame))
+        let tele = Registration.prepared(region(dx: 0.08, dy: 0.05, size: 1 / 1.6, grade: true))
+        if let fit = Registration.fitRoom(live: liveView, reference: tele) {
+            print("      tele photo fit: \(fit)")
+            expect(abs(fit.scale - 1 / 1.6) < 0.05, "fit: a longer-lens photo is shrunk to about 1/1.6")
+            expect(abs(fit.x - 0.08) < 0.03 && abs(fit.y - 0.05) < 0.03, "fit: and placed right and down of the middle")
+            expect(Registration.correlation(Registration.fitted(tele, by: fit), liveView) > 0.5, "fit: once fitted it looks like the live view")
+        } else { expect(false, "fit: a longer-lens photo is fitted") }
+        let wide = Registration.prepared(region(dx: -0.04, dy: 0, size: 1.3, grade: false))
+        if let fit = Registration.fitRoom(live: liveView, reference: wide) {
+            print("      wide photo fit: \(fit)")
+            expect(abs(fit.scale - 1.3) < 0.08, "fit: a wider photo is enlarged to about 1.3")
+            expect(abs(fit.x + 0.04) < 0.03 && abs(fit.y) < 0.03, "fit: and placed a little left")
+        } else { expect(false, "fit: a wider photo is fitted") }
+        let blank = Registration.prepared(flat(CIImage(color: CIColor(red: 0.3, green: 0.3, blue: 0.3)).cropped(to: CGRect(x: 0, y: 0, width: frame.width, height: frame.height))))
+        expect(Registration.fitRoom(live: blank, reference: tele) == nil, "fit: pointed at nothing, no fit")
+
         // Pointed somewhere else entirely: never lined up.
         let elsewhere = Registration.prepared(flat(CIImage(color: CIColor(red: 0.2, green: 0.2, blue: 0.2)).cropped(to: CGRect(x: 0, y: 0, width: frame.width, height: frame.height))))
         let wrong = Registration.read(live: elsewhere, reference: ref)
@@ -145,6 +174,16 @@ if let photo = CIImage(contentsOf: URL(fileURLWithPath: facePath)) {
             print("      smaller photo: scale \(r.scale)")
             expect(r.cues.contains { $0.cue == .step(closer: true) }, "real face further away: says step in")
         } else { expect(false, "face found in the smaller photo") }
+
+        // The imported-photo fit from the actor: the face 80% the size, so the photo shrinks to 80%.
+        if let live = ActorVision.people(in: Registration.scaled(small, to: Registration.actorWidth)).faces.max(by: { $0.box.area < $1.box.area }),
+            let fit = OverlayFit.from(reference: (face.left, face.right), live: (live.left, live.right), aspect: aspect)
+        {
+            print("      actor fit: \(fit)")
+            expect(abs(fit.scale - 0.8) < 0.05, "actor fit: a face 80% the size fits at about 80%")
+            let landed = fit.place(face.centre)
+            expect(abs(landed.x - live.centre.x) < 0.01 && abs(landed.y - live.centre.y) < 0.01, "actor fit: the eyes land on the live eyes")
+        } else { expect(false, "actor fit: worked out from the face") }
 
         // The actor off to the right of the frame: the picture slid right.
         let slid = flat(upright.transformed(by: CGAffineTransform(translationX: width * 0.12, y: 0))

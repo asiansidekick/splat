@@ -263,6 +263,26 @@ let emptyPack = try TeamPack.open(TeamPack.make(boards: [empty], content: .refer
 let emptyResult = try TeamPack.install(emptyPack, into: phoneB, existing: [])
 expect(emptyResult.boards.count == 1 && emptyResult.report.newBoards == 1, "an empty board arrives")
 
+// MARK: An imported photo's fit travels with it
+
+do {
+    var shot = Shot(taken: .now, take: 0, angle: "Front", source: .imported)
+    shot.fit = OverlayFit(scale: 0.62, x: 0.08, y: -0.03)
+    let decoded = try? TeamPack.decoder.decode(Shot.self, from: TeamPack.encoder.encode(shot))
+    expect(decoded?.fit == shot.fit, "an imported photo keeps its fit when saved and read back")
+    var wild = shot
+    wild.fit = OverlayFit(scale: 40, x: 0, y: 0)
+    expect((try? TeamPack.decoder.decode(Shot.self, from: TeamPack.encoder.encode(wild)))?.fit == nil, "a nonsense fit is dropped on reading")
+    var board = Board(scene: "1", subject: "Fit", department: .hair, created: .now)
+    var mine = shot
+    mine.fit = nil
+    board.shots = [mine]
+    var theirs = board
+    theirs.shots = [shot]
+    let merged = TeamPack.merged(local: board, incoming: theirs, accepted: [shot.id])
+    expect(merged.shots[0].fit == shot.fit, "a teammate's fit fills in one this phone hasn't worked out")
+}
+
 // MARK: Smaller photos for Messages and Mail
 
 let big = jpeg(shade: 0.4, private: true, width: 3000, height: 2000)

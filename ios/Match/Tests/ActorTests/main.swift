@@ -280,5 +280,73 @@ do {
     expect(close(middle, CGPoint(x: 0.5, y: 0.5)), "the box's middle is the screen's middle")
 }
 
+// MARK: Fitting imported photos
+
+do {
+    // The actor's eyes are half the size live and lower down: the photo shrinks to half and moves.
+    let fit = OverlayFit.from(reference: (CGPoint(x: 0.4, y: 0.4), CGPoint(x: 0.6, y: 0.4)),
+                              live: (CGPoint(x: 0.45, y: 0.6), CGPoint(x: 0.55, y: 0.6)), aspect: 0.75)
+    expect(fit.map { abs($0.scale - 0.5) < 1e-6 } == true, "fit: eyes half as far apart give half size")
+    if let fit {
+        expect(close(fit.place(CGPoint(x: 0.4, y: 0.4)), CGPoint(x: 0.45, y: 0.6)) && close(fit.place(CGPoint(x: 0.6, y: 0.4)), CGPoint(x: 0.55, y: 0.6)),
+               "fit: the photo's eyes land on the live eyes")
+    }
+    // Tall pictures: a slant between the eyes is measured in real proportions.
+    let slanted = OverlayFit.from(reference: (CGPoint(x: 0.5, y: 0.3), CGPoint(x: 0.5, y: 0.5)),
+                                  live: (CGPoint(x: 0.4, y: 0.4), CGPoint(x: 0.6, y: 0.4)), aspect: 0.5)
+    expect(slanted.map { abs($0.scale - 0.5) < 1e-6 } == true, "fit: lengths count width and height in the same units")
+    expect(OverlayFit.from(reference: (CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.5, y: 0.5)), live: (.zero, CGPoint(x: 1, y: 1)), aspect: 1) == nil,
+           "fit: one point can't give a size")
+    expect(OverlayFit.from(reference: (CGPoint(x: 0.49, y: 0.5), CGPoint(x: 0.5, y: 0.5)), live: (.zero, CGPoint(x: 1, y: 0)), aspect: 1) == nil,
+           "fit: a wild answer is refused")
+    // The screen crops a wide photo to a tall screen: offsets convert both ways.
+    let share = OverlayFit.cropShare(photo: 16.0 / 9.0, crop: 9.0 / 16.0)
+    expect(abs(share.width - (9.0 / 16.0) / (16.0 / 9.0)) < 1e-9 && share.height == 1, "fit: crop share of a wide photo on a tall screen")
+    let whole = OverlayFit(scale: 0.7, x: 0.05, y: -0.02)
+    let back = whole.inCrop(share).fromCrop(share)
+    expect(abs(back.x - whole.x) < 1e-9 && abs(back.y - whole.y) < 1e-9 && back.scale == whole.scale, "fit: crop units and back agree")
+    expect(OverlayFit.cropShare(photo: 1.5, crop: nil) == CGSize(width: 1, height: 1), "fit: no crop keeps it all")
+    let a = OverlayFit(scale: 1.0, x: 0.1, y: 0.1)
+    expect(a.agrees(with: OverlayFit(scale: 1.03, x: 0.12, y: 0.09)) && !a.agrees(with: OverlayFit(scale: 1.2, x: 0.1, y: 0.1)),
+           "fit: close answers agree, far ones don't")
+}
+
+// MARK: Trimming black bars
+
+do {
+    func picture(width: Int, height: Int, bars: (top: Int, bottom: Int, left: Int, right: Int), edgeShade: CGFloat = 0) -> CGImage {
+        let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        // Context y counts up: the top bar is at the high end.
+        let inner = CGRect(x: bars.left, y: bars.bottom, width: width - bars.left - bars.right, height: height - bars.top - bars.bottom)
+        context.setFillColor(CGColor(red: 0.6, green: 0.5, blue: 0.4, alpha: 1))
+        context.fill(inner)
+        // Some dark detail inside the picture, which must not be taken for a bar.
+        context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(x: inner.minX + 30, y: inner.minY + 20, width: 40, height: inner.height - 40))
+        return context.makeImage()!
+    }
+    func near(_ a: CGRect, _ b: CGRect, _ tolerance: CGFloat = 5) -> Bool {
+        abs(a.minX - b.minX) <= tolerance && abs(a.minY - b.minY) <= tolerance && abs(a.width - b.width) <= tolerance * 2 && abs(a.height - b.height) <= tolerance * 2
+    }
+    let letterbox = BorderTrim.content(of: picture(width: 1600, height: 1200, bars: (150, 150, 0, 0)))
+    print("      letterbox kept \(letterbox)")
+    expect(near(letterbox, CGRect(x: 0, y: 150, width: 1600, height: 900), 8), "bars: letterbox bars top and bottom are cut off")
+    let pillar = BorderTrim.content(of: picture(width: 1600, height: 900, bars: (0, 0, 200, 260)))
+    print("      pillarbox kept \(pillar)")
+    expect(near(pillar, CGRect(x: 200, y: 0, width: 1140, height: 900), 8), "bars: uneven bars left and right are cut off")
+    let topOnly = BorderTrim.content(of: picture(width: 800, height: 600, bars: (90, 0, 0, 0)))
+    expect(near(topOnly, CGRect(x: 0, y: 90, width: 800, height: 510), 6), "bars: a top bar alone is cut off at the top (y counts down)")
+    let none = BorderTrim.content(of: picture(width: 800, height: 600, bars: (0, 0, 0, 0)))
+    expect(none == CGRect(x: 0, y: 0, width: 800, height: 600), "bars: a picture without bars is kept whole")
+    let thin = BorderTrim.content(of: picture(width: 800, height: 600, bars: (2, 2, 0, 0)))
+    expect(thin == CGRect(x: 0, y: 0, width: 800, height: 600), "bars: a hairline dark edge is left alone")
+    let mostlyBlack = BorderTrim.content(of: picture(width: 800, height: 600, bars: (250, 250, 300, 300)))
+    expect(mostlyBlack == CGRect(x: 0, y: 0, width: 800, height: 600), "bars: a mostly dark picture isn't cut to a sliver")
+}
+
+
 print(failures == 0 ? "All actor tests passed" : "\(failures) actor tests failed")
 exit(failures == 0 ? 0 : 1)

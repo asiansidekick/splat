@@ -115,7 +115,7 @@ final class Camera: NSObject, ObservableObject {
             let last = self.frameQueue.sync { self.lastAnyFrame }
             guard CACurrentMediaTime() - last > 3 else { return }
             self.lidarFailed = true
-            self.notice = "LiDAR camera stopped responding, so Match switched to the ordinary camera."
+            self.notice = "The depth camera stopped responding, so Match switched to the ordinary camera."
             self.reconfigure()
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { self.notice = nil }
         }
@@ -126,6 +126,7 @@ final class Camera: NSObject, ObservableObject {
         guard on != closeUp else { return }
         closeUp = on
         if hasLiDAR, Self.lidarWanted, !isFront { reconfigure() }
+        // The front camera has no macro lens, so nothing changes there.
     }
 
     func flip() {
@@ -180,7 +181,8 @@ final class Camera: NSObject, ObservableObject {
         if !configured, session.isMultitaskingCameraAccessSupported {
             session.isMultitaskingCameraAccessEnabled = true  // keeps working in Split View on iPad
         }
-        let lidarExists = !front && Self.lidarDevice() != nil
+        // LiDAR on the back of Pro phones; the Face ID (TrueDepth) camera on the front.
+        let lidarExists = Self.depthDevice(front: front) != nil
         var depth = false
         var device: AVCaptureDevice?
         var newInput: AVCaptureDeviceInput?
@@ -188,7 +190,7 @@ final class Camera: NSObject, ObservableObject {
         if session.outputs.contains(depthOutput) { session.removeOutput(depthOutput) }
         // The LiDAR camera first if wanted; if anything about it fails, the ordinary camera.
         // Apple's order: the format first, then the input, then the depth output.
-        if lidarExists, Self.lidarWanted, !skipLiDAR, let lidar = Self.lidarDevice(), Self.chooseDepthFormat(lidar),
+        if lidarExists, Self.lidarWanted, !skipLiDAR, let lidar = Self.depthDevice(front: front), Self.chooseDepthFormat(lidar),
             let lidarInput = try? AVCaptureDeviceInput(device: lidar), session.canAddInput(lidarInput)
         {
             if session.canSetSessionPreset(.inputPriority) { session.sessionPreset = .inputPriority }
@@ -234,6 +236,13 @@ final class Camera: NSObject, ObservableObject {
             output.maxPhotoDimensions = largest
         }
         if !depth { setDepth(nil) }
+        // Photos, live frames and depth all the right way round, front camera too: the guide
+        // compares them with each other, and only the screen shows a mirror.
+        for connection in [frames.connection(with: .video), output.connection(with: .video), depthOutput.connection(with: .depthData)] {
+            guard let connection, connection.isVideoMirroringSupported else { continue }
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = false
+        }
         guard let device else { return }
         // Runs after commitConfiguration (deferred above), once the preview connection exists.
         DispatchQueue.main.async {
@@ -244,8 +253,10 @@ final class Camera: NSObject, ObservableObject {
         }
     }
 
-    private static func lidarDevice() -> AVCaptureDevice? {
-        AVCaptureDevice.default(.builtInLiDARDepthCamera, for: .video, position: .back)
+    /// The camera on this side that measures distance: LiDAR on the back, TrueDepth on the front.
+    private static func depthDevice(front: Bool) -> AVCaptureDevice? {
+        front ? AVCaptureDevice.default(.builtInTrueDepthCamera, for: .video, position: .front)
+            : AVCaptureDevice.default(.builtInLiDARDepthCamera, for: .video, position: .back)
     }
 
     /// A 4:3 format with LiDAR depth, the sharpest up to 1920 wide for the live picture, and its

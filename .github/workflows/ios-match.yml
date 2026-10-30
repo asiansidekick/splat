@@ -20,7 +20,7 @@ jobs:
       - name: Actor lock tests
         working-directory: ios/Match
         run: |
-          if ! swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/Depth.swift Tests/ActorTests/main.swift -o actor-tests > compile.log 2>&1; then
+          if ! swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/Depth.swift Sources/OverlayFit.swift Tests/ActorTests/main.swift -o actor-tests > compile.log 2>&1; then
             grep -E ": error: " compile.log | sort -u | head -10 \
               | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
             cat compile.log | tail -40
@@ -41,7 +41,7 @@ jobs:
           curl -sfL -A "MatchCI/1.0 (https://github.com/asiansidekick/splat)" -o face.jpg \
             "https://commons.wikimedia.org/wiki/Special:FilePath/Neil_Armstrong_pose.jpg?width=900" \
             || echo "::warning::Could not download the test portrait; face tests skipped"
-          if ! swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/ActorVision.swift Sources/Registration.swift \
+          if ! swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/ActorVision.swift Sources/Registration.swift Sources/OverlayFit.swift \
             Tests/VisionTests/main.swift -o vision-tests > compile.log 2>&1; then
             grep -E ": error: " compile.log | sort -u | head -10 \
               | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
@@ -59,7 +59,7 @@ jobs:
       - name: Team pack tests
         working-directory: ios/Match
         run: |
-          if ! swiftc -O Sources/Board.swift Sources/TeamPack.swift Sources/Shared/PhotoPrivacy.swift Sources/Shared/SecurePack.swift \
+          if ! swiftc -O Sources/Board.swift Sources/OverlayFit.swift Sources/TeamPack.swift Sources/Shared/PhotoPrivacy.swift Sources/Shared/SecurePack.swift \
             Tests/PackTests/main.swift -o pack-tests > compile.log 2>&1; then
             grep -E ": error: " compile.log | sort -u | head -10 \
               | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
@@ -77,7 +77,7 @@ jobs:
       - name: Sync tests
         working-directory: ios/Match
         run: |
-          if ! swiftc -O Sources/Board.swift Sources/TeamPack.swift Sources/BoardSync.swift Sources/Shared/PhotoPrivacy.swift \
+          if ! swiftc -O Sources/Board.swift Sources/OverlayFit.swift Sources/TeamPack.swift Sources/BoardSync.swift Sources/Shared/PhotoPrivacy.swift \
             Sources/Shared/SecurePack.swift Sources/Shared/SyncEngine.swift Tests/SyncTests/main.swift -o sync-tests > compile.log 2>&1; then
             grep -E ": error: " compile.log | sort -u | head -10 \
               | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'

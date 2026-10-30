@@ -37,6 +37,14 @@ final class Guide: ObservableObject {
     @Published private(set) var followed: Int?
     /// No reading for a second: shown so it is clear the guide is on but can't find the reference.
     @Published private(set) var searching = false
+    /// Working out how to size and place an imported photo on the live view.
+    @Published private(set) var fitting = false
+    /// The fit found for an imported photo, in the whole photo's units, for the app to keep.
+    @Published private(set) var fitted: OverlayFit?
+    /// The last fit read, kept until a second agrees with it.
+    private var pendingFit: OverlayFit?
+    /// The share of the whole reference that the guide's crop of it keeps.
+    private var fitShare = CGSize(width: 1, height: 1)
     private var cueSince = Date.distantPast
     private var reference: CIImage?
     private var referenceFace: ActorPose?
@@ -63,7 +71,10 @@ final class Guide: ObservableObject {
     /// `prefersBody`: costume, where the whole body matters more than the face.
     /// `aspect`: the screen's picture, width over height in the photo's directions. `whole`: the
     /// reference is shown whole in a box rather than filling the screen.
-    func setReference(_ image: UIImage?, depth: DepthGrid? = nil, aspect: CGFloat?, whole: Bool = false, prefersBody: Bool = false) {
+    /// `fit`: an imported photo's size and place on the live view, applied before reading.
+    /// `needsFit`: an imported photo with no fit yet, so frames work one out instead of guiding.
+    func setReference(_ image: UIImage?, depth: DepthGrid? = nil, aspect: CGFloat?, whole: Bool = false, prefersBody: Bool = false,
+                      fit: OverlayFit? = nil, needsFit: Bool = false) {
         generation += 1
         referenceDepth = image == nil ? nil : depth
         let referenceAspect = image.map { $0.size.width / max($0.size.height, 1) }
@@ -71,8 +82,14 @@ final class Guide: ObservableObject {
         referenceCrop = whole ? nil : aspect
         liveBox = whole ? referenceAspect : nil
         self.prefersBody = prefersBody
+        fitShare = OverlayFit.cropShare(photo: referenceAspect ?? 1, crop: whole ? nil : aspect)
+        let share = fitShare
         let cropped = image.flatMap { CIImage(image: $0) }.map { Registration.centred($0, aspect: whole ? nil : aspect) }
+            .map { picture in fit.map { Registration.fitted(picture, by: $0.inCrop(share)) } ?? picture }
         reference = cropped.map(Registration.prepared)
+        fitting = image != nil && needsFit
+        fitted = nil
+        pendingFit = nil
         referenceFace = nil
         referenceBody = nil
         followPoint = nil
@@ -122,6 +139,28 @@ final class Guide: ObservableObject {
             let kinds = self.kindsToTry()
             let follow = self.followPoint
             let referenceDepth = self.referenceDepth
+            if self.fitting {
+                let fit = await Task.detached(priority: .utility) { () -> OverlayFit? in
+                    // A person in both: their eyes (or shoulders) give the size and place exactly.
+                    if !kinds.isEmpty {
+                        let found = ActorVision.people(in: colour)
+                        for reference in kinds {
+                            let live = reference.kind == .face ? found.faces : found.bodies
+                            if let index = ActorMatch.pick(live, near: nil, like: reference),
+                                let fit = OverlayFit.from(reference: (reference.left, reference.right),
+                                                          live: (live[index].left, live[index].right), aspect: aspect)
+                            {
+                                return fit
+                            }
+                        }
+                    }
+                    return Registration.fitRoom(live: live, reference: reference)
+                }.value
+                self.busy = false
+                guard generation == self.generation, self.fitting else { return }
+                self.consider(fit: fit)
+                return
+            }
             let result = await Task.detached(priority: .utility) { () -> ActorResult? in
                 if !kinds.isEmpty, let found = Self.readActor(colour, kinds: kinds, follow: follow, aspect: aspect,
                                                              depth: depthSpace, referenceDepth: referenceDepth, referenceCrop: referenceCrop) {
@@ -140,6 +179,21 @@ final class Guide: ObservableObject {
             self.busy = false
             guard generation == self.generation, self.reference != nil else { return }
             self.update(result)
+        }
+    }
+
+    /// Two fits in a row that agree are kept, so one odd frame can't set it.
+    private func consider(fit: OverlayFit?) {
+        guard let fit else {
+            pendingFit = nil
+            return
+        }
+        if let pendingFit, pendingFit.agrees(with: fit) {
+            fitting = false
+            fitted = pendingFit.averaged(with: fit).fromCrop(fitShare)
+            Haptics.success()
+        } else {
+            pendingFit = fit
         }
     }
 

@@ -66,6 +66,13 @@ struct CaptureView: View {
 
     private var take: Int { store.take(for: board?.scene ?? "") }
 
+    /// The photo shown over the camera.
+    private var ghostShot: Shot? { ghostID.flatMap { id in board?.shots.first { $0.id == id } } }
+    /// An imported photo's size and place on the live view, once worked out.
+    private var ghostFit: OverlayFit? { ghostShot?.fit }
+    /// An imported photo (another camera, a QTake screenshot) not yet sized to the live view.
+    private var needsFit: Bool { ghostShot?.source == .imported && ghostShot?.fit == nil }
+
     var body: some View {
         CameraLayout {
             topBar
@@ -106,6 +113,8 @@ struct CaptureView: View {
             pickReference(for: angle)
         }
         .onChange(of: guideOn) { _, _ in connectGuide() }
+        .onChange(of: ghostFit) { _, _ in connectGuide() }
+        .onChange(of: guide.fitted) { _, fit in keepFit(fit) }
         .onChange(of: useLiDAR) { _, _ in camera.reconfigure() }
         // Close-ups on the macro lens: the LiDAR camera can't focus that close.
         .onChange(of: angle) { _, value in camera.setCloseUp(value == "Close-up") }
@@ -237,7 +246,7 @@ struct CaptureView: View {
             }
             Toggle(isOn: $outlines) { Label("Overlay as outlines", systemImage: "square.dashed") }
             if camera.hasLiDAR {
-                Toggle(isOn: $useLiDAR) { Label("LiDAR distance", systemImage: "dot.radiowaves.forward") }
+                Toggle(isOn: $useLiDAR) { Label(camera.isFront ? "Face ID camera distance" : "LiDAR distance", systemImage: "dot.radiowaves.forward") }
             }
             Toggle(isOn: $saveToPhotos) { Label("Also save photos to Photos", systemImage: "square.and.arrow.down") }
             Button { showingLibrary = true } label: { Label("Boards, notes and backup", systemImage: "square.grid.2x2") }
@@ -262,13 +271,19 @@ struct CaptureView: View {
                             ghostScale = 1
                             ghostOffset = .zero
                         }
+                        // An imported photo: fit it to the live view again.
+                        if let board, var shot = ghostShot, shot.source == .imported, shot.fit != nil {
+                            shot.fit = nil
+                            store.update(shot, in: board.id)
+                            show("Fitting again…")
+                        }
                     }
                     .onTapGesture { location in
                         // Several people in view: follow the one tapped.
                         guide.follow(at: ScreenMap(size: geometry.size, quarterTurns: quarterTurns, mirrored: camera.isFront, inner: ghostBox)
                             .toPhoto(location))
                     }
-                if guideOn, ghost != nil {
+                if guideOn, ghost != nil, !guide.fitting {
                     if guide.people.count > 1 {
                         PeopleRings(people: guide.people, followed: guide.followed,
                                     quarterTurns: quarterTurns, mirrored: camera.isFront, inner: ghostBox)
@@ -287,6 +302,9 @@ struct CaptureView: View {
                     if let error = camera.error { Banner(text: error, tint: .red) }
                     if let notice = camera.notice { Banner(text: notice, tint: .orange) }
                     if let saveError { Banner(text: saveError, tint: .red) }
+                    if guide.fitting, ghost != nil {
+                        Banner(text: "Sizing the imported photo to the camera. Point at the same view.", tint: .yellow)
+                    }
                     if let toast {
                         Text(toast)
                             .font(.subheadline.bold())
@@ -355,10 +373,17 @@ struct CaptureView: View {
                 // Filled like the camera (and Reset's ghost), and fitted as it will look once turned.
                 let box = sideways ? CGSize(width: size.height, height: size.width) : size
                 // A portrait reference on a landscape screen (or the other way round) is shown whole.
+                // An imported photo sized and placed to sit on the live view.
+                let fit = ghostFit ?? .none
+                let ratio = ghostWhole
+                    ? min(box.width / max(image.size.width, 1), box.height / max(image.size.height, 1))
+                    : max(box.width / max(image.size.width, 1), box.height / max(image.size.height, 1))
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: ghostWhole ? .fit : .fill)
                     .frame(width: box.width, height: box.height)
+                    .scaleEffect(CGFloat(fit.scale))
+                    .offset(x: CGFloat(fit.x) * image.size.width * ratio, y: CGFloat(fit.y) * image.size.height * ratio)
                     .clipped()
                     .rotationEffect(.degrees(turn))
                     .frame(width: size.width, height: size.height)
@@ -464,12 +489,23 @@ struct CaptureView: View {
     /// Live frames go to the guide only while it is on and there is a reference to line up with.
     private func connectGuide() {
         let guide = self.guide
-        if guideOn, ghost != nil {
+        // Frames also flow with the guide off while an imported photo is being sized.
+        let wanted = (guideOn || needsFit) && ghost != nil
+        if wanted {
             camera.onFrame = { @Sendable [weak guide] frame, depth in guide?.consider(frame, depth: depth) }
         } else {
             camera.onFrame = nil
         }
-        guide.setReference(guideOn ? ghost : nil, depth: ghostDepth, aspect: visibleAspect, whole: ghostWhole, prefersBody: board?.department == .costume)
+        guide.setReference(wanted ? ghost : nil, depth: ghostDepth, aspect: visibleAspect, whole: ghostWhole,
+                           prefersBody: board?.department == .costume, fit: ghostFit, needsFit: needsFit)
+    }
+
+    /// Keeps the size and place found for an imported photo with it, so it fits next time too.
+    private func keepFit(_ fit: OverlayFit?) {
+        guard let fit, let board, var shot = ghostShot, shot.source == .imported else { return }
+        shot.fit = fit
+        store.update(shot, in: board.id)
+        show("Imported photo sized to the camera. Double tap to redo.")
     }
 
     private func selectAngle(_ newAngle: String) {
