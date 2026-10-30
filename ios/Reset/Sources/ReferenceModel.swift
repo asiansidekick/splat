@@ -118,10 +118,40 @@ struct RoomMeasurement: Codable, Identifiable, Equatable {
     var a: [Float]  // x, y, z
     var b: [Float]
     var created: Date
+    /// A length typed in by the person (metres), shown instead of the measured one.
+    var typed: Float?
+    /// When the typed length was last changed, so syncing phones keep the newest.
+    var edited: Date?
 
     var start: SIMD3<Float> { vector3(a) }
     var end: SIMD3<Float> { vector3(b) }
-    var length: Float { simd_distance(start, end) }
+    /// What the phone measured between the two points.
+    var measured: Float { simd_distance(start, end) }
+    /// What is shown: the typed length if there is one, else the measured one.
+    var length: Float { typed ?? measured }
+}
+
+/// Lengths typed and shown by people: "29.7", "29.7 cm", "0.3 m", "300 mm", "12 in", "2 ft".
+enum LengthText {
+    /// Metres from what was typed; a bare number is centimetres. Nil if it isn't a sensible length.
+    static func parse(_ text: String) -> Float? {
+        var t = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: ",", with: ".")
+        guard !t.isEmpty else { return nil }
+        var unit: Float = 0.01
+        for (suffix, metres) in [("mm", Float(0.001)), ("cm", 0.01), ("m", 1), ("in", 0.0254), ("\"", 0.0254), ("ft", 0.3048), ("'", 0.3048)] where t.hasSuffix(suffix) {
+            t = String(t.dropLast(suffix.count)).trimmingCharacters(in: .whitespaces)
+            unit = metres
+            break
+        }
+        guard let value = Float(t), value.isFinite else { return nil }
+        let metres = value * unit
+        return metres >= 0.001 && metres <= 100 ? metres : nil
+    }
+
+    /// Tenths of a centimetre up to a metre, then metres.
+    static func format(_ metres: Float) -> String {
+        metres < 1 ? String(format: "%.1f cm", metres * 100) : String(format: "%.2f m", metres)
+    }
 }
 
 /// A note pinned to a spot in the room, such as "cup handle faces camera".

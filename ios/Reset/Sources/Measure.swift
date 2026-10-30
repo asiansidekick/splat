@@ -21,6 +21,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// which can be well out; shown under the reading.
     @Published private(set) var fromLiDAR = false
     private var loggedSource: Bool?
+    /// Why there is no distance when tracking isn't ready, shown in place of the reading.
+    @Published private(set) var trackingNote: String?
+    private var loggedNote: String?
     /// The first end of the line being drawn.
     @Published private(set) var start: SIMD3<Float>?
     /// Bumped when the person adds or deletes something, so the reference is saved.
@@ -82,6 +85,20 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         return nil
     }
 
+    /// The picked line, if a line (not a note) is picked.
+    var selectedMeasurement: RoomMeasurement? {
+        measurements.first { $0.id == selected }
+    }
+
+    /// Types in a line's real length (nil goes back to what the phone measured).
+    func setLength(_ metres: Float?, for id: UUID) {
+        guard let index = measurements.firstIndex(where: { $0.id == id }) else { return }
+        measurements[index].typed = metres
+        measurements[index].edited = Date()
+        Diagnostics.log("Measurement edited: measured \(Measurer.text(measurements[index].measured)), shown \(Measurer.text(measurements[index].length))")
+        changed()
+    }
+
     /// Deletes the picked line or note.
     func deleteSelected() {
         guard let id = selected else { return }
@@ -105,8 +122,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     /// What the readout under the crosshair says.
     var readout: String {
-        if selected != nil { return "Tap Delete to remove it" }
-        guard let cursor else { return "Aim at a surface" }
+        if selected != nil { return "Edit or delete the red one" }
+        guard let cursor else { return trackingNote ?? "Aim at a surface" }
         if let start { return Measurer.text(simd_distance(start, cursor)) }
         return measurements.isEmpty && notes.isEmpty ? "Tap + at one end" : "Tap + to measure"
     }
@@ -189,6 +206,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         cursor = nil
         selected = nil
         loggedSource = nil
+        trackingNote = nil
+        loggedNote = nil
         updatePreview()
         guard active else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
@@ -197,11 +216,24 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     }
 
     private func tick() {
-        guard let frame = session.currentFrame, case .normal = frame.camera.trackingState else {
+        guard let frame = session.currentFrame else {
             cursor = nil
             updatePreview()
             return
         }
+        guard case .normal = frame.camera.trackingState else {
+            cursor = nil
+            let note = Measurer.reason(frame.camera.trackingState)
+            trackingNote = note
+            if note != loggedNote {
+                loggedNote = note
+                Diagnostics.log("Measure: no distance, \(note)")
+            }
+            updatePreview()
+            return
+        }
+        trackingNote = nil
+        loggedNote = nil
         if let point = Measurer.depthPoint(frame) {
             cursor = point
             fromLiDAR = true
@@ -214,6 +246,22 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             Diagnostics.log("Measure: distance from \(fromLiDAR ? "LiDAR depth" : "estimated surfaces (no LiDAR depth)")")
         }
         updatePreview()
+    }
+
+    /// What to tell the person when ARKit can't place the phone yet.
+    static func reason(_ state: ARCamera.TrackingState) -> String {
+        switch state {
+        case .normal: return ""
+        case .notAvailable: return "Tracking unavailable"
+        case .limited(let reason):
+            switch reason {
+            case .excessiveMotion: return "Moving too fast: slow down"
+            case .insufficientFeatures: return "Too dark or plain to track: add light or aim at detail"
+            case .initializing: return "Finding position: move slowly"
+            case .relocalizing: return "Finding the room again: move slowly"
+            @unknown default: return "Tracking limited"
+            }
+        }
     }
 
     // MARK: Finding the point under the crosshair
@@ -245,10 +293,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     // MARK: Drawing
 
     /// Millimetres are noise from a phone: tenths of a centimetre up to a metre, then centimetres.
-    static func text(_ metres: Float) -> String {
-        if metres < 1 { return String(format: "%.1f cm", metres * 100) }
-        return String(format: "%.2f m", metres)
-    }
+    static func text(_ metres: Float) -> String { LengthText.format(metres) }
 
     private func array(_ p: SIMD3<Float>) -> [Float] { [p.x, p.y, p.z] }
 
@@ -263,7 +308,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         root.childNodes.forEach { $0.removeFromParentNode() }
         for measurement in measurements {
             let picked = measurement.id == selected
-            let line = node(for: measurement.start, measurement.end, axes: showAxes && !picked, colour: picked ? Measurer.pickedColour : Measurer.lineColour)
+            let line = node(
+                for: measurement.start, measurement.end, axes: showAxes && !picked,
+                colour: picked ? Measurer.pickedColour : Measurer.lineColour,
+                scale: measurement.measured > 0 ? measurement.length / measurement.measured : 1)
             line.name = "mark:\(measurement.id.uuidString)"
             root.addChildNode(line)
         }
@@ -281,7 +329,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     }
 
     /// A measured line with its length; with axes, its level part and upright part beside it.
-    private func node(for a: SIMD3<Float>, _ b: SIMD3<Float>, axes: Bool, colour: UIColor = Measurer.lineColour) -> SCNNode {
+    private func node(for a: SIMD3<Float>, _ b: SIMD3<Float>, axes: Bool, colour: UIColor = Measurer.lineColour, scale: Float = 1) -> SCNNode {
         let node = SCNNode()
         let middle = (a + b) / 2
         let height = labelHeight(at: middle)
@@ -289,7 +337,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         node.addChildNode(Measurer.line(from: a, to: b, radius: radius, colour: colour))
         node.addChildNode(Measurer.dot(at: a, radius: radius * 3, colour: .white))
         node.addChildNode(Measurer.dot(at: b, radius: radius * 3, colour: .white))
-        node.addChildNode(ModelDimensions.tag(Measurer.text(simd_distance(a, b)), colour: colour, height: height, at: middle + SIMD3(0, height * 0.9, 0)))
+        node.addChildNode(ModelDimensions.tag(Measurer.text(simd_distance(a, b) * scale), colour: colour, height: height, at: middle + SIMD3(0, height * 0.9, 0)))
         guard axes else { return node }
         let low = a.y <= b.y ? a : b
         let high = a.y <= b.y ? b : a
@@ -300,9 +348,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         guard level > 0.01, rise > 0.01 else { return node }
         node.addChildNode(Measurer.line(from: low, to: corner, radius: radius * 0.6, colour: ModelDimensions.depth.withAlphaComponent(0.85)))
         node.addChildNode(Measurer.line(from: corner, to: high, radius: radius * 0.6, colour: ModelDimensions.height.withAlphaComponent(0.85)))
-        node.addChildNode(ModelDimensions.tag("↔ " + Measurer.text(level), colour: ModelDimensions.depth, height: height * 0.8,
+        node.addChildNode(ModelDimensions.tag("↔ " + Measurer.text(level * scale), colour: ModelDimensions.depth, height: height * 0.8,
                                               at: (low + corner) / 2 - SIMD3(0, height * 0.8, 0)))
-        node.addChildNode(ModelDimensions.tag("↕ " + Measurer.text(rise), colour: ModelDimensions.height, height: height * 0.8,
+        node.addChildNode(ModelDimensions.tag("↕ " + Measurer.text(rise * scale), colour: ModelDimensions.height, height: height * 0.8,
                                               at: (corner + high) / 2 + simd_normalize(corner - low) * height * 1.6))
         return node
     }
@@ -380,6 +428,8 @@ struct MeasureBar: View {
     @State private var writing = false
     @State private var draft = ""
     @State private var confirmingClear = false
+    @State private var editing = false
+    @State private var draftLength = ""
 
     var body: some View {
         if measurer.active {
@@ -403,6 +453,12 @@ struct MeasureBar: View {
                 }
                 .disabled(measurer.cursor == nil)
                 if measurer.selected != nil {
+                    if let line = measurer.selectedMeasurement {
+                        small("pencil", "Edit", tint: .yellow) {
+                            draftLength = String(format: "%.1f", line.length * 100)
+                            editing = true
+                        }
+                    }
                     small("trash.fill", "Delete", tint: .red) { measurer.deleteSelected() }
                 } else {
                     small("trash", "Delete") { confirmingClear = true }
@@ -416,6 +472,21 @@ struct MeasureBar: View {
                 TextField("For example: cup handle faces camera", text: $draft)
                 Button("Cancel", role: .cancel) {}
                 Button("Add") { measurer.addNote(draft) }
+            }
+            .alert("Real length", isPresented: $editing) {
+                TextField("For example: 29.7 cm, 0.3 m, 12 in", text: $draftLength)
+                    .keyboardType(.numbersAndPunctuation)
+                Button("Cancel", role: .cancel) {}
+                if let line = measurer.selectedMeasurement, line.typed != nil {
+                    Button("Use measured") { measurer.setLength(nil, for: line.id) }
+                }
+                Button("Set") {
+                    if let line = measurer.selectedMeasurement, let metres = LengthText.parse(draftLength) {
+                        measurer.setLength(metres, for: line.id)
+                    }
+                }
+            } message: {
+                Text("Type the true length of what you measured. A number on its own is centimetres; add mm, m, in or ft for other units.")
             }
             .confirmationDialog("Delete every measurement and note?", isPresented: $confirmingClear, titleVisibility: .visible) {
                 Button("Delete all", role: .destructive) { measurer.clear() }

@@ -254,12 +254,21 @@ final class ReferenceSyncLibrary: SyncLibrary {
                 result.models.append(model)
             }
         }
-        // Measurements and notes never change once made: new ones are added, deleted ones go.
+        // Measurements and notes: new ones are added, deleted ones go, typed lengths take the newest.
         let unmarked = Set(result.removedMarks)
         result.removedMarks += incoming.removedMarks.filter { !unmarked.contains($0) }.sorted { $0.uuidString < $1.uuidString }
         let goneMarks = Set(result.removedMarks)
-        for measurement in incoming.measurements where !goneMarks.contains(measurement.id) && !result.measurements.contains(where: { $0.id == measurement.id }) {
-            result.measurements.append(measurement)
+        for measurement in incoming.measurements where !goneMarks.contains(measurement.id) {
+            if let index = result.measurements.firstIndex(where: { $0.id == measurement.id }) {
+                // Only the typed length can change: the newest edit wins on every phone.
+                let mine = result.measurements[index]
+                if newer(measurement.edited, key(measurement.typed), than: mine.edited, key(mine.typed)) {
+                    result.measurements[index].typed = measurement.typed
+                    result.measurements[index].edited = measurement.edited
+                }
+            } else {
+                result.measurements.append(measurement)
+            }
         }
         for note in incoming.notes where !goneMarks.contains(note.id) && !result.notes.contains(where: { $0.id == note.id }) {
             result.notes.append(note)

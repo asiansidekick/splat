@@ -273,6 +273,27 @@ func runSyncTests() throws {
     expect(air.run(limit: 2_000), "measurements sync")
     expect(b.has(desk)!.measurements.map(\.id) == [line.id, spare.id] && b.has(desk)!.notes == [pin], "B has A's measurements and note")
     expect(abs(line.length - 0.5) < 0.0001, "a 30-40-50 line measures 50 cm")
+    func near(_ text: String, _ metres: Float) -> Bool { abs((LengthText.parse(text) ?? -1) - metres) < 0.00001 }
+    expect(near("29.7", 0.297) && near("29,7 cm", 0.297) && near("0.3 m", 0.3) && near("12 in", 0.3048) && near("300mm", 0.3) && near("2 ft", 0.6096),
+        "typed lengths read in cm, mm, m, in and ft")
+    expect(LengthText.parse("") == nil && LengthText.parse("abc") == nil && LengthText.parse("0") == nil && LengthText.parse("50000") == nil,
+        "nonsense isn't a length")
+    // A length typed on B reaches A; a later one typed on A wins everywhere.
+    b.update(desk.id) {
+        $0.measurements[$0.measurements.firstIndex { $0.id == line.id }!].typed = 0.52
+        $0.measurements[$0.measurements.firstIndex { $0.id == line.id }!].edited = base.addingTimeInterval(500)
+    }
+    b.engine.localChanged()
+    expect(air.run(limit: 2_000), "a typed length settles")
+    expect(a.has(desk)!.measurements.first { $0.id == line.id }?.length == 0.52, "A shows the length typed on B")
+    expect(abs((a.has(desk)!.measurements.first { $0.id == line.id }?.measured ?? 0) - 0.5) < 0.0001, "and still knows what was measured")
+    a.update(desk.id) {
+        $0.measurements[$0.measurements.firstIndex { $0.id == line.id }!].typed = 0.49
+        $0.measurements[$0.measurements.firstIndex { $0.id == line.id }!].edited = base.addingTimeInterval(600)
+    }
+    a.engine.localChanged()
+    expect(air.run(limit: 2_000), "a later edit settles")
+    expect(b.has(desk)!.measurements.first { $0.id == line.id }?.length == 0.49, "the newest typed length wins on B")
     b.update(desk.id) {
         $0.measurements.removeAll { $0.id == spare.id }
         $0.removedMarks.append(spare.id)

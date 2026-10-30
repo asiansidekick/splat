@@ -1022,8 +1022,8 @@ struct CaptureStage: View {
                 }
                 ScreenshotButton(camera: { holder.view }, toast: showToast)
                 TorchButton()
+                // Works while a scan or recording is going, too.
                 MeasureToggle(measurer: recorder.measurer)
-                    .disabled(recorder.capturing)
                 Button { open(.help) } label: { Image(systemName: "questionmark.circle").font(.title3) }
                     .accessibilityLabel("Help")
             }
@@ -1111,9 +1111,6 @@ struct CaptureStage: View {
             recorder.prepare(useLiDAR: useLiDAR)
         }
         .onDisappear { recorder.stop() }
-        .onChange(of: recorder.capturing) { _, capturing in
-            if capturing { recorder.measurer.active = false }
-        }
         .onChange(of: showPoints) { _, show in
             holder.view?.debugOptions = show ? [.showFeaturePoints] : []
         }
