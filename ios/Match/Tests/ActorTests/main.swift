@@ -1,5 +1,5 @@
 // Tests for the actor lock and the guide's maths, run on a Mac by CI:
-//   swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Tests/ActorTests/main.swift -o actor-tests
+//   swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/Depth.swift Tests/ActorTests/main.swift -o actor-tests
 //   ./actor-tests
 // A head (eyes, nose tip, mouth) is photographed from different places with a simple pinhole
 // camera, and the guide must say the right thing: walk round, raise or lower, step in or back,
@@ -195,6 +195,43 @@ do {
     let reading = ActorMatch.reading(reference: body(0), live: body(0.1), aspect: 0.5)!
     expect(reading.orbit == 0 && reading.height == 0, "body: no walking round or height from shoulders alone")
     expect(reading.cues.map(\.cue) == [.pan(.right)], "body further right: pan right")
+}
+
+// MARK: LiDAR depth
+
+do {
+    // 4 wide, 3 tall, numbered so turns can be followed.
+    let grid = DepthGrid(width: 4, height: 3, values: (0..<12).map(Float.init))
+    let turned = grid.rotated(quarterTurns: 1)
+    expect(turned.width == 3 && turned.height == 4, "a quarter turn swaps width and height")
+    expect(turned.value(2, 0) == 0, "a quarter turn puts the top left at the top right")
+    expect(turned.value(0, 0) == 8, "a quarter turn brings the bottom left to the top left")
+    expect(grid.rotated(quarterTurns: 4) == grid && grid.rotated(quarterTurns: -1) == grid.rotated(quarterTurns: 3),
+           "four quarter turns change nothing")
+    let tall = grid.cropped(aspect: 0.5)
+    expect(tall.width == 2 && tall.height == 3 && tall.value(0, 0) == 1, "cropping keeps the middle")
+    expect(DepthGrid(data: grid.data) == grid, "saved depth reads back the same")
+    expect(DepthGrid(data: Data([1, 2, 3])) == nil, "a broken depth file reads as nothing")
+
+    // A wall at 2 m with the actor's face at 1.2 m in the middle.
+    var values = [Float](repeating: 2, count: 256 * 192)
+    for y in 80..<112 { for x in 112..<144 { values[y * 256 + x] = 1.2 } }
+    values[96 * 256 + 128] = .nan
+    let room = DepthGrid(width: 256, height: 192, values: values)
+    expect(abs((room.distance(at: CGPoint(x: 0.5, y: 0.5)) ?? 0) - 1.2) < 0.001, "distance to the face in the middle")
+    expect(abs((room.distance(at: CGPoint(x: 0.1, y: 0.1)) ?? 0) - 2) < 0.001, "distance to the wall")
+    expect(abs((room.distance(at: CGPoint(x: 0.5, y: 0.5), aspect: 9.0 / 19.5) ?? 0) - 1.2) < 0.001,
+           "distance in the middle of a tall crop")
+    expect(DepthGrid(width: 10, height: 10, values: [Float](repeating: 0, count: 100)).distance(at: CGPoint(x: 0.5, y: 0.5)) == nil,
+           "no readings, no distance")
+
+    // The guide goes by LiDAR when it can: 30 cm too far back, though the face looks the same size.
+    let reading = ActorMatch.reading(reference: reference, live: photo(from: home), aspect: 1,
+                                     referenceDistance: 1.0, liveDistance: 1.3)!
+    expect(reading.cues.map(\.cue) == [.step(closer: true)], "LiDAR 30 cm further: says step in")
+    expect(abs((reading.stepMetres ?? 0) - 0.3) < 1e-9, "LiDAR says how far: 30 cm")
+    expect(ActorMatch.reading(reference: reference, live: photo(from: home), aspect: 1, referenceDistance: 1.0, liveDistance: 1.02)!.lined,
+           "LiDAR 2 cm off: lined up")
 }
 
 print(failures == 0 ? "All actor tests passed" : "\(failures) actor tests failed")

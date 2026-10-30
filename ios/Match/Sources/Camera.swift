@@ -23,8 +23,16 @@ final class Camera: NSObject, ObservableObject {
     private let frameQueue = DispatchQueue(label: "camera.frames")
     private var lastFrame: CFTimeInterval = 0
     private var frameAngle: CGFloat = 90
-    /// Live frames for the guide, upright like saved photos, about five a second, on a background queue.
-    var onFrame: ((CIImage) -> Void)?
+    /// Live frames for the guide, upright like saved photos, about five a second, on a background
+    /// queue, with the latest LiDAR depth when there is one.
+    var onFrame: ((CIImage, DepthGrid?) -> Void)?
+    private let depthOutput = AVCaptureDepthDataOutput()
+    private let depthLock = NSLock()
+    private var latestDepth: DepthGrid?
+    private var lastDepth: CFTimeInterval = 0
+    /// This iPhone or iPad has a LiDAR camera, and whether it is being used now.
+    @Published private(set) var hasLiDAR = false
+    @Published private(set) var usingLiDAR = false
     private let queue = DispatchQueue(label: "camera.session")
     private var input: AVCaptureDeviceInput?
     private var configured = false
@@ -107,30 +115,63 @@ final class Camera: NSObject, ObservableObject {
             }
             let settings = AVCapturePhotoSettings()
             settings.photoQualityPrioritization = .balanced
+            settings.maxPhotoDimensions = self.output.maxPhotoDimensions
             self.pending[settings.uniqueID] = completion
             self.output.capturePhoto(with: settings, delegate: self)
         }
     }
 
+    /// Whether to use the LiDAR camera where there is one (Settings in the ••• menu). On by default.
+    static var lidarWanted: Bool { UserDefaults.standard.object(forKey: "useLiDAR") as? Bool ?? true }
+
+    /// Picks the LiDAR camera again (or not) after the setting changes.
+    func reconfigure() {
+        let front = isFront
+        queue.async { self.configure(front: front) }
+    }
+
     private func configure(front: Bool) {
         session.beginConfiguration()
         defer { session.commitConfiguration() }
-        if !configured {
-            session.sessionPreset = .photo
-            if session.isMultitaskingCameraAccessSupported {
-                session.isMultitaskingCameraAccessEnabled = true  // keeps working in Split View on iPad
+        if !configured, session.isMultitaskingCameraAccessSupported {
+            session.isMultitaskingCameraAccessEnabled = true  // keeps working in Split View on iPad
+        }
+        let lidarExists = !front && Self.lidarDevice() != nil
+        var depth = false
+        var device: AVCaptureDevice?
+        var newInput: AVCaptureDeviceInput?
+        if let input { session.removeInput(input) }
+        if session.outputs.contains(depthOutput) { session.removeOutput(depthOutput) }
+        // The LiDAR camera first if wanted; if anything about it fails, the ordinary camera.
+        if lidarExists, Self.lidarWanted, let lidar = Self.lidarDevice(), let lidarInput = try? AVCaptureDeviceInput(device: lidar),
+            session.canAddInput(lidarInput)
+        {
+            session.addInput(lidarInput)
+            if Self.chooseDepthFormat(lidar), session.canAddOutput(depthOutput) {
+                session.addOutput(depthOutput)
+                depthOutput.isFilteringEnabled = true
+                depthOutput.alwaysDiscardsLateDepthData = true
+                depthOutput.setDelegate(self, callbackQueue: frameQueue)
+                device = lidar
+                newInput = lidarInput
+                depth = true
+            } else {
+                session.removeInput(lidarInput)
             }
         }
-        guard let device = Self.device(front: front), let newInput = try? AVCaptureDeviceInput(device: device) else {
-            DispatchQueue.main.async { self.error = "No camera available. You can still import photos." }
-            return
+        if newInput == nil {
+            if session.canSetSessionPreset(.photo) { session.sessionPreset = .photo }
+            guard let plain = Self.device(front: front), let plainInput = try? AVCaptureDeviceInput(device: plain),
+                session.canAddInput(plainInput)
+            else {
+                if let input, session.canAddInput(input) { session.addInput(input) }
+                DispatchQueue.main.async { self.error = "No camera available. You can still import photos." }
+                return
+            }
+            session.addInput(plainInput)
+            device = plain
+            newInput = plainInput
         }
-        if let input { session.removeInput(input) }
-        guard session.canAddInput(newInput) else {
-            if let input { session.addInput(input) }
-            return
-        }
-        session.addInput(newInput)
         input = newInput
         if !configured, session.canAddOutput(frames) {
             frames.alwaysDiscardsLateVideoFrames = true
@@ -142,11 +183,51 @@ final class Camera: NSObject, ObservableObject {
             output.maxPhotoQualityPrioritization = .balanced
             configured = true
         }
+        // Full size photos from whichever camera and format is in use.
+        if let device, session.outputs.contains(output), let largest = device.activeFormat.supportedMaxPhotoDimensions.max(by: { $0.width * $0.height < $1.width * $1.height }) {
+            output.maxPhotoDimensions = largest
+        }
+        if !depth { setDepth(nil) }
+        guard let device else { return }
         // Runs after commitConfiguration (deferred above), once the preview connection exists.
         DispatchQueue.main.async {
             self.isFront = front
+            self.hasLiDAR = lidarExists
+            self.usingLiDAR = depth
             self.makeCoordinator(for: device)
         }
+    }
+
+    private static func lidarDevice() -> AVCaptureDevice? {
+        AVCaptureDevice.default(.builtInLiDARDepthCamera, for: .video, position: .back)
+    }
+
+    /// A 4:3 format with LiDAR depth, the sharpest up to 1920 wide for the live picture, and its
+    /// finest depth map. False if there is none.
+    private static func chooseDepthFormat(_ device: AVCaptureDevice) -> Bool {
+        let candidates = device.formats.filter { format in
+            let size = format.formatDescription.dimensions
+            return !format.supportedDepthDataFormats.isEmpty && size.width <= 1920
+                && abs(Double(size.width) / Double(max(size.height, 1)) - 4.0 / 3.0) < 0.01
+        }
+        func photoPixels(_ format: AVCaptureDevice.Format) -> Int32 {
+            format.supportedMaxPhotoDimensions.map { $0.width * $0.height }.max() ?? 0
+        }
+        guard let format = candidates.max(by: { a, b in
+            let pa = photoPixels(a), pb = photoPixels(b)
+            return pa != pb ? pa < pb : a.formatDescription.dimensions.width < b.formatDescription.dimensions.width
+        }) else { return false }
+        let depthFormats = format.supportedDepthDataFormats.filter {
+            let type = $0.formatDescription.mediaSubType.rawValue
+            return type == kCVPixelFormatType_DepthFloat32 || type == kCVPixelFormatType_DepthFloat16
+        }
+        guard let depthFormat = depthFormats.max(by: { $0.formatDescription.dimensions.width < $1.formatDescription.dimensions.width }),
+            (try? device.lockForConfiguration()) != nil
+        else { return false }
+        device.activeFormat = format
+        device.activeDepthDataFormat = depthFormat
+        device.unlockForConfiguration()
+        return true
     }
 
     /// The back camera that switches lenses by itself where there is one (close-ups on Pro phones),
@@ -212,7 +293,46 @@ extension Camera: AVCaptureVideoDataOutputSampleBufferDelegate {
         case 270: orientation = .left
         default: orientation = .up
         }
-        onFrame(CIImage(cvPixelBuffer: buffer).oriented(orientation))
+        onFrame(CIImage(cvPixelBuffer: buffer).oriented(orientation), currentDepth())
+    }
+}
+
+extension Camera: AVCaptureDepthDataOutputDelegate {
+    func depthDataOutput(_ output: AVCaptureDepthDataOutput, didOutput depthData: AVDepthData, timestamp: CMTime, connection: AVCaptureConnection) {
+        let now = CACurrentMediaTime()
+        guard now - lastDepth > 0.15 else { return }
+        lastDepth = now
+        let converted = depthData.depthDataType == kCVPixelFormatType_DepthFloat32
+            ? depthData : depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
+        let map = converted.depthDataMap
+        CVPixelBufferLockBaseAddress(map, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(map, .readOnly) }
+        let width = CVPixelBufferGetWidth(map), height = CVPixelBufferGetHeight(map)
+        let rowBytes = CVPixelBufferGetBytesPerRow(map)
+        guard let base = CVPixelBufferGetBaseAddress(map), width > 0, height > 0 else { return }
+        var values = [Float](repeating: 0, count: width * height)
+        for y in 0..<height {
+            let row = (base + y * rowBytes).assumingMemoryBound(to: Float32.self)
+            for x in 0..<width { values[y * width + x] = row[x] }
+        }
+        // Sensor-sideways like the frames; turned upright the same way.
+        let turns = Int((frameAngle / 90).rounded())
+        setDepth(DepthGrid(width: width, height: height, values: values).rotated(quarterTurns: turns))
+    }
+}
+
+extension Camera {
+    /// The latest LiDAR depth, upright like saved photos; nil without LiDAR.
+    func currentDepth() -> DepthGrid? {
+        depthLock.lock()
+        defer { depthLock.unlock() }
+        return latestDepth
+    }
+
+    fileprivate func setDepth(_ grid: DepthGrid?) {
+        depthLock.lock()
+        latestDepth = grid
+        depthLock.unlock()
     }
 }
 

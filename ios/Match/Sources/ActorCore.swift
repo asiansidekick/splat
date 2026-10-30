@@ -25,7 +25,8 @@ enum ActorMatch {
     /// The guide reading for the live actor against the reference: where to aim, how far to step,
     /// how to twist the phone, and (for faces) which way to walk round and whether to raise or
     /// lower the phone. `aspect` is the pictures' width over height (both cropped alike).
-    static func reading(reference ref: ActorPose, live: ActorPose, aspect: CGFloat) -> GuideReading? {
+    static func reading(reference ref: ActorPose, live: ActorPose, aspect: CGFloat,
+                        referenceDistance: Double? = nil, liveDistance: Double? = nil) -> GuideReading? {
         guard aspect > 0 else { return nil }
         func even(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x, y: p.y / aspect) }
         let a1 = even(ref.left), b1 = even(ref.right), a2 = even(live.left), b2 = even(live.right)
@@ -50,6 +51,7 @@ enum ActorMatch {
             scale: Double(scale),
             corners: corners,
             actor: true)
+        reading.useDistances(live: liveDistance, reference: referenceDistance)
         if ref.kind == .face, live.kind == .face {
             reading.orbit = turnAcross(live, aspect: aspect) - turnAcross(ref, aspect: aspect)
             if let r = noseDrop(ref, aspect: aspect), let l = noseDrop(live, aspect: aspect) {

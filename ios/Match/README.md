@@ -6,6 +6,8 @@ Photo-only continuity for hair, makeup and costume. It opens straight into the c
 
 **Actor lock.** When the reference has a person in it, the guide and the overlay lock to the actor rather than the room, using Vision on the back camera: face landmarks (eyes, nose, mouth) for hair and makeup, body pose (shoulders, neck, hips) for costume boards. The ghost is pinned to the eyes or shoulders, and the guide adds WALK ROUND LEFT/RIGHT (from where the nose sits between the eyes) and RAISE/LOWER PHONE (from where the nose sits between eyes and mouth). With several people in view, tap one to follow them. Detection only, never identity, fully offline. The maths is tested on CI against a modelled head photographed by a pinhole camera (`Tests/ActorTests`).
 
+**LiDAR distance.** On iPhones and iPads with LiDAR, Match uses the LiDAR camera (AVFoundation depth, no ARKit). Each photo saves a small depth map beside it (`<id>-depth.bin`), and STEP IN/BACK then goes by the measured distance to the actor's eyes or shoulders (or the reference's middle), with how far to move in centimetres. It can be turned off in the ••• menu; without LiDAR the guide goes by how big things look.
+
 In short: take or import a few photos, then check against them before each take. No 3D scan, no internet, no computer. Runs on iPhone and iPad, portrait or landscape.
 
 1. **Boards.** Tap **+** for each character or prop you look after in a scene, for example "Sarah · Hair" in scene 12. The scene and department carry over from the last board. Add notes (hair tucked behind left ear, top button undone).

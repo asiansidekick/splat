@@ -20,7 +20,7 @@ jobs:
       - name: Actor lock tests
         working-directory: ios/Match
         run: |
-          if ! swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Tests/ActorTests/main.swift -o actor-tests > compile.log 2>&1; then
+          if ! swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/Depth.swift Tests/ActorTests/main.swift -o actor-tests > compile.log 2>&1; then
             grep -E ": error: " compile.log | sort -u | head -10 \
               | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
             cat compile.log | tail -40

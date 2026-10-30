@@ -41,6 +41,8 @@ final class Guide: ObservableObject {
     private var reference: CIImage?
     private var referenceFace: ActorPose?
     private var referenceBody: ActorPose?
+    /// The reference's LiDAR depth, saved with the photo, if it was taken with LiDAR.
+    private var referenceDepth: DepthGrid?
     private var prefersBody = false
     /// Where the followed actor was last, or where the screen was tapped.
     private var followPoint: CGPoint?
@@ -57,8 +59,9 @@ final class Guide: ObservableObject {
     var lockedToActor: Bool { reading?.actor == true }
 
     /// `prefersBody`: costume, where the whole body matters more than the face.
-    func setReference(_ image: UIImage?, aspect: CGFloat?, prefersBody: Bool = false) {
+    func setReference(_ image: UIImage?, depth: DepthGrid? = nil, aspect: CGFloat?, prefersBody: Bool = false) {
         generation += 1
+        referenceDepth = image == nil ? nil : depth
         self.aspect = aspect
         self.prefersBody = prefersBody
         let cropped = image.flatMap { CIImage(image: $0) }.map { Self.centred($0, aspect: aspect) }
@@ -95,7 +98,7 @@ final class Guide: ObservableObject {
     }
 
     /// A live frame, upright the same way as saved photos. Dropped if the last is still being read.
-    nonisolated func consider(_ frame: CIImage) {
+    nonisolated func consider(_ frame: CIImage, depth: DepthGrid? = nil) {
         Task { @MainActor in
             guard !self.busy, let reference = self.reference else { return }
             self.busy = true
@@ -106,11 +109,21 @@ final class Guide: ObservableObject {
             let aspect = self.aspect ?? (cropped.extent.width / max(cropped.extent.height, 1))
             let kinds = self.kindsToTry()
             let follow = self.followPoint
+            let referenceDepth = self.referenceDepth
             let result = await Task.detached(priority: .utility) { () -> ActorResult? in
-                if !kinds.isEmpty, let found = Self.readActor(colour, kinds: kinds, follow: follow, aspect: aspect) {
+                if !kinds.isEmpty, let found = Self.readActor(colour, kinds: kinds, follow: follow, aspect: aspect,
+                                                             depth: depth, referenceDepth: referenceDepth) {
                     return found
                 }
-                return Self.read(live: live, reference: reference).map { ActorResult(reading: $0) }
+                guard var reading = Self.read(live: live, reference: reference) else { return nil }
+                // LiDAR on both: compare the distance to the reference's middle with the distance to
+                // where that middle shows now.
+                if let depth, let referenceDepth, abs(reading.move.dx) < 0.15, abs(reading.move.dy) < 0.15 {
+                    let now = CGPoint(x: 0.5 + reading.move.dx, y: 0.5 + reading.move.dy * aspect)
+                    reading.useDistances(live: depth.distance(at: now, aspect: aspect).map(Double.init),
+                                         reference: referenceDepth.distance(at: CGPoint(x: 0.5, y: 0.5), aspect: aspect).map(Double.init))
+                }
+                return ActorResult(reading: reading)
             }.value
             self.busy = false
             guard generation == self.generation, self.reference != nil else { return }
@@ -131,12 +144,17 @@ final class Guide: ObservableObject {
         var followed: Int?
     }
 
-    private nonisolated static func readActor(_ picture: CIImage, kinds: [ActorPose], follow: CGPoint?, aspect: CGFloat) -> ActorResult? {
+    private nonisolated static func readActor(_ picture: CIImage, kinds: [ActorPose], follow: CGPoint?, aspect: CGFloat,
+                                              depth: DepthGrid?, referenceDepth: DepthGrid?) -> ActorResult? {
         let found = ActorVision.people(in: picture)
         for reference in kinds {
             let live = reference.kind == .face ? found.faces : found.bodies
-            guard let index = ActorMatch.pick(live, near: follow, like: reference),
-                let reading = ActorMatch.reading(reference: reference, live: live[index], aspect: aspect)
+            guard let index = ActorMatch.pick(live, near: follow, like: reference) else { continue }
+            // LiDAR: distance to the eyes (or shoulders) now and in the reference.
+            let liveDistance = depth?.distance(at: live[index].centre, aspect: aspect).map(Double.init)
+            let referenceDistance = referenceDepth?.distance(at: reference.centre, aspect: aspect).map(Double.init)
+            guard let reading = ActorMatch.reading(reference: reference, live: live[index], aspect: aspect,
+                                                   referenceDistance: referenceDistance, liveDistance: liveDistance)
             else { continue }
             return ActorResult(
                 reading: reading,
@@ -361,7 +379,7 @@ struct EdgeGuide: View {
                 Image(systemName: "arrow.right.to.line").font(.system(size: 76, weight: .bold))
             }
         case .step(let closer):
-            centre(word: closer ? "STEP IN" : "STEP BACK", in: size) {
+            centre(word: (closer ? "STEP IN" : "STEP BACK") + Self.metres(reading?.stepMetres), in: size) {
                 Image(systemName: closer ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                     .font(.system(size: 72, weight: .bold))
                     .phaseAnimator([1.0, closer ? 0.8 : 1.2]) { content, scale in
@@ -395,6 +413,13 @@ struct EdgeGuide: View {
         .shadow(color: .black.opacity(0.6), radius: 2)
         .opacity(0.8)
         .position(position)
+    }
+
+    /// " 30 CM" from LiDAR, to the nearest 5 cm; nothing without it.
+    static func metres(_ value: Double?) -> String {
+        guard let value else { return "" }
+        let cm = Int((abs(value) * 20).rounded()) * 5
+        return cm >= 5 ? " \(cm) CM" : ""
     }
 
     /// How far a right-pointing glyph turns to point at that edge.

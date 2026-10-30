@@ -27,6 +27,24 @@ struct GuideReading: Equatable {
     /// Actor lock only: how much lower the nose sits between eyes and mouth than in the reference.
     /// Above zero: the phone is too high, so lower it.
     var height: CGFloat = 0
+    /// LiDAR: metres to the actor (or the reference's middle) now and when the reference was taken.
+    /// With both, stepping in or back goes by these rather than by how big things look.
+    var liveDistance: Double?
+    var referenceDistance: Double?
+
+    /// Uses LiDAR distances for stepping in or back, when there are both.
+    mutating func useDistances(live: Double?, reference: Double?) {
+        guard let live, let reference, live > 0.05, reference > 0.05 else { return }
+        liveDistance = live
+        referenceDistance = reference
+        scale = reference / live
+    }
+
+    /// How far to step in (above zero) or back, in metres, when LiDAR knows.
+    var stepMetres: Double? {
+        guard let liveDistance, let referenceDistance else { return nil }
+        return liveDistance - referenceDistance
+    }
 
     static let moveTolerance: CGFloat = 0.035
     static let turnTolerance: CGFloat = 0.06
@@ -89,7 +107,15 @@ struct GuideReading: Equatable {
             corners: zip(corners, new.corners).map { CGPoint(x: mix($0.x, $1.x), y: mix($0.y, $1.y)) },
             actor: new.actor,
             orbit: mix(orbit, new.orbit),
-            height: mix(height, new.height))
+            height: mix(height, new.height),
+            liveDistance: mixed(liveDistance, new.liveDistance, k),
+            referenceDistance: new.referenceDistance)
+    }
+
+    private func mixed(_ a: Double?, _ b: Double?, _ k: CGFloat) -> Double? {
+        guard let b else { return nil }
+        guard let a else { return b }
+        return a + (b - a) * Double(k)
     }
 
     /// The one thing most out of line. Nil when everything is within tolerance.

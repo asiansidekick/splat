@@ -70,6 +70,7 @@ struct HelpView: View {
                     Text("• Corners: white corners mark the screen. Yellow corners show where the reference's frame is now. Line the yellow corners up with the white ones.")
                     Text("• One instruction at a time, the biggest first: MOVE (slide the phone), PAN (aim left or right), TILT (aim up or down), ROTATE (twist it level), STEP IN or STEP BACK.")
                     Text("• Actor lock: when the reference has a person in it, the guide and the overlay follow the actor, not the room, wherever they stand. The Guide button reads Actor. For hair and makeup it follows the face; for costume boards, the body. It adds WALK ROUND LEFT or RIGHT, and RAISE or LOWER PHONE, to match the angle on the face. With several people in view, each gets a ring; tap one to follow them. It finds faces only, never who someone is, all on the phone.")
+                    Text("• LiDAR (Pro iPhones and iPads): photos keep the distance to the actor, and STEP IN or STEP BACK says how far in centimetres. Turn it off in the ••• menu, LiDAR distance.")
                     Text("• Hold still once lined up: after half a second the corners turn green, LINED UP shows and the phone taps.")
                     Text("• The slider in the bottom left corner sets how strong the overlay is; the eye hides it.")
                     Text("The guide works from the pictures alone, so it works on any iPhone or iPad. It needs some detail in view. If it says POINT AT THE REFERENCE, it can't find a match yet.")

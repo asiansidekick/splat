@@ -39,6 +39,8 @@ struct CaptureView: View {
     @State private var angle = ""
     @State private var ghost: UIImage?
     @State private var ghostEdges: UIImage?
+    @State private var ghostDepth: DepthGrid?
+    @AppStorage("useLiDAR") private var useLiDAR = true
     @State private var outlines = false
     @State private var ghostScale: CGFloat = 1
     @State private var ghostOffset: CGSize = .zero
@@ -104,6 +106,7 @@ struct CaptureView: View {
             pickReference(for: angle)
         }
         .onChange(of: guideOn) { _, _ in connectGuide() }
+        .onChange(of: useLiDAR) { _, _ in camera.reconfigure() }
         .onChange(of: visibleAspect) { _, _ in connectGuide() }
         .onChange(of: picked) { _, items in importPicked(items) }
         .task(id: ghostID) { await loadGhost() }
@@ -231,6 +234,9 @@ struct CaptureView: View {
                 } label: { Label("Compare latest photo", systemImage: "rectangle.split.2x1") }
             }
             Toggle(isOn: $outlines) { Label("Overlay as outlines", systemImage: "square.dashed") }
+            if camera.hasLiDAR {
+                Toggle(isOn: $useLiDAR) { Label("LiDAR distance", systemImage: "dot.radiowaves.forward") }
+            }
             Toggle(isOn: $saveToPhotos) { Label("Also save photos to Photos", systemImage: "square.and.arrow.down") }
             Button { showingLibrary = true } label: { Label("Boards, notes and backup", systemImage: "square.grid.2x2") }
             Button { showingHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
@@ -459,11 +465,11 @@ struct CaptureView: View {
     private func connectGuide() {
         let guide = self.guide
         if guideOn, ghost != nil {
-            camera.onFrame = { @Sendable [weak guide] frame in guide?.consider(frame) }
+            camera.onFrame = { @Sendable [weak guide] frame, depth in guide?.consider(frame, depth: depth) }
         } else {
             camera.onFrame = nil
         }
-        guide.setReference(guideOn ? ghost : nil, aspect: visibleAspect, prefersBody: board?.department == .costume)
+        guide.setReference(guideOn ? ghost : nil, depth: ghostDepth, aspect: visibleAspect, prefersBody: board?.department == .costume)
     }
 
     private func selectAngle(_ newAngle: String) {
@@ -540,13 +546,15 @@ struct CaptureView: View {
         let angle = self.angle
         let alsoToPhotos = saveToPhotos
         let crop = visibleAspect
+        // LiDAR depth at the moment of the shot, cropped like the photo, so it can be a reference.
+        let depth = camera.currentDepth()?.cropped(aspect: crop)
         camera.capture { data in
             guard let data else {
                 saveError = "The photo did not take. Try again."
                 return
             }
             Task {
-                if let shot = await store.addShot(data, to: target.id, angle: angle, source: .camera, crop: crop) {
+                if let shot = await store.addShot(data, to: target.id, angle: angle, source: .camera, crop: crop, depth: depth) {
                     lastShot = shot
                     // A new reference is shown straight away, so the next photo can be checked against it.
                     if shot.isReference, ghostID == nil { ghostID = shot.id }
@@ -568,17 +576,19 @@ struct CaptureView: View {
         guard let ghostID, let board, let shot = board.shots.first(where: { $0.id == ghostID }) else {
             ghost = nil
             ghostEdges = nil
+            ghostDepth = nil
             connectGuide()
             return
         }
         let boardID = board.id
-        let loaded = await Task.detached(priority: .userInitiated) { () -> (UIImage?, UIImage?) in
+        let loaded = await Task.detached(priority: .userInitiated) { () -> (UIImage?, UIImage?, DepthGrid?) in
             let image = BoardStore.image(shot, in: boardID, maxPixels: 1600)
-            return (image, image.flatMap(Ghost.edges(of:)))
+            return (image, image.flatMap(Ghost.edges(of:)), BoardStore.depth(shot, in: boardID))
         }.value
         guard !Task.isCancelled else { return }
         ghost = loaded.0
         ghostEdges = loaded.1
+        ghostDepth = loaded.2
         connectGuide()
     }
 }

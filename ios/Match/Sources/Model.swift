@@ -72,6 +72,8 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
 
     var file: String { "\(id.uuidString).jpg" }
     var thumbnailFile: String { "\(id.uuidString)-thumb.jpg" }
+    /// The LiDAR depth when the photo was taken, on phones and iPads with LiDAR.
+    var depthFile: String { "\(id.uuidString)-depth.bin" }
 
     var label: String {
         [Slate.takeName(take), angle.isEmpty ? nil : angle, taken.formatted(date: .omitted, time: .shortened)]
@@ -265,14 +267,18 @@ final class BoardStore: ObservableObject {
     /// The first photo from each angle becomes that angle's reference. Nil if it could not be read or saved.
     @discardableResult
     /// `crop` (width over height, upright) trims a camera photo to what the screen showed.
-    func addShot(_ data: Data, to boardID: UUID, angle: String, source: Shot.Source, crop: CGFloat? = nil) async -> Shot? {
+    func addShot(_ data: Data, to boardID: UUID, angle: String, source: Shot.Source, crop: CGFloat? = nil,
+                 depth: DepthGrid? = nil) async -> Shot? {
         guard let board = board(boardID) else { return nil }
         var shot = Shot(taken: .now, take: take(for: board.scene), angle: angle, source: source)
         let folder = Self.folder(for: boardID)
         let file = shot.file
         let thumbnail = shot.thumbnailFile
+        let depthFile = shot.depthFile
         let saved = await Task.detached(priority: .userInitiated) {
-            ImageFile.write(data, to: folder, file: file, thumbnail: thumbnail, crop: crop)
+            let written = ImageFile.write(data, to: folder, file: file, thumbnail: thumbnail, crop: crop)
+            if written, let depth { try? depth.data.write(to: folder.appending(path: depthFile), options: .atomic) }
+            return written
         }.value
         guard saved, var latest = self.board(boardID) else { return nil }
         if !latest.shots.contains(where: { $0.isReference && $0.angle == angle }) {
@@ -294,6 +300,7 @@ final class BoardStore: ObservableObject {
         let folder = Self.folder(for: boardID)
         try? FileManager.default.removeItem(at: folder.appending(path: shot.file))
         try? FileManager.default.removeItem(at: folder.appending(path: shot.thumbnailFile))
+        try? FileManager.default.removeItem(at: folder.appending(path: shot.depthFile))
         thumbnails.removeObject(forKey: shot.id.uuidString as NSString)
         board.shots.removeAll { $0.id == shot.id }
         save(board)
@@ -311,6 +318,11 @@ final class BoardStore: ObservableObject {
     /// The photo at screen resolution. Slow, so call it off the main thread.
     nonisolated static func image(_ shot: Shot, in boardID: UUID, maxPixels: Int = 2400) -> UIImage? {
         ImageFile.load(url(of: shot, in: boardID), maxPixels: maxPixels)
+    }
+
+    /// The LiDAR depth saved with a photo, if it has one.
+    nonisolated static func depth(_ shot: Shot, in boardID: UUID) -> DepthGrid? {
+        (try? Data(contentsOf: folder(for: boardID).appending(path: shot.depthFile))).flatMap(DepthGrid.init(data:))
     }
 }
 
