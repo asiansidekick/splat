@@ -37,8 +37,9 @@ struct HelpView: View {
                     step("photo.on.rectangle.angled", "Press and hold a reference in the gallery and choose Save photos to Photos.")
                 }
                 Section("Your work") {
-                    step("lock", "Everything stays on this device and works with no signal. References are also in the Files app, On My iPhone, Reset.")
+                    step("lock", "Everything stays on this device (unless you sync with your team's phones) and works with no signal. References are also in the Files app, On My iPhone, Reset.")
                     step("square.and.arrow.up", "Press and hold a reference in the gallery for its take log and PDF report.")
+                    step("arrow.triangle.2.circlepath", "Sync with your team's phones nearby, with no signal: open the gallery and tap the sync arrows (or ••• then Sync on the reset screen) on each phone, with the same team passcode. References, takes and notes go both ways. Turn off LiDAR and 3D models for a quicker sync.")
                 }
                 Section {
                     ShareLink(item: Diagnostics.reportURL()) {

@@ -4,15 +4,6 @@ import SceneKit
 import SwiftUI
 import UIKit
 
-/// A 3D model (USDZ) placed in a reference's room, for example a Polycam scan of a prop, kept in
-/// the reference's room coordinates so it comes back in the same place.
-struct PlacedModel: Codable, Identifiable, Equatable {
-    var id = UUID()
-    var name: String
-    var file: String  // relative to the reference folder
-    var transform: [Float]  // model-to-world, 16 values, column major
-}
-
 /// Places USDZ models at real size in an AR session and lets the person move, scale and turn
 /// them. Used while recording (models then go into each saved reference) and while resetting.
 @MainActor
@@ -238,6 +229,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private func commit(_ id: UUID) {
         guard let node = modelNodes[id], let index = models.firstIndex(where: { $0.id == id }) else { return }
         models[index].transform = flatten(node.simdTransform)
+        models[index].moved = Date()
     }
 
     /// Width × depth × height of the selected model as it stands, and its scale.

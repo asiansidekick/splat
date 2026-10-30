@@ -1,15 +1,5 @@
 import SwiftUI
 
-/// One take shot on a setup, with the script supervisor style notes that go with it.
-struct Take: Codable, Identifiable, Equatable {
-    var id = UUID()
-    var number: Int
-    var logged: Date
-    var note = ""
-    var circled = false  // a good take, circled on the report
-    var resetChecked = false  // the set matched the reference before this take
-}
-
 /// Automatic scene, setup and take numbering.
 enum Slate {
     /// Setup letters as slated: A, B, C… skipping I and O, which read as 1 and 0.
@@ -119,6 +109,7 @@ struct TakeEditor: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
+                        take.edited = Date()
                         onSave(take)
                         dismiss()
                     }
@@ -152,6 +143,7 @@ struct SlateEditor: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
+                        reference.slateEdited = Date()
                         onSave(reference)
                         dismiss()
                     }
@@ -224,6 +216,7 @@ struct TakeLogView: View {
                     .onDelete { offsets in
                         let ids = Set(offsets.map { sortedTakes[$0].id })
                         reference.takes.removeAll { ids.contains($0.id) }
+                        reference.removedTakes.append(contentsOf: ids.sorted { $0.uuidString < $1.uuidString })
                         save()
                     }
                 }

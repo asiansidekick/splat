@@ -11,6 +11,11 @@ targets:
     sources: [Sources]
     # A shared scheme, so CI can archive the app for TestFlight.
     scheme: {}
+    info:
+      path: Info.plist
+      properties:
+        # Nearby sync (MultipeerConnectivity): phone to phone over Wi-Fi and Bluetooth.
+        NSBonjourServices: [_reset-sync._tcp, _reset-sync._udp]
     settings:
       base:
         # Bundle IDs are unique across all of Apple; this one must match the App Store Connect app.
@@ -25,6 +30,7 @@ targets:
         INFOPLIST_KEY_UIRequiresFullScreen: YES
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Reset finds your teammates' phones nearby to sync references directly, with no internet."
         INFOPLIST_KEY_NSCameraUsageDescription: "The camera records the set and shows the reference overlay."
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Shutter photos and references are saved to Photos so you can send them."
         INFOPLIST_KEY_UIRequiredDeviceCapabilities: arkit

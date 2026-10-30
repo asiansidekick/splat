@@ -74,7 +74,7 @@ struct CameraHome: View {
     @AppStorage("saveToPhotos") private var saveToPhotos = true
 
     enum Panel: Identifiable {
-        case takeLog(UUID), compare(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery, sharePhoto
+        case takeLog(UUID), compare(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery, sharePhoto, sync
 
         var id: String {
             switch self {
@@ -86,6 +86,7 @@ struct CameraHome: View {
             case .help: return "help"
             case .gallery: return "gallery"
             case .sharePhoto: return "share"
+            case .sync: return "sync"
             }
         }
     }
@@ -143,6 +144,11 @@ struct CameraHome: View {
             Button("Delete reference and its takes", role: .destructive) {
                 if let reference = deleting { delete(reference) }
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ReferenceSyncView.changed)) { _ in
+            // A teammate's reference or edit arrived: show it.
+            references = ReferenceStore.all()
+            nextSetup = Slate.nextSetup(scene: nextScene, in: references)
         }
         .onAppear {
             guard !loaded else { return }
@@ -288,7 +294,10 @@ struct CameraHome: View {
         case .help:
             HelpView().onDisappear { seenHelp = true }
         case .gallery:
-            Gallery(references: references, selectedID: $selectedID, thumbnails: thumbnails, onImport: importPhotos) { action, reference in
+            Gallery(
+                references: references, selectedID: $selectedID, thumbnails: thumbnails, onImport: importPhotos,
+                onSync: { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.panel = .sync } }
+            ) { action, reference in
                 // Let the gallery close before the next sheet opens.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     switch action {
@@ -303,6 +312,8 @@ struct CameraHome: View {
             }
         case .sharePhoto:
             if let sharingPhoto { ShareSheet(items: [sharingPhoto]) }
+        case .sync:
+            ReferenceSyncView()
         }
     }
 }
@@ -679,6 +690,7 @@ struct Gallery: View {
     @Binding var selectedID: UUID?
     @ObservedObject var thumbnails: Thumbnails
     let onImport: ([PhotosPickerItem]) -> Void
+    let onSync: () -> Void
     let action: (Action, Reference) -> Void
     @State private var current: UUID?
     @State private var showingGrid = false
@@ -686,12 +698,14 @@ struct Gallery: View {
 
     init(
         references: [Reference], selectedID: Binding<UUID?>, thumbnails: Thumbnails,
-        onImport: @escaping ([PhotosPickerItem]) -> Void, action: @escaping (Action, Reference) -> Void
+        onImport: @escaping ([PhotosPickerItem]) -> Void, onSync: @escaping () -> Void = {},
+        action: @escaping (Action, Reference) -> Void
     ) {
         ordered = references.sorted { $0.created < $1.created }
         _selectedID = selectedID
         self.thumbnails = thumbnails
         self.onImport = onImport
+        self.onSync = onSync
         self.action = action
         _current = State(initialValue: selectedID.wrappedValue ?? ordered.last?.id)
     }
@@ -723,6 +737,13 @@ struct Gallery: View {
                         Image(systemName: "square.and.arrow.down")
                     }
                     .accessibilityLabel("Import from Photos")
+                    Button {
+                        dismiss()
+                        onSync()
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                    .accessibilityLabel("Sync with nearby phones")
                     Button {
                         withAnimation { showingGrid.toggle() }
                     } label: {
@@ -1326,6 +1347,7 @@ struct ResetStage: View {
                 Button { open(.takeLog(reference.id)) } label: { Label("Take log", systemImage: "list.number") }
                 Button { open(.pdf(reference.id)) } label: { Label("Share PDF report", systemImage: "square.and.arrow.up") }
                 Button { open(.slate(reference.id)) } label: { Label("Edit slate", systemImage: "pencil") }
+                Button { open(.sync) } label: { Label("Sync with nearby phones", systemImage: "arrow.triangle.2.circlepath") }
                 Toggle(isOn: $leftHanded) { Label("Left-handed controls", systemImage: "hand.raised") }
                 Button { open(.help) } label: { Label("Help", systemImage: "questionmark.circle") }
             } label: {
