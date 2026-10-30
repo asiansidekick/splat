@@ -1055,7 +1055,6 @@ struct CaptureStage: View {
                 }
                 ModelSizeBadge(placer: recorder.placer).hiddenInScreenshots()
                 MeasureReticle(measurer: recorder.measurer).hiddenInScreenshots()
-                MeasureEntry(measurer: recorder.measurer)
                 if mode == .snapshot && (recorder.pendingSave || recorder.saving || justSaved) {
                     ScanProgressOverlay(
                         progress: justSaved ? 1 : recorder.scanProgress, saved: justSaved,
@@ -1105,6 +1104,7 @@ struct CaptureStage: View {
                 }
             }
         }
+        .overlay { MeasureEntry(measurer: recorder.measurer).hiddenInScreenshots() }
         .fileImporter(isPresented: $importingModels, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { recorder.placer.add(from: urls) }
         }
@@ -1194,7 +1194,7 @@ struct CaptureStage: View {
         let ready = recorder.canSaveMap
         if recorder.saving { return "Saving \(slate)…" }
         if recorder.pendingSave {
-            return "Mapping the room. Move the phone gently side to side and it saves by itself."
+            return "Mapping the room. Move the phone gently side to side and it saves by itself. Tap again to save now."
         }
         if recorder.capturing {
             return "Recording \(slate). Walk slowly round the props, then tap stop."
@@ -1294,6 +1294,7 @@ struct ResetStage: View {
                 if leftHanded { logButton } else { pauseButton }
             }
         }
+        .overlay { MeasureEntry(measurer: restorer.measurer).hiddenInScreenshots() }
         .modifier(CaptureButtonAction { togglePause() })
         .sheet(item: $notingTake) { take in
             TakeEditor(take: take, slate: reference.slate) { logged in
@@ -1514,7 +1515,6 @@ struct ResetStage: View {
                 ModelSizeBadge(placer: restorer.placer).hiddenInScreenshots()
                 if !restorer.paused {
                     MeasureReticle(measurer: restorer.measurer).hiddenInScreenshots()
-                    MeasureEntry(measurer: restorer.measurer)
                 }
             }
             .overlay {

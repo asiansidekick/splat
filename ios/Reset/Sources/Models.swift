@@ -211,7 +211,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
-        guard let id = selectedModel, let node = modelNodes[id] else { return }
+        guard !isSuspended(), let id = selectedModel, let node = modelNodes[id] else { return }
         node.simdScale *= Float(gesture.scale)
         gesture.scale = 1
         updateSize()

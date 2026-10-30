@@ -39,6 +39,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     @Published private(set) var moving: UUID?
     /// How far ahead a note hangs in mid-air when the crosshair is on nothing.
     private var airDistance: Float = 1
+    /// How big dimension and note text is drawn; pinch while measuring to change it.
+    @Published private(set) var textScale = UserDefaults.standard.object(forKey: "measureTextScale") as? Float ?? 1
     /// What the last drag was made of, written to the log when the line is kept so a wrong length
     /// can be traced to the depth, the mapping or the pose.
     private var dragDetail = ""
@@ -88,10 +90,23 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         pan.maximumNumberOfTouches = 1
         pan.delegate = self
         view.addGestureRecognizer(pan)
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        pinch.delegate = self
+        view.addGestureRecognizer(pinch)
         let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleHold(_:)))
         hold.minimumPressDuration = 0.6
         hold.delegate = self
         view.addGestureRecognizer(hold)
+    }
+
+    /// Pinch to make the dimension and note text bigger or smaller.
+    @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+        guard active else { return }
+        textScale = min(max(textScale * Float(gesture.scale), 0.4), 5)
+        gesture.scale = 1
+        rebuild()
+        updatePreview()
+        if gesture.state == .ended { UserDefaults.standard.set(textScale, forKey: "measureTextScale") }
     }
 
     /// Holding a finger down puts a note right there: on the surface under the finger, or in mid-air.
@@ -126,7 +141,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     }
 
     nonisolated func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard gestureRecognizer is UIPanGestureRecognizer || gestureRecognizer is UILongPressGestureRecognizer else { return true }
+        guard gestureRecognizer is UIPanGestureRecognizer || gestureRecognizer is UILongPressGestureRecognizer || gestureRecognizer is UIPinchGestureRecognizer else { return true }
         return MainActor.assumeIsolated { self.active }
     }
 
@@ -176,7 +191,6 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         guard let drag, screenLength > 24, simd_distance(drag.a, drag.b) > 0.005 else { return }
         let line = RoomMeasurement(a: array(drag.a), b: array(drag.b), created: Date())
         measurements.append(line)
-        entry = .length(line.id)
         Haptics.success()
         Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (drawn on the screen, one frame)")
         Diagnostics.log("Drag detail: \(dragDetail)")
@@ -193,6 +207,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let picked = hits.lazy.compactMap { Measurer.markID(of: $0.node) }.first
         if picked != nil { Haptics.tap() }
         selected = picked
+        // Tapping a dimension or note is how you edit it.
+        if let picked { entry = measurements.contains { $0.id == picked } ? .length(picked) : .note(picked) }
     }
 
     /// The id of the line or note a drawn node belongs to.
@@ -222,10 +238,15 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// Deletes the picked line or note.
     func deleteSelected() {
         guard let id = selected else { return }
+        deleteMark(id)
+    }
+
+    func deleteMark(_ id: UUID) {
         measurements.removeAll { $0.id == id }
         notes.removeAll { $0.id == id }
         removed.append(id)
-        selected = nil
+        if selected == id { selected = nil }
+        entry = nil
         changed()
     }
 
@@ -273,7 +294,6 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         }
         let line = RoomMeasurement(a: array(start), b: array(cursor), created: Date())
         measurements.append(line)
-        entry = .length(line.id)
         Haptics.success()
         let camera = session.currentFrame?.camera.transform.columns.3
         let away = camera.map { simd_distance(cursor, SIMD3($0.x, $0.y, $0.z)) }
@@ -540,7 +560,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private func labelHeight(at p: SIMD3<Float>) -> Float {
         guard let camera = session.currentFrame?.camera.transform.columns.3 else { return 0.03 }
         let distance = simd_distance(p, SIMD3(camera.x, camera.y, camera.z))
-        return min(max(distance * 0.035, 0.012), 0.12)
+        return min(max(distance * 0.035 * textScale, 0.008), 0.6)
     }
 
     private func rebuild() {
@@ -774,25 +794,25 @@ struct MeasureEntry: View {
 
     private func lengthCard(_ id: UUID) -> some View {
         let guess = measurer.measurements.first { $0.id == id }?.measured
-        return VStack(spacing: 14) {
-            Text("HOW BIG IS IT?").font(comic(32)).foregroundStyle(.black)
+        return VStack(spacing: 16) {
+            Text("Real size")
+                .font(.headline)
+                .foregroundStyle(.white.opacity(0.7))
             TextField("0", text: $text)
                 .keyboardType(.decimalPad)
                 .focused($focused)
-                .font(.system(size: 68, weight: .black, design: .rounded).monospacedDigit())
+                .font(.system(size: 64, weight: .bold, design: .rounded).monospacedDigit())
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.black)
-                .padding(.vertical, 8)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.black, lineWidth: 4))
+                .foregroundStyle(.white)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
             HStack(spacing: 8) {
                 ForEach(Self.units, id: \.name) { item in
                     Button { unit = item.name } label: {
-                        Text(item.name).font(comic(24))
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .background(unit == item.name ? Color.black : Color.white, in: RoundedRectangle(cornerRadius: 12))
-                            .foregroundStyle(unit == item.name ? Color.yellow : Color.black)
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.black, lineWidth: 3))
+                        Text(item.name).font(.headline)
+                            .frame(maxWidth: .infinity, minHeight: 40)
+                            .background(unit == item.name ? Color.yellow : Color.white.opacity(0.12), in: Capsule())
+                            .foregroundStyle(unit == item.name ? Color.black : Color.white)
                     }
                 }
             }
@@ -800,14 +820,15 @@ struct MeasureEntry: View {
                 Button {
                     text = String(format: "%.4g", Double(guess / factor))
                 } label: {
-                    Text("The phone guesses ~\(Measurer.text(guess)). Tap to use it.")
-                        .font(.footnote.bold())
-                        .foregroundStyle(.black.opacity(0.7))
+                    Text("Phone's guess ~\(Measurer.text(guess)). Tap to use it.")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.7))
                 }
             }
-            HStack(spacing: 14) {
-                comicButton("SKIP", fill: .white) { measurer.dismissEntry() }
-                comicButton("SET IT!", fill: .black, text: .yellow) {
+            HStack(spacing: 10) {
+                plainButton("Delete", fill: Color.red.opacity(0.85), text: .white) { measurer.deleteMark(id) }
+                plainButton("Cancel", fill: Color.white.opacity(0.15), text: .white) { measurer.dismissEntry() }
+                plainButton("Set", fill: .yellow, text: .black) {
                     var typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if let last = typed.last, last.isNumber || last == "." { typed += unit }
                     guard let metres = LengthText.parse(typed) else {
@@ -820,15 +841,24 @@ struct MeasureEntry: View {
             }
         }
         .padding(20)
-        .background(Color.yellow, in: RoundedRectangle(cornerRadius: 28))
-        .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.black, lineWidth: 6))
-        .shadow(color: .black, radius: 0, x: 7, y: 7)
-        .padding(.horizontal, 18)
+        .background(Color(white: 0.1).opacity(0.96), in: RoundedRectangle(cornerRadius: 26))
+        .overlay(RoundedRectangle(cornerRadius: 26).stroke(Color.white.opacity(0.18), lineWidth: 1))
+        .padding(.horizontal, 20)
+    }
+
+    private func plainButton(_ title: String, fill: Color, text color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.headline)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .background(fill, in: RoundedRectangle(cornerRadius: 14))
+                .foregroundStyle(color)
+        }
     }
 
     private func noteCard(_ id: UUID?) -> some View {
         VStack(spacing: 22) {
             ZStack {
+                SpeechBubble().fill(Color.black).offset(x: 7, y: 7)
                 SpeechBubble().fill(Color.white)
                 SpeechBubble().stroke(Color.black, style: StrokeStyle(lineWidth: 6, lineJoin: .round))
                 TextField("WRITE SOMETHING!", text: $text, axis: .vertical)
@@ -846,7 +876,6 @@ struct MeasureEntry: View {
                     }
             }
             .frame(minHeight: 230)
-            .shadow(color: .black, radius: 0, x: 7, y: 7)
             .overlay(alignment: .topLeading) {
                 Text(id == nil ? "NOTE!" : "EDIT!")
                     .font(comic(26))
@@ -858,7 +887,10 @@ struct MeasureEntry: View {
                     .rotationEffect(.degrees(-8))
                     .offset(x: -8, y: -26)
             }
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
+                if let id {
+                    comicButton("DELETE", fill: Color(red: 1, green: 0.4, blue: 0.4)) { measurer.deleteMark(id) }
+                }
                 comicButton("CANCEL", fill: .white) { measurer.dismissEntry() }
                 comicButton(id == nil ? "PLACE IT!" : "SAVE IT!", fill: .yellow) { measurer.saveNote(text, editing: id) }
             }
@@ -866,14 +898,14 @@ struct MeasureEntry: View {
         .padding(.horizontal, 22)
     }
 
-    private func comicButton(_ title: String, fill: Color, text color: Color = .black, action: @escaping () -> Void) -> some View {
+    private func comicButton(_ title: String, fill: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).font(comic(26))
+            Text(title).font(comic(22))
                 .frame(maxWidth: .infinity, minHeight: 56)
                 .background(fill, in: RoundedRectangle(cornerRadius: 16))
-                .foregroundStyle(color)
+                .foregroundStyle(Color.black)
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black, lineWidth: 4))
-                .shadow(color: .black, radius: 0, x: 4, y: 4)
+                .background(RoundedRectangle(cornerRadius: 16).fill(Color.black).offset(x: 4, y: 4))
         }
     }
 }

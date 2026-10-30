@@ -116,14 +116,35 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
 
     /// Saves as soon as there is at least one view and the map is ready.
     func saveWhenReady() {
+        // A second tap while it is still waiting for the map saves now, map or not.
+        if pendingSave { saveAnyway = true }
+        if !pendingSave { pendingSince = Date() }
         pendingSave = true
         autoCapture = false
         saveIfReady()
     }
 
+    private var pendingSince = Date()
+    private var saveAnyway = false
+    /// How long it waits for ARKit's map before saving without it, so the shutter never hangs on
+    /// plain surfaces or too close up, where the map never gets good enough.
+    static let mapWait: TimeInterval = 12
+
+    /// Waiting too long for the map: save the views as a photo-only reference.
+    private func saveIfStuck() {
+        guard pendingSave, !saving, keyframeCount > 0, saveAnyway || Date().timeIntervalSince(pendingSince) > Self.mapWait else { return }
+        pendingSave = false
+        saveAnyway = false
+        Diagnostics.log("Record: no good room map after \(Int(Date().timeIntervalSince(pendingSince))) s (mapping \(mappingStatus.rawValue)), saving without it")
+        Task {
+            if let saved = await finish(withoutMap: true) { onSaved?(saved) }
+        }
+    }
+
     private func saveIfReady() {
         guard pendingSave, !saving, canSaveMap, keyframeCount > 0 else { return }
         pendingSave = false
+        saveAnyway = false
         Task {
             if let saved = await finish() { onSaved?(saved) }
         }
@@ -135,23 +156,29 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     /// Saves the room map and the keyframe list. Returns the finished reference.
-    func finish() async -> Reference? {
+    func finish(withoutMap: Bool = false) async -> Reference? {
         guard var reference else { return nil }
         saving = true
         defer { saving = false }
         // Let queued photo writes finish first.
         await withCheckedContinuation { continuation in writeQueue.async { continuation.resume() } }
         do {
-            let map: ARWorldMap = try await withCheckedThrowingContinuation { continuation in
-                session.getCurrentWorldMap { map, error in
-                    if let map {
-                        continuation.resume(returning: map)
-                    } else {
-                        continuation.resume(throwing: error ?? CocoaError(.fileWriteUnknown))
+            do {
+                let map: ARWorldMap = try await withCheckedThrowingContinuation { continuation in
+                    session.getCurrentWorldMap { map, error in
+                        if let map {
+                            continuation.resume(returning: map)
+                        } else {
+                            continuation.resume(throwing: error ?? CocoaError(.fileWriteUnknown))
+                        }
                     }
                 }
+                try ReferenceStore.saveWorldMap(map, for: reference.id)
+            } catch where withoutMap {
+                // Saved as a photo reference: the ghost works, finding the room by map does not.
+                reference.photoOnly = true
+                Diagnostics.log("Record: room map unavailable (\(error.localizedDescription)), saved as a photo reference")
             }
-            try ReferenceStore.saveWorldMap(map, for: reference.id)
             reference.keyframes = self.reference?.keyframes ?? []
             if !placer.models.isEmpty {
                 try placer.copyFiles(to: ReferenceStore.folder(for: reference.id))
@@ -240,6 +267,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         if mappingStatus != frame.worldMappingStatus { mappingStatus = frame.worldMappingStatus }
         updateScanProgress(frame)
         saveIfReady()
+        saveIfStuck()
         updateDots(frame)
         guard isNormal, var reference, reference.keyframes.count < maxKeyframes, pendingWrites < 3 else { return }
 
