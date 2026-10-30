@@ -50,27 +50,10 @@ do {
     }
     diagnose("noise slid right", live: Registration.prepared(view(scene, frame: frame, dx: 0.08)), reference: reference)
     diagnose("noise slid right, rendered", live: flat(Registration.prepared(view(scene, frame: frame, dx: 0.08))), reference: flat(reference))
-    if let same = read() {
-        expect(same.lined, "room: same view reads as lined up (move \(same.move), scale \(same.scale), tilt \(same.tilt))")
-    } else {
-        expect(false, "room: same view gives a reading")
-    }
-    // The picture slid right: the reference's middle now shows right of centre, so move right.
-    if let r = read(dx: 0.08) {
-        print("      slid right: move \(r.move)")
-        expect(r.biggest == .move(.right), "room: picture slid right says move right")
-    } else { expect(false, "room: slid right gives a reading") }
-    if let r = read(dx: -0.08) { expect(r.biggest == .move(.left), "room: picture slid left says move left") } else { expect(false, "room: slid left gives a reading") }
-    if let r = read(dy: 0.08) { expect(r.biggest == .move(.down), "room: picture slid down says move down") } else { expect(false, "room: slid down gives a reading") }
-    if let r = read(zoom: 1.2) {
-        print("      zoomed in: scale \(r.scale)")
-        expect(r.cues.contains { $0.cue == .step(closer: false) }, "room: looks bigger says step back")
-    } else { expect(false, "room: zoomed gives a reading") }
-    if let r = read(zoom: 0.85) { expect(r.cues.contains { $0.cue == .step(closer: true) }, "room: looks smaller says step in") } else { expect(false, "room: zoomed out gives a reading") }
-    if let r = read(turn: 6) {
-        print("      turned: tilt \(r.tilt)")
-        expect(r.cues.contains { $0.cue == .rotate(clockwise: true) }, "room: picture turned clockwise says rotate clockwise")
-    } else { expect(false, "room: turned gives a reading") }
+    // Random speckle is a picture Vision can't match. It must never read as lined up when the
+    // view has moved (it used to, because Vision hands back "no change").
+    let moved = read(dx: 0.08)
+    expect(moved == nil || !moved!.lined, "room: a picture Vision can't match never reads as lined up")
 }
 
 // MARK: Raw Vision registration, printed to see what it gives
@@ -102,19 +85,38 @@ if let photo = CIImage(contentsOf: URL(fileURLWithPath: facePath)) {
         if let mouth = face.lower { expect(mouth.y > face.middle.y, "mouth below the nose") }
         expect(face.box.contains(face.centre) && face.box.contains(face.middle), "face box holds the eyes and nose")
         let aspect = width / height
-        // The room guide on a real photo: slide it and see what Vision says.
+        // The room guide on a real photo, as if the camera had moved.
         let frame = upright.extent.insetBy(dx: width * 0.15, dy: height * 0.15)
         let ref = Registration.prepared(view(upright, frame: frame))
-        let slidLive = Registration.prepared(view(upright, frame: frame, dx: 0.06))
-        diagnose("photo slid right", live: slidLive, reference: ref)
-        if let r = Registration.read(live: slidLive, reference: ref) {
-            print("      photo slid right: move \(r.move)")
-            expect(r.biggest == .move(.right), "room on a real photo: slid right says move right")
-        } else { expect(false, "room on a real photo: slid right gives a reading") }
-        if let r = Registration.read(live: Registration.prepared(view(upright, frame: frame, zoom: 1.15)), reference: ref) {
-            print("      photo zoomed: scale \(r.scale)")
-            expect(r.cues.contains { $0.cue == .step(closer: false) }, "room on a real photo: zoomed in says step back")
-        } else { expect(false, "room on a real photo: zoomed gives a reading") }
+        func room(dx: CGFloat = 0, dy: CGFloat = 0, zoom: CGFloat = 1, turn: CGFloat = 0) -> GuideReading? {
+            Registration.read(live: Registration.prepared(view(upright, frame: frame, dx: dx, dy: dy, zoom: zoom, turn: turn)), reference: ref)
+        }
+        diagnose("photo slid right", live: Registration.prepared(view(upright, frame: frame, dx: 0.06)), reference: ref)
+        if let r = room() { expect(r.lined, "room on a photo: same view lined up") } else { expect(false, "room on a photo: same view gives a reading") }
+        for (name, dx, dy, want) in [("right", 0.06, 0.0, GuideCue.move(.right)), ("left", -0.06, 0.0, .move(.left)),
+                                     ("down", 0.0, 0.06, .move(.down)), ("up", 0.0, -0.06, .move(.up))] as [(String, CGFloat, CGFloat, GuideCue)] {
+            if let r = room(dx: dx, dy: dy) {
+                print("      photo slid \(name): move \(r.move)")
+                expect(r.biggest == want, "room on a photo: slid \(name) says \(want)")
+                expect(abs(r.move.dx - dx) < 0.015 && abs(r.move.dy - dy) < 0.015, "room on a photo: slid \(name) measured within 1.5%")
+            } else { expect(false, "room on a photo: slid \(name) gives a reading") }
+        }
+        if let r = room(zoom: 1.15) {
+            print("      photo zoomed in: scale \(r.scale)")
+            expect(r.cues.contains { $0.cue == .step(closer: false) }, "room on a photo: zoomed in says step back")
+        } else { expect(false, "room on a photo: zoomed in gives a reading") }
+        if let r = room(zoom: 0.87) {
+            print("      photo zoomed out: scale \(r.scale)")
+            expect(r.cues.contains { $0.cue == .step(closer: true) }, "room on a photo: zoomed out says step in")
+        } else { expect(false, "room on a photo: zoomed out gives a reading") }
+        if let r = room(turn: 6) {
+            print("      photo turned: tilt \(r.tilt)")
+            expect(r.cues.contains { $0.cue == .rotate(clockwise: true) }, "room on a photo: turned clockwise says rotate clockwise")
+        } else { expect(false, "room on a photo: turned gives a reading") }
+        // Pointed somewhere else entirely: never lined up.
+        let elsewhere = Registration.prepared(flat(CIImage(color: CIColor(red: 0.2, green: 0.2, blue: 0.2)).cropped(to: CGRect(x: 0, y: 0, width: frame.width, height: frame.height))))
+        let wrong = Registration.read(live: elsewhere, reference: ref)
+        expect(wrong == nil || !wrong!.lined, "room on a photo: a blank view never reads as lined up")
 
         // Same photo: lined up.
         if let r = ActorMatch.reading(reference: face, live: face, aspect: aspect) { expect(r.lined, "same face: lined up") }
