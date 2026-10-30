@@ -113,7 +113,7 @@ enum ModelDimensions {
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.black, .paragraphStyle: paragraph]
         let words = text.uppercased() as NSString
         let bounds = words.boundingRect(
-            with: CGSize(width: 520, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin],
+            with: CGSize(width: 520, height: CGFloat.greatestFiniteMagnitude), options: [.usesLineFragmentOrigin],
             attributes: attributes, context: nil)
         let textSize = CGSize(width: ceil(bounds.width), height: ceil(bounds.height))
         let tail: CGFloat = 36
