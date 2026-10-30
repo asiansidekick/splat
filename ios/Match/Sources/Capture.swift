@@ -116,12 +116,6 @@ struct CaptureView: View {
             if open { camera.stop() } else { camera.start() }
             updateLight()
         }
-        .onChange(of: lightOn) { _, _ in updateLight() }
-        .onChange(of: lightLevel) { _, _ in updateLight() }
-        .onChange(of: camera.isFront) { _, _ in updateLight() }
-        .onChange(of: camera.hasTorch) { _, _ in updateLight() }
-        .onChange(of: scenePhase) { _, _ in updateLight() }
-        .onDisappear { restoreBrightness() }
         .onChange(of: board?.id) { _, _ in
             lastShot = nil
             pickReference(for: angle)
@@ -206,6 +200,13 @@ struct CaptureView: View {
         }
         .padding(.horizontal, 12)
         .foregroundStyle(.white)
+        // Here rather than on body, which is already as much as the compiler will check in one go.
+        .onChange(of: lightOn) { _, _ in updateLight() }
+        .onChange(of: lightLevel) { _, _ in updateLight() }
+        .onChange(of: camera.isFront) { _, _ in updateLight() }
+        .onChange(of: camera.hasTorch) { _, _ in updateLight() }
+        .onChange(of: scenePhase) { _, _ in updateLight() }
+        .onDisappear { restoreBrightness() }
     }
 
     // MARK: Light
