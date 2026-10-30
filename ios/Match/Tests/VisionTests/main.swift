@@ -48,6 +48,8 @@ do {
     func read(dx: CGFloat = 0, dy: CGFloat = 0, zoom: CGFloat = 1, turn: CGFloat = 0) -> GuideReading? {
         Registration.read(live: Registration.prepared(view(scene, frame: frame, dx: dx, dy: dy, zoom: zoom, turn: turn)), reference: reference)
     }
+    diagnose("noise slid right", live: Registration.prepared(view(scene, frame: frame, dx: 0.08)), reference: reference)
+    diagnose("noise slid right, rendered", live: flat(Registration.prepared(view(scene, frame: frame, dx: 0.08))), reference: flat(reference))
     if let same = read() {
         expect(same.lined, "room: same view reads as lined up (move \(same.move), scale \(same.scale), tilt \(same.tilt))")
     } else {
@@ -71,6 +73,20 @@ do {
     } else { expect(false, "room: turned gives a reading") }
 }
 
+// MARK: Raw Vision registration, printed to see what it gives
+
+func diagnose(_ name: String, live: CIImage, reference: CIImage) {
+    let handler = VNImageRequestHandler(ciImage: reference, options: [:])
+    let homography = VNHomographicImageRegistrationRequest(targetedCIImage: live)
+    let translation = VNTranslationalImageRegistrationRequest(targetedCIImage: live)
+    do { try handler.perform([homography, translation]) } catch { print("      \(name): error \(error)") }
+    let h = homography.results?.first
+    let t = translation.results?.first
+    print("      \(name): live \(live.extent) ref \(reference.extent)")
+    print("        homography conf \(h?.confidence ?? -1) warp \(String(describing: h?.warpTransform))")
+    print("        translation conf \(t?.confidence ?? -1) \(String(describing: t?.alignmentTransform))")
+}
+
 // MARK: Actor lock on a real face
 
 let facePath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "face.jpg"
@@ -86,6 +102,20 @@ if let photo = CIImage(contentsOf: URL(fileURLWithPath: facePath)) {
         if let mouth = face.lower { expect(mouth.y > face.middle.y, "mouth below the nose") }
         expect(face.box.contains(face.centre) && face.box.contains(face.middle), "face box holds the eyes and nose")
         let aspect = width / height
+        // The room guide on a real photo: slide it and see what Vision says.
+        let frame = upright.extent.insetBy(dx: width * 0.15, dy: height * 0.15)
+        let ref = Registration.prepared(view(upright, frame: frame))
+        let slidLive = Registration.prepared(view(upright, frame: frame, dx: 0.06))
+        diagnose("photo slid right", live: slidLive, reference: ref)
+        if let r = Registration.read(live: slidLive, reference: ref) {
+            print("      photo slid right: move \(r.move)")
+            expect(r.biggest == .move(.right), "room on a real photo: slid right says move right")
+        } else { expect(false, "room on a real photo: slid right gives a reading") }
+        if let r = Registration.read(live: Registration.prepared(view(upright, frame: frame, zoom: 1.15)), reference: ref) {
+            print("      photo zoomed: scale \(r.scale)")
+            expect(r.cues.contains { $0.cue == .step(closer: false) }, "room on a real photo: zoomed in says step back")
+        } else { expect(false, "room on a real photo: zoomed gives a reading") }
+
         // Same photo: lined up.
         if let r = ActorMatch.reading(reference: face, live: face, aspect: aspect) { expect(r.lined, "same face: lined up") }
 
