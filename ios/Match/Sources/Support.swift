@@ -59,11 +59,12 @@ struct HelpView: View {
                 }
                 Section("The camera screen") {
                     Text("Match opens straight into the camera, laid out like the Camera app (and like Reset). Nothing is saved until you press the shutter.")
-                    Text("• Top: the grid opens all boards. The middle pill shows the scene, character and take; tap it to switch character or start a new one. Guide turns the edge guide on or off. Then switch camera, and ••• for Import from Photos, Compare, outlines and Help.")
+                    Text("• Top: the grid opens all boards. The middle pill shows the scene, character and take; tap it to switch character or start a new one. Guide turns the edge guide on or off. Then the light, switch camera, and ••• for Import from Photos, Compare, outlines and Help.")
                     Text("• Above the shutter: angles (Any, Front, ¾ L, Left, Back, Right, ¾ R, Close, Full). Tap or swipe. Picking an angle shows its reference see-through over the camera. The first photo of each angle becomes its reference.")
                     Text("• Bottom left: the reference thumbnail, with the time it was taken. Tap it for the gallery: swipe like Photos, Use as overlay, Compare, Import from Photos, Save to Photos.")
                     Text("• Bottom right: Next take. Touch and hold to go back or to Prep. Every board in the scene follows it.")
                     Text("• Pinch or drag the overlay to line up a QTake screenshot; double tap resets it.")
+                    Text("• Light: tap the torch to turn the light on or off. A dial shows under the top bar: scroll it sideways to set the brightness (left brighter, right dimmer), or drag sideways on the torch itself. Touch and hold the torch to show the dial again. On the front camera the screen glows round the edges like a ring light and goes to full brightness, then back when the light is off.")
                 }
                 Section("The guide") {
                     Text("With a reference showing, the guide stays at the edges and corners of the screen, so the face and hair stay clear.")

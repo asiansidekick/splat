@@ -58,6 +58,13 @@ struct CaptureView: View {
     @State private var toast: String?
     @State private var picked: [PhotosPickerItem] = []
     @State private var previewSize: CGSize = .zero
+    @AppStorage("lightLevel") private var lightLevel = 0.6
+    @State private var lightOn = false
+    @State private var wheelShown = false
+    @State private var wheelHide: Task<Void, Never>?
+    @State private var lightDragStart: Double?
+    @State private var savedBrightness: CGFloat?
+    @Environment(\.scenePhase) private var scenePhase
 
     /// The board being shot: the one chosen last, else the newest.
     private var board: Board? {
@@ -107,7 +114,14 @@ struct CaptureView: View {
         .onChange(of: showingLibrary) { _, open in
             // The camera rests while the library is open, and picks up again after.
             if open { camera.stop() } else { camera.start() }
+            updateLight()
         }
+        .onChange(of: lightOn) { _, _ in updateLight() }
+        .onChange(of: lightLevel) { _, _ in updateLight() }
+        .onChange(of: camera.isFront) { _, _ in updateLight() }
+        .onChange(of: camera.hasTorch) { _, _ in updateLight() }
+        .onChange(of: scenePhase) { _, _ in updateLight() }
+        .onDisappear { restoreBrightness() }
         .onChange(of: board?.id) { _, _ in
             lastShot = nil
             pickReference(for: angle)
@@ -185,12 +199,85 @@ struct CaptureView: View {
                      highlighted: guideOn && ghost != nil)
             }
             .accessibilityLabel(guideOn ? "Turn the guide off" : "Turn the guide on")
+            if hasLight { lightButton }
             Button { camera.flip() } label: { Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3) }
                 .accessibilityLabel("Switch camera")
             moreMenu
         }
         .padding(.horizontal, 12)
         .foregroundStyle(.white)
+    }
+
+    // MARK: Light
+
+    /// The back camera's torch, or on the front the screen glowing round the edges.
+    private var hasLight: Bool { camera.hasTorch || camera.isFront }
+
+    /// Tap: light on or off. Drag sideways on it, or on the wheel that shows, to set the brightness.
+    /// Touch and hold: show the wheel again.
+    private var lightButton: some View {
+        Image(systemName: lightOn ? "flashlight.on.fill" : "flashlight.off.fill")
+            .font(.title3)
+            .foregroundStyle(lightOn ? Color.black : Color.white)
+            .frame(width: 34, height: 34)
+            .background(lightOn ? Color.yellow : Color.clear, in: Circle())
+            .contentShape(Rectangle())
+            .onTapGesture {
+                Haptics.tap()
+                lightOn.toggle()
+                if lightOn { showWheel() } else { hideWheel() }
+            }
+            .onLongPressGesture(minimumDuration: 0.4) {
+                Haptics.tap()
+                lightOn = true
+                showWheel()
+            }
+            .simultaneousGesture(DragGesture(minimumDistance: 12).onChanged { drag in
+                let start = lightDragStart ?? lightLevel
+                if lightDragStart == nil {
+                    lightDragStart = start
+                    lightOn = true
+                }
+                LightScrub.set(&lightLevel, from: start, by: drag.translation.width)
+                showWheel()
+            }.onEnded { _ in lightDragStart = nil })
+            .accessibilityElement()
+            .accessibilityLabel(lightOn ? "Turn the light off" : "Turn the light on")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { lightOn.toggle() }
+    }
+
+    private func showWheel() {
+        withAnimation(.easeOut(duration: 0.2)) { wheelShown = true }
+        wheelHide?.cancel()
+        wheelHide = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.3)) { wheelShown = false }
+        }
+    }
+
+    private func hideWheel() {
+        wheelHide?.cancel()
+        withAnimation(.easeIn(duration: 0.2)) { wheelShown = false }
+    }
+
+    /// Puts the torch and the screen to what the button and wheel say, and the camera is showing.
+    private func updateLight() {
+        let showing = lightOn && !showingLibrary && scenePhase == .active
+        camera.setTorch(showing && !camera.isFront ? Float(lightLevel) : 0)
+        if showing && camera.isFront {
+            if savedBrightness == nil { savedBrightness = UIScreen.main.brightness }
+            UIScreen.main.brightness = 1
+        } else {
+            restoreBrightness()
+        }
+    }
+
+    private func restoreBrightness() {
+        guard let saved = savedBrightness else { return }
+        UIScreen.main.brightness = saved
+        savedBrightness = nil
     }
 
     /// Looks like Reset's top pills; used as a menu label as well as a button.
@@ -296,8 +383,13 @@ struct CaptureView: View {
                     strengthControl(wide: geometry.size.width > geometry.size.height)
                         .clearOfControls()
                 }
+                if lightOn, camera.isFront, !showingLibrary { RingLight(level: lightLevel) }
                 if flash { Color.white.opacity(0.6).allowsHitTesting(false) }
                 VStack(spacing: 8) {
+                    if wheelShown, lightOn, hasLight {
+                        LightWheel(level: $lightLevel, title: camera.isFront ? "SCREEN LIGHT" : "LIGHT") { showWheel() }
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
                     if camera.paused { Banner(text: "Camera paused. On iPad it stops while another app uses it.", tint: .red) }
                     if let error = camera.error { Banner(text: error, tint: .red) }
                     if let notice = camera.notice { Banner(text: notice, tint: .orange) }

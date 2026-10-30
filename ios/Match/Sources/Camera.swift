@@ -49,6 +49,10 @@ final class Camera: NSObject, ObservableObject {
     /// This iPhone or iPad has a LiDAR camera, and whether it is being used now.
     @Published private(set) var hasLiDAR = false
     @Published private(set) var usingLiDAR = false
+    /// This side's camera has a light (the back camera's flash, used as a torch).
+    @Published private(set) var hasTorch = false
+    /// How bright the torch should be (0 = off, up to 1). Kept so it comes back after a camera switch.
+    private var torchLevel: Float = 0
     private let queue = DispatchQueue(label: "camera.session")
     private var input: AVCaptureDeviceInput?
     private var configured = false
@@ -69,6 +73,7 @@ final class Camera: NSObject, ObservableObject {
             },
             center.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: .main) { [weak self] _ in
                 self?.paused = false
+                self?.queue.async { self?.applyTorch() }
             },
         ]
     }
@@ -94,6 +99,8 @@ final class Camera: NSObject, ObservableObject {
             queue.async {
                 if !self.configured { self.configure(front: false) }
                 if !self.session.isRunning { self.session.startRunning() }
+                // Stopping the camera put the torch out.
+                self.applyTorch()
             }
             await MainActor.run { self.startWatchdog() }
         }
@@ -127,6 +134,32 @@ final class Camera: NSObject, ObservableObject {
         closeUp = on
         if hasLiDAR, Self.lidarWanted, !isFront { reconfigure() }
         // The front camera has no macro lens, so nothing changes there.
+    }
+
+    /// Turns the torch on at this brightness (0...1), or off at 0. Does nothing without a torch.
+    func setTorch(_ level: Float) {
+        let level = max(0, min(1, level))
+        queue.async {
+            self.torchLevel = level
+            self.applyTorch()
+        }
+    }
+
+    /// On the session queue. Switching cameras turns the torch off, so this runs after each switch too.
+    private func applyTorch() {
+        guard let device = input?.device, device.hasTorch else { return }
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            if torchLevel > 0.01, device.isTorchAvailable {
+                // Too low a level is refused; the hardware's own cap applies when the phone is hot.
+                try device.setTorchModeOn(level: min(max(torchLevel, 0.02), AVCaptureDevice.maxAvailableTorchLevel))
+            } else if device.torchMode != .off {
+                device.torchMode = .off
+            }
+        } catch {
+            // The torch is a nicety: if the phone refuses it (too hot, in use), carry on without it.
+        }
     }
 
     func flip() {
@@ -244,8 +277,12 @@ final class Camera: NSObject, ObservableObject {
             connection.isVideoMirrored = false
         }
         guard let device else { return }
+        // After commitConfiguration (deferred above), on this queue: the new camera's torch.
+        let torch = device.hasTorch
+        queue.async { self.applyTorch() }
         // Runs after commitConfiguration (deferred above), once the preview connection exists.
         DispatchQueue.main.async {
+            self.hasTorch = torch
             self.isFront = front
             self.hasLiDAR = lidarExists
             self.usingLiDAR = depth
