@@ -35,11 +35,16 @@ enum Registration {
                                    corners: [CGPoint(x: dx, y: dy), CGPoint(x: 1 + dx, y: dy), CGPoint(x: 1 + dx, y: 1 + dy), CGPoint(x: dx, y: 1 + dy)])
         if let warp = homography.results?.first?.warpTransform, !isIdentity(warp),
             let full = GuideReading.from(warp: warp, reference: reference.extent.size, live: live.extent.size),
-            full.scale > 0.5, full.scale < 2, abs(full.turn.dx) < 0.6, abs(full.turn.dy) < 0.6,
-            abs(full.move.dx - move.dx) < 0.03, abs(full.move.dy - move.dy) < 0.03
+            full.scale > 0.5, full.scale < 2, abs(full.turn.dx) < 0.6, abs(full.turn.dy) < 0.6
         {
-            reading = full
-            reading.move = move
+            if abs(full.move.dx - move.dx) < 0.03, abs(full.move.dy - move.dy) < 0.03 {
+                reading = full
+                reading.move = move
+            } else {
+                // A twist moves the picture's middle little, so the shift can disagree; the twist
+                // itself is still worth having.
+                reading.tilt = full.tilt
+            }
         }
         if reading.lined, difference(live, reference) > 0.14 { return nil }
         return reading

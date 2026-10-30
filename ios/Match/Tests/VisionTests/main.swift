@@ -109,6 +109,7 @@ if let photo = CIImage(contentsOf: URL(fileURLWithPath: facePath)) {
             print("      photo zoomed out: scale \(r.scale)")
             expect(r.cues.contains { $0.cue == .step(closer: true) }, "room on a photo: zoomed out says step in")
         } else { expect(false, "room on a photo: zoomed out gives a reading") }
+        diagnose("photo turned", live: Registration.prepared(view(upright, frame: frame, turn: 6)), reference: ref)
         if let r = room(turn: 6) {
             print("      photo turned: tilt \(r.tilt)")
             expect(r.cues.contains { $0.cue == .rotate(clockwise: true) }, "room on a photo: turned clockwise says rotate clockwise")
