@@ -26,7 +26,17 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     @Published private(set) var sizeText = ""
     /// True while a pinch is changing the size, to show it large.
     @Published private(set) var pinching = false
+    /// Height, width and depth arrows with lengths drawn on every model (Phil, 2026-10-30).
+    @Published var showDimensions = UserDefaults.standard.object(forKey: "showModelDimensions") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(showDimensions, forKey: "showModelDimensions")
+            modelNodes.keys.forEach(refreshDimensions)
+        }
+    }
     private var modelNodes: [UUID: SCNNode] = [:]
+    /// Each model's box in its own coordinates, measured on loading, before any arrows are hung
+    /// on it (they would make it look bigger).
+    private var boxes: [UUID: (low: SIMD3<Float>, high: SIMD3<Float>)] = [:]
     /// While dragging: from where the finger's ray meets the model's floor height to the model,
     /// so the model keeps its place under the finger instead of jumping to it.
     private var dragOffset: SIMD3<Float>?
@@ -99,6 +109,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     func removeAll() {
         modelNodes.values.forEach { $0.removeFromParentNode() }
         modelNodes = [:]
+        boxes = [:]
         models = []
         selectedModel = nil
     }
@@ -124,12 +135,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         node.simdScale = SIMD3(repeating: 1)
         commit(id)
         updateSize()
+        refreshDimensions(id)
     }
 
     func deleteSelectedModel() {
         guard let id = selectedModel, let index = models.firstIndex(where: { $0.id == id }) else { return }
         modelNodes[id]?.removeFromParentNode()
         modelNodes[id] = nil
+        boxes[id] = nil
         try? FileManager.default.removeItem(at: folder.appendingPathComponent(models[index].file))
         models.remove(at: index)
         selectedModel = nil
@@ -209,6 +222,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         node.simdScale *= Float(gesture.scale)
         gesture.scale = 1
         updateSize()
+        refreshDimensions(id)
         let active = gesture.state == .began || gesture.state == .changed
         if pinching != active { pinching = active }
         if gesture.state == .ended { commit(id) }
@@ -232,15 +246,18 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             sizeText = ""
             return
         }
-        let (low, high) = node.boundingBox
+        guard let box = boxes[id] else {
+            sizeText = ""
+            return
+        }
         let scale = node.simdScale
-        let size = (SIMD3<Float>(high) - SIMD3<Float>(low)) * scale
+        let size = (box.high - box.low) * scale
         let percent = Int((scale.x * 100).rounded())
         sizeText = "\(ModelPlacer.length(size.x)) × \(ModelPlacer.length(size.z)) × \(ModelPlacer.length(size.y)) · \(percent)%"
     }
 
     /// Centimetres up to 2 m, metres above.
-    private static func length(_ metres: Float) -> String {
+    static func length(_ metres: Float) -> String {
         metres < 2 ? "\(Int((metres * 100).rounded())) cm" : String(format: "%.2f m", metres)
     }
 
@@ -262,10 +279,21 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         for child in scene.rootNode.childNodes {
             node.addChildNode(child)
         }
+        let (low, high) = node.boundingBox
+        boxes[model.id] = (SIMD3<Float>(low), SIMD3<Float>(high))
         node.simdTransform = matrix4(model.transform)
         root.addChildNode(node)
         modelNodes[model.id] = node
+        refreshDimensions(model.id)
         return node
+    }
+
+    /// Hangs fresh arrows on the model for its size now, or takes them off when turned off.
+    private func refreshDimensions(_ id: UUID) {
+        guard let node = modelNodes[id] else { return }
+        node.childNode(withName: ModelDimensions.nodeName, recursively: false)?.removeFromParentNode()
+        guard showDimensions, let box = boxes[id] else { return }
+        node.addChildNode(ModelDimensions.make(low: box.low, high: box.high, scale: node.simdScale.x))
     }
 
     /// On the surface in the middle of the screen, or a metre ahead if there is none.
@@ -293,6 +321,12 @@ struct ModelOverlay: View {
                     Text("\(name): drag to move, pinch to scale, twist to turn").font(.caption2)
                     Text("W × D × H  \(placer.sizeText)").font(.caption.bold().monospacedDigit())
                     HStack {
+                        Button {
+                            placer.showDimensions.toggle()
+                        } label: {
+                            Image(systemName: placer.showDimensions ? "ruler.fill" : "ruler")
+                        }
+                        .accessibilityLabel(placer.showDimensions ? "Hide size arrows" : "Show size arrows")
                         Button("True size") { placer.resetSelectedModelSize() }
                         Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
                         Spacer()
