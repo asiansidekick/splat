@@ -54,7 +54,7 @@ struct DepthGrid: Equatable {
     /// to `aspect`), from the readings within `radius` of the picture's width. Nil with too few.
     func distance(at point: CGPoint, aspect: CGFloat? = nil, radius: CGFloat = 0.03) -> Float? {
         guard width > 0, height > 0 else { return nil }
-        let rect = aspect.map { Self.centredRect(width: width, height: height, aspect: $0) } ?? (0, 0, width, height)
+        let rect = aspect.map { Self.centredRect(width: width, height: height, aspect: $0) } ?? (x: 0, y: 0, width: width, height: height)
         let cx = CGFloat(rect.x) + point.x * CGFloat(rect.width)
         let cy = CGFloat(rect.y) + point.y * CGFloat(rect.height)
         let r = max(1, Int((radius * CGFloat(rect.width)).rounded()))
