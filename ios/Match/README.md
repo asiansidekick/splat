@@ -18,7 +18,8 @@ In short: take or import a few photos, then check against them before each take.
 6. **Compare** any two photos on a board: **Side** (side by side, both zoom together), **Wipe**, **Blend**, **Flicker**, and **Changes**, which lines the photos up automatically and marks in red what looks different (the slider sets sensitivity). Changes works best when both photos were taken from about the same spot. Share sends the pair as one picture.
 7. **Share PDF sheet** (board menu) makes an A4 continuity sheet with notes and every photo grouped by take. AirDrop works without signal.
 
-8. **Home menu (•••)**: **How to use Match** (also shown on first launch), **Tester notes** (jot bugs as they happen, then share them with the build number and device model), and **Back up all boards** (one zip of every photo and note, to AirDrop or save to Files).
+8. **Send to team (AirDrop)** (Home or board menu) packs boards into one `.matchpack` file for AirDrop, phone to phone with no internet. References only or all photos; locked with a team passcode (AES-GCM, PBKDF2 key, kept in the keychain on this device only); photos lose location, phone model and time-taken details; Messages, Mail and copy are removed from the sheet; the pack is deleted after sending. Opening a pack in Match adds new boards and photos and never overwrites what the receiver already has. Tested in CI by `Tests/PackTests`.
+9. **Home menu (•••)**: **How to use Match** (also shown on first launch), **Tester notes** (jot bugs as they happen, then share them with the build number and device model), and **Back up all boards** (one zip of every photo and note, to AirDrop or save to Files).
 
 Photos are stored in the app's Documents folder (visible in the Files app). Re-sideloading over the top keeps them; deleting the app deletes them, so back up first.
 

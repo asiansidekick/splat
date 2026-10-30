@@ -9,6 +9,8 @@ struct MatchApp: App {
     var body: some Scene {
         WindowGroup {
             CaptureView().environmentObject(store)
+                // A team pack AirDropped to this phone, or opened from Files.
+                .onOpenURL { TeamReceiver.receive($0, store: store) }
         }
     }
 }
@@ -27,6 +29,7 @@ struct HomeView: View {
     @State private var showingNotes = false
     @State private var sharing: SharedFile?
     @State private var backupError: String?
+    @State private var teamPick: TeamPick?
 
     init(openBoard: UUID? = nil) {
         _path = State(initialValue: openBoard.map { [$0] } ?? [])
@@ -81,6 +84,12 @@ struct HomeView: View {
                     Menu {
                         Button { showingHelp = true } label: { Label("How to use Match", systemImage: "questionmark.circle") }
                         Button { showingNotes = true } label: { Label("Tester notes", systemImage: "note.text") }
+                        Button {
+                            // Starts with the latest scene picked, the one usually being shared.
+                            let scene = store.boards.max { $0.created < $1.created }?.scene
+                            teamPick = TeamPick(boards: Set(store.boards.filter { $0.scene == scene }.map(\.id)))
+                        } label: { Label("Send to team (AirDrop)", systemImage: "person.2.wave.2") }
+                            .disabled(store.boards.isEmpty)
                         Button(action: backUp) { Label("Back up all boards", systemImage: "externaldrive") }
                     } label: {
                         Label("More", systemImage: "ellipsis.circle")
@@ -106,6 +115,7 @@ struct HomeView: View {
             }
             .sheet(isPresented: $showingHelp) { HelpView() }
             .sheet(isPresented: $showingNotes) { TesterNotesView() }
+            .sheet(item: $teamPick) { pick in SendToTeamView(chosen: pick.boards).environmentObject(store) }
             .sheet(item: $sharing) { file in ShareSheet(items: [file.url]) }
             .alert("Backup", isPresented: Binding(get: { backupError != nil }, set: { if !$0 { backupError = nil } })) {
                 Button("OK", role: .cancel) {}
@@ -235,6 +245,7 @@ struct BoardView: View {
     @State private var importingFiles = false
     @State private var importing = 0
     @State private var sharing: SharedFile?
+    @State private var teamPick: TeamPick?
     @State private var message: String?
     @State private var deleting: Shot?
 
@@ -283,6 +294,9 @@ struct BoardView: View {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     Button { editing = true } label: { Label("Edit board", systemImage: "pencil") }
+                    Button { teamPick = TeamPick(boards: [board.id]) } label: {
+                        Label("Send to team (AirDrop)", systemImage: "person.2.wave.2")
+                    }
                     Button { sharePDF(board) } label: { Label("Share PDF sheet", systemImage: "doc.richtext") }
                     Button {
                         Task {
@@ -314,6 +328,7 @@ struct BoardView: View {
             BoardEditor(board: board, isNew: false) { store.save($0) }
         }
         .sheet(item: $sharing) { file in ShareSheet(items: [file.url]) }
+        .sheet(item: $teamPick) { pick in SendToTeamView(chosen: pick.boards).environmentObject(store) }
         .confirmationDialog("Delete this photo?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                             titleVisibility: .visible) {
             Button("Delete photo", role: .destructive) {

@@ -55,6 +55,23 @@ jobs:
           grep "^FAIL" vision-tests.log | sed -E 's#^FAIL  (.*)$#::error title=Vision test failed::\1#'
           exit $status
 
+      # Team packs for AirDrop: passcode lock, photos without location, merging, bad packs refused.
+      - name: Team pack tests
+        working-directory: ios/Match
+        run: |
+          if ! swiftc -O Sources/Board.swift Sources/TeamPack.swift Tests/PackTests/main.swift -o pack-tests > compile.log 2>&1; then
+            grep -E ": error: " compile.log | sort -u | head -10 \
+              | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
+            cat compile.log | tail -40
+            exit 1
+          fi
+          set +e
+          ./pack-tests > pack-tests.log 2>&1
+          status=$?
+          cat pack-tests.log
+          grep "^FAIL" pack-tests.log | sed -E 's#^FAIL  (.*)$#::error title=Pack test failed::\1#'
+          exit $status
+
       - name: Generate Xcode project
         working-directory: ios/Match
         run: |

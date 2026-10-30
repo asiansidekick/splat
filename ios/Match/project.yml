@@ -10,6 +10,22 @@ targets:
     platform: iOS
     sources: [Sources]
     scheme: {}
+    # Team packs (.matchpack) open in Match when AirDropped or tapped in Files.
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Match team pack
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes: [com.asiansidekick.match.pack]
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.asiansidekick.match.pack
+            UTTypeDescription: Match team pack
+            UTTypeConformsTo: [public.data, public.content]
+            UTTypeTagSpecification:
+              public.filename-extension: [matchpack]
+              public.mime-type: [application/x-matchpack]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.asiansidekick.match

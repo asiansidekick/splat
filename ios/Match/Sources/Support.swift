@@ -79,6 +79,13 @@ struct HelpView: View {
                 Section("Compare") {
                     Text("Side by side, Wipe, Blend, Flicker, or Changes, which lines the photos up and marks differences in red. Pinch to zoom; the expand button hides the controls.")
                 }
+                Section("Sending to the team") {
+                    Text("AirDrop works with no signal: the photos go straight from one phone to another, with nothing uploaded.")
+                    Text("• Boards screen, ••• menu, Send to team (AirDrop): pick the boards (the latest scene is ticked), References only or All photos, then AirDrop. In a board, ••• has the same for just that board.")
+                    Text("• Your teammate taps Open in Match. New boards and photos are added; anything they already have, and their own notes, stay as they are. Send again later to pass on new photos.")
+                    Text("• Team passcode: agree one passcode and enter it once on each phone. Packs are then locked with it, so a pack that lands on the wrong phone can't be opened. It stays on this phone only.")
+                    Text("• Photos go without location, phone model or time-taken details. Messages, Mail and copying are taken out of the send sheet. Set AirDrop to Contacts Only (Settings, General, AirDrop) so strangers can't see your phone.")
+                }
                 Section("Sharing and safety") {
                     Text("In a board, the ••• menu has Share PDF sheet. On the Boards screen, the ••• menu has Back up all boards, which makes one zip of everything; AirDrop it to your computer now and then. Photos are also visible in the Files app under On My iPhone, Match.")
                     Text("When re-installing the app, install over the top. Deleting the app deletes its photos.")
