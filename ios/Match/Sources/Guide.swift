@@ -49,6 +49,10 @@ final class Guide: ObservableObject {
     /// The part of the picture the screen shows (width over height, upright), so the guide lines up
     /// what you see rather than the whole camera frame.
     private var aspect: CGFloat?
+    /// A portrait reference checked in landscape (or the other way round) is shown whole in a
+    /// centred box: the reference is read whole, and only that box of the live picture.
+    private var referenceCrop: CGFloat?
+    private var liveBox: CGFloat?
     private var busy = false
     private var generation = 0
     private var lastReading = Date.distantPast
@@ -59,12 +63,17 @@ final class Guide: ObservableObject {
     var lockedToActor: Bool { reading?.actor == true }
 
     /// `prefersBody`: costume, where the whole body matters more than the face.
-    func setReference(_ image: UIImage?, depth: DepthGrid? = nil, aspect: CGFloat?, prefersBody: Bool = false) {
+    /// `aspect`: the screen's picture, width over height in the photo's directions. `whole`: the
+    /// reference is shown whole in a box rather than filling the screen.
+    func setReference(_ image: UIImage?, depth: DepthGrid? = nil, aspect: CGFloat?, whole: Bool = false, prefersBody: Bool = false) {
         generation += 1
         referenceDepth = image == nil ? nil : depth
+        let referenceAspect = image.map { $0.size.width / max($0.size.height, 1) }
         self.aspect = aspect
+        referenceCrop = whole ? nil : aspect
+        liveBox = whole ? referenceAspect : nil
         self.prefersBody = prefersBody
-        let cropped = image.flatMap { CIImage(image: $0) }.map { Self.centred($0, aspect: aspect) }
+        let cropped = image.flatMap { CIImage(image: $0) }.map { Self.centred($0, aspect: whole ? nil : aspect) }
         reference = cropped.map(Self.prepared)
         referenceFace = nil
         referenceBody = nil
@@ -103,25 +112,30 @@ final class Guide: ObservableObject {
             guard !self.busy, let reference = self.reference else { return }
             self.busy = true
             let generation = self.generation
-            let cropped = Self.centred(frame, aspect: self.aspect)
+            let visible = Self.centred(frame, aspect: self.aspect)
+            let cropped = Self.centred(visible, aspect: self.liveBox)
             let live = Self.prepared(cropped)
             let colour = Self.scaled(cropped, to: Self.actorWidth)
-            let aspect = self.aspect ?? (cropped.extent.width / max(cropped.extent.height, 1))
+            let aspect = cropped.extent.width / max(cropped.extent.height, 1)
+            // Depth is read in the screen's picture; the live box sits in its middle.
+            let depthSpace = LiveDepth(depth: depth, visible: self.aspect,
+                                       box: Fit.centredBox(outer: visible.extent.width / max(visible.extent.height, 1), inner: aspect))
+            let referenceCrop = self.referenceCrop
             let kinds = self.kindsToTry()
             let follow = self.followPoint
             let referenceDepth = self.referenceDepth
             let result = await Task.detached(priority: .utility) { () -> ActorResult? in
                 if !kinds.isEmpty, let found = Self.readActor(colour, kinds: kinds, follow: follow, aspect: aspect,
-                                                             depth: depth, referenceDepth: referenceDepth) {
+                                                             depth: depthSpace, referenceDepth: referenceDepth, referenceCrop: referenceCrop) {
                     return found
                 }
                 guard var reading = Self.read(live: live, reference: reference) else { return nil }
                 // LiDAR on both: compare the distance to the reference's middle with the distance to
                 // where that middle shows now.
-                if let depth, let referenceDepth, abs(reading.move.dx) < 0.15, abs(reading.move.dy) < 0.15 {
+                if let referenceDepth, abs(reading.move.dx) < 0.15, abs(reading.move.dy) < 0.15 {
                     let now = CGPoint(x: 0.5 + reading.move.dx, y: 0.5 + reading.move.dy * aspect)
-                    reading.useDistances(live: depth.distance(at: now, aspect: aspect).map(Double.init),
-                                         reference: referenceDepth.distance(at: CGPoint(x: 0.5, y: 0.5), aspect: aspect).map(Double.init))
+                    reading.useDistances(live: depthSpace.distance(at: now),
+                                         reference: referenceDepth.distance(at: CGPoint(x: 0.5, y: 0.5), aspect: referenceCrop).map(Double.init))
                 }
                 return ActorResult(reading: reading)
             }.value
@@ -137,6 +151,17 @@ final class Guide: ObservableObject {
         return order.compactMap { $0 }
     }
 
+    /// The live LiDAR depth, read at points given in the live box.
+    private struct LiveDepth {
+        var depth: DepthGrid?
+        var visible: CGFloat?
+        var box: CGRect
+
+        func distance(at point: CGPoint) -> Double? {
+            depth?.distance(at: box.point(point), aspect: visible).map(Double.init)
+        }
+    }
+
     private struct ActorResult {
         var reading: GuideReading
         var anchor: GhostAnchor?
@@ -145,14 +170,14 @@ final class Guide: ObservableObject {
     }
 
     private nonisolated static func readActor(_ picture: CIImage, kinds: [ActorPose], follow: CGPoint?, aspect: CGFloat,
-                                              depth: DepthGrid?, referenceDepth: DepthGrid?) -> ActorResult? {
+                                              depth: LiveDepth, referenceDepth: DepthGrid?, referenceCrop: CGFloat?) -> ActorResult? {
         let found = ActorVision.people(in: picture)
         for reference in kinds {
             let live = reference.kind == .face ? found.faces : found.bodies
             guard let index = ActorMatch.pick(live, near: follow, like: reference) else { continue }
             // LiDAR: distance to the eyes (or shoulders) now and in the reference.
-            let liveDistance = depth?.distance(at: live[index].centre, aspect: aspect).map(Double.init)
-            let referenceDistance = referenceDepth?.distance(at: reference.centre, aspect: aspect).map(Double.init)
+            let liveDistance = depth.distance(at: live[index].centre)
+            let referenceDistance = referenceDepth?.distance(at: reference.centre, aspect: referenceCrop).map(Double.init)
             guard let reading = ActorMatch.reading(reference: reference, live: live[index], aspect: aspect,
                                                    referenceDistance: referenceDistance, liveDistance: liveDistance)
             else { continue }
@@ -292,6 +317,8 @@ struct EdgeGuide: View {
     let quarterTurns: Int
     /// Front camera: the screen is a mirror.
     let mirrored: Bool
+    /// Where the reference sits within the screen's picture (see ScreenMap).
+    var inner = CGRect(x: 0, y: 0, width: 1, height: 1)
 
     var body: some View {
         GeometryReader { geometry in
@@ -334,7 +361,7 @@ struct EdgeGuide: View {
 
     /// A point in the photo (0...1 across and down) to the screen.
     private func place(_ p: CGPoint, in rect: CGRect) -> CGPoint {
-        let q = ScreenMap(size: rect.size, quarterTurns: quarterTurns, mirrored: mirrored).toScreen(p)
+        let q = ScreenMap(size: rect.size, quarterTurns: quarterTurns, mirrored: mirrored, inner: inner).toScreen(p)
         return CGPoint(x: rect.minX + q.x, y: rect.minY + q.y)
     }
 
@@ -469,10 +496,11 @@ struct PeopleRings: View {
     let followed: Int?
     let quarterTurns: Int
     let mirrored: Bool
+    var inner = CGRect(x: 0, y: 0, width: 1, height: 1)
 
     var body: some View {
         GeometryReader { geometry in
-            let map = ScreenMap(size: geometry.size, quarterTurns: quarterTurns, mirrored: mirrored)
+            let map = ScreenMap(size: geometry.size, quarterTurns: quarterTurns, mirrored: mirrored, inner: inner)
             ForEach(people.indices, id: \.self) { index in
                 let box = map.toScreen(people[index])
                 let side = max(box.width, box.height) * 1.2

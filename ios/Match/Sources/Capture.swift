@@ -263,16 +263,16 @@ struct CaptureView: View {
                     }
                     .onTapGesture { location in
                         // Several people in view: follow the one tapped.
-                        guide.follow(at: ScreenMap(size: geometry.size, quarterTurns: quarterTurns, mirrored: camera.isFront)
+                        guide.follow(at: ScreenMap(size: geometry.size, quarterTurns: quarterTurns, mirrored: camera.isFront, inner: ghostBox)
                             .toPhoto(location))
                     }
                 if guideOn, ghost != nil {
                     if guide.people.count > 1 {
                         PeopleRings(people: guide.people, followed: guide.followed,
-                                    quarterTurns: quarterTurns, mirrored: camera.isFront)
+                                    quarterTurns: quarterTurns, mirrored: camera.isFront, inner: ghostBox)
                     }
                     EdgeGuide(reading: guide.reading, cue: guide.cue, matched: guide.matched, searching: guide.searching,
-                              people: guide.people.count, quarterTurns: quarterTurns, mirrored: camera.isFront)
+                              people: guide.people.count, quarterTurns: quarterTurns, mirrored: camera.isFront, inner: ghostBox)
                         .clearOfControls()
                 }
                 if ghost != nil {
@@ -293,7 +293,6 @@ struct CaptureView: View {
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                     Spacer()
-                    if let ghost { turnHint(image: ghost.size, view: geometry.size) }
                 }
                 .padding(.horizontal, 64)  // keep clear of the edge arrows
                 .padding(.vertical, 8)
@@ -352,9 +351,10 @@ struct CaptureView: View {
                 let sideways = abs(abs(turn) - 90) < 1
                 // Filled like the camera (and Reset's ghost), and fitted as it will look once turned.
                 let box = sideways ? CGSize(width: size.height, height: size.width) : size
+                // A portrait reference on a landscape screen (or the other way round) is shown whole.
                 Image(uiImage: image)
                     .resizable()
-                    .scaledToFill()
+                    .aspectRatio(contentMode: ghostWhole ? .fit : .fill)
                     .frame(width: box.width, height: box.height)
                     .clipped()
                     .rotationEffect(.degrees(turn))
@@ -366,7 +366,8 @@ struct CaptureView: View {
                     .offset(ghostOffset)
                     // Actor lock: the reference's eyes (or shoulders) sit on the actor's, wherever they stand.
                     .modifier(ActorPin(transform: guideOn ? guide.anchor.map {
-                        ScreenMap(size: size, quarterTurns: quarterTurns, mirrored: camera.isFront).ghostTransform(from: $0.from, to: $0.to)
+                        ScreenMap(size: size, quarterTurns: quarterTurns, mirrored: camera.isFront, inner: ghostBox)
+                            .ghostTransform(from: $0.from, to: $0.to)
                     } : nil))
                     .animation(.easeOut(duration: 0.2), value: guide.anchor)
                     .allowsHitTesting(false)
@@ -374,21 +375,17 @@ struct CaptureView: View {
         }
     }
 
-    /// When the reference was shot the other way round from how the phone is held, say which way to turn.
-    @ViewBuilder
-    private func turnHint(image: CGSize, view: CGSize) -> some View {
-        let sideways = abs(quarterTurns) % 2 == 1
-        let photoWide = (image.width > image.height) != sideways
-        let viewWide = view.width > view.height
-        if image.width != image.height, photoWide != viewWide {
-            Label(photoWide ? "Reference is landscape: turn the phone sideways" : "Reference is portrait: turn the phone upright",
-                  systemImage: photoWide ? "rotate.right" : "rotate.left")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.black)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.yellow, in: Capsule())
-        }
+    /// A portrait reference checked with the phone on its side (or the other way round): shown
+    /// whole in the middle of the screen, and the guide lines up with that box.
+    private var ghostWhole: Bool {
+        guard let ghost, let visibleAspect else { return false }
+        return Fit.showsWhole(reference: ghost.size.width / max(ghost.size.height, 1), screen: visibleAspect)
+    }
+
+    /// Where the reference sits on screen, in the photo's directions: all of it, or the middle box.
+    private var ghostBox: CGRect {
+        guard ghostWhole, let ghost, let visibleAspect else { return CGRect(x: 0, y: 0, width: 1, height: 1) }
+        return Fit.centredBox(outer: visibleAspect, inner: ghost.size.width / max(ghost.size.height, 1))
     }
 
     /// Pinch and drag the overlay to line up a photo framed differently, such as a QTake screenshot.
@@ -469,7 +466,7 @@ struct CaptureView: View {
         } else {
             camera.onFrame = nil
         }
-        guide.setReference(guideOn ? ghost : nil, depth: ghostDepth, aspect: visibleAspect, prefersBody: board?.department == .costume)
+        guide.setReference(guideOn ? ghost : nil, depth: ghostDepth, aspect: visibleAspect, whole: ghostWhole, prefersBody: board?.department == .costume)
     }
 
     private func selectAngle(_ newAngle: String) {
@@ -625,6 +622,8 @@ struct GalleryView: View {
     @State private var picked: [PhotosPickerItem] = []
     @State private var importing = 0
     @State private var notice: String?
+    /// iPhone on its side: the caption sits over the photo, leaving it as much height as possible.
+    @Environment(\.verticalSizeClass) private var verticalSize
 
     init(board: Board, overlay: UUID?, last: Shot?, onChoose: @escaping (Choice) -> Void) {
         boardID = board.id
@@ -661,8 +660,13 @@ struct GalleryView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .background(Color.black)
-                if let current {
-                    caption(current)
+                .overlay(alignment: .bottom) {
+                    if let current, verticalSize == .compact {
+                        caption(current).background(Color.black.opacity(0.55)).allowsHitTesting(false)
+                    }
+                }
+                if let current, verticalSize != .compact {
+                    caption(current).background(Color.black)
                 }
                 filmstrip
             }
@@ -776,7 +780,6 @@ struct GalleryView: View {
         .foregroundStyle(.white)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
-        .background(Color.black)
     }
 
     private var filmstrip: some View {

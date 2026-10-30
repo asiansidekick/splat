@@ -150,11 +150,15 @@ struct ScreenMap {
     var size: CGSize
     var quarterTurns: Int
     var mirrored: Bool
+    /// Where the photo sits within the screen's picture (0...1, in the photo's directions): all of
+    /// it, or a centred box when a portrait reference is shown whole on a landscape screen, or the
+    /// other way round.
+    var inner = CGRect(x: 0, y: 0, width: 1, height: 1)
 
     private var turns: Int { (quarterTurns % 4 + 4) % 4 }
 
     func toScreen(_ p: CGPoint) -> CGPoint {
-        var q = p
+        var q = CGPoint(x: inner.minX + p.x * inner.width, y: inner.minY + p.y * inner.height)
         for _ in 0..<turns { q = CGPoint(x: 1 - q.y, y: q.x) }
         if mirrored { q.x = 1 - q.x }
         return CGPoint(x: q.x * size.width, y: q.y * size.height)
@@ -165,7 +169,8 @@ struct ScreenMap {
         var q = CGPoint(x: s.x / size.width, y: s.y / size.height)
         if mirrored { q.x = 1 - q.x }
         for _ in 0..<turns { q = CGPoint(x: q.y, y: 1 - q.x) }
-        return q
+        guard inner.width > 0, inner.height > 0 else { return q }
+        return CGPoint(x: (q.x - inner.minX) / inner.width, y: (q.y - inner.minY) / inner.height)
     }
 
     func toScreen(_ box: CGRect) -> CGRect {
@@ -194,4 +199,30 @@ struct ScreenMap {
 
 extension CGRect {
     var area: CGFloat { width * height }
+
+    /// A point given 0...1 across and down this box, as 0...1 of the whole.
+    func point(_ p: CGPoint) -> CGPoint { CGPoint(x: minX + p.x * width, y: minY + p.y * height) }
+}
+
+/// Fitting a picture of one shape whole inside another, centred, as the screen shows a portrait
+/// reference on a landscape screen.
+enum Fit {
+    /// The box (0...1 of the outer picture) that a centred picture of `inner` width over height
+    /// fills when fitted whole inside one of `outer` width over height.
+    static func centredBox(outer: CGFloat, inner: CGFloat) -> CGRect {
+        guard outer > 0, inner > 0 else { return CGRect(x: 0, y: 0, width: 1, height: 1) }
+        if inner > outer {
+            let h = outer / inner
+            return CGRect(x: 0, y: (1 - h) / 2, width: 1, height: h)
+        } else {
+            let w = inner / outer
+            return CGRect(x: (1 - w) / 2, y: 0, width: w, height: 1)
+        }
+    }
+
+    /// Whether a reference this shape is shown whole (rather than filling the screen) on a screen
+    /// showing this shape: when one is portrait and the other landscape.
+    static func showsWhole(reference: CGFloat, screen: CGFloat) -> Bool {
+        abs(reference - 1) > 0.01 && (reference > 1) != (screen > 1)
+    }
 }

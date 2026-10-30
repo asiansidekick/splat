@@ -234,5 +234,51 @@ do {
            "LiDAR 2 cm off: lined up")
 }
 
+// MARK: Portrait and landscape
+
+do {
+    let box = Fit.centredBox(outer: 19.5 / 9, inner: 3.0 / 4)
+    expect(abs(box.height - 1) < 1e-9 && abs(box.width - (0.75 / (19.5 / 9))) < 1e-9 && abs(box.midX - 0.5) < 1e-9,
+           "portrait reference on a landscape screen: full height, centred")
+    let wide = Fit.centredBox(outer: 9 / 19.5, inner: 4.0 / 3)
+    expect(abs(wide.width - 1) < 1e-9 && abs(wide.midY - 0.5) < 1e-9, "landscape reference on a portrait screen: full width, centred")
+    expect(Fit.showsWhole(reference: 0.75, screen: 2.1) && Fit.showsWhole(reference: 1.33, screen: 0.46), "other way round: shown whole")
+    expect(!Fit.showsWhole(reference: 0.75, screen: 0.46) && !Fit.showsWhole(reference: 1.33, screen: 2.1), "same way round: fills the screen")
+    expect(!Fit.showsWhole(reference: 1, screen: 2.1), "square reference: fills the screen")
+
+    for turns in [0, 1, -1] {
+        let screen = ScreenMap(size: CGSize(width: 844, height: 390), quarterTurns: turns, mirrored: false, inner: box)
+        let p = CGPoint(x: 0.3, y: 0.8)
+        expect(close(screen.toPhoto(screen.toScreen(p)), p), "box: screen and back, turns \(turns)")
+        let from = (CGPoint(x: 0.4, y: 0.3), CGPoint(x: 0.6, y: 0.3))
+        let to = (CGPoint(x: 0.45, y: 0.35), CGPoint(x: 0.62, y: 0.37))
+        let t = screen.ghostTransform(from: from, to: to)
+        let centre = CGPoint(x: 422, y: 195)
+        func moved(_ q: CGPoint) -> CGPoint {
+            let s = screen.toScreen(q)
+            let x = s.x - centre.x, y = s.y - centre.y
+            let c = cos(t.angle) * t.scale, n = sin(t.angle) * t.scale
+            return CGPoint(x: centre.x + c * x - n * y + t.offset.width, y: centre.y + n * x + c * y + t.offset.height)
+        }
+        expect(close(moved(from.0), screen.toScreen(to.0), 0.01) && close(moved(from.1), screen.toScreen(to.1), 0.01),
+               "box: ghost lands on the actor, turns \(turns)")
+    }
+    let upright = ScreenMap(size: CGSize(width: 844, height: 390), quarterTurns: 0, mirrored: false, inner: box)
+    expect(close(upright.toScreen(CGPoint(x: 0, y: 0)), CGPoint(x: box.minX * 844, y: 0)), "box: the reference's top left sits at the box's top left")
+
+    // A portrait reference and the same view checked in landscape: the live box is the reference's
+    // shape, so the guide reads lined up, and still finds a twist.
+    let aspect: CGFloat = 0.75
+    let ref = photo(from: home, aspect: aspect)
+    expect(ActorMatch.reading(reference: ref, live: photo(from: home, aspect: aspect), aspect: aspect)!.lined,
+           "portrait reference checked in landscape: lined up")
+    expect(cues(photo(from: home, roll: 9, aspect: aspect), aspect: aspect, ref: ref) == [.rotate(clockwise: true)],
+           "portrait reference checked in landscape, turned: only says rotate")
+
+    // Depth read through the box lands in the middle of the screen's picture.
+    let middle = box.point(CGPoint(x: 0.5, y: 0.5))
+    expect(close(middle, CGPoint(x: 0.5, y: 0.5)), "the box's middle is the screen's middle")
+}
+
 print(failures == 0 ? "All actor tests passed" : "\(failures) actor tests failed")
 exit(failures == 0 ? 0 : 1)
