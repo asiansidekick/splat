@@ -295,6 +295,15 @@ func runSyncTests() throws {
     expect(air.run(limit: 2_000), "a later edit settles")
     expect(b.has(desk)!.measurements.first { $0.id == line.id }?.length == 0.49, "the newest typed length wins on B")
     b.update(desk.id) {
+        $0.notes[0].position = [0.5, 1, -2]
+        $0.notes[0].text = "cup handle faces left"
+        $0.notes[0].edited = base.addingTimeInterval(700)
+    }
+    b.engine.localChanged()
+    expect(air.run(limit: 2_000), "a moved note settles")
+    expect(a.has(desk)!.notes.first?.position == [0.5, 1, -2] && a.has(desk)!.notes.first?.text == "cup handle faces left",
+        "A shows the note moved and reworded on B")
+    b.update(desk.id) {
         $0.measurements.removeAll { $0.id == spare.id }
         $0.removedMarks.append(spare.id)
     }

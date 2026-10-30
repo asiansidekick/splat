@@ -104,6 +104,59 @@ enum ModelDimensions {
         return node
     }
 
+    /// A note as a comic-book speech bubble, its tail tip at `position`, turned to face the camera.
+    /// `height` is how tall a single line of text should look, in metres.
+    static func bubble(_ text: String, picked: Bool, height: Float, at position: SIMD3<Float>) -> SCNNode {
+        let font = UIFont(name: "MarkerFelt-Wide", size: 44) ?? UIFont.systemFont(ofSize: 44, weight: .heavy)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.black, .paragraphStyle: paragraph]
+        let words = text.uppercased() as NSString
+        let bounds = words.boundingRect(
+            with: CGSize(width: 520, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin],
+            attributes: attributes, context: nil)
+        let textSize = CGSize(width: ceil(bounds.width), height: ceil(bounds.height))
+        let tail: CGFloat = 36
+        let size = CGSize(width: textSize.width + 56, height: textSize.height + 36 + tail)
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            let body = CGRect(x: 5, y: 5, width: size.width - 10, height: size.height - tail - 10)
+            let path = UIBezierPath(roundedRect: body, cornerRadius: 34)
+            let spike = UIBezierPath()
+            spike.move(to: CGPoint(x: size.width / 2 - 22, y: body.maxY - 2))
+            spike.addLine(to: CGPoint(x: size.width / 2 - 8, y: size.height - 4))
+            spike.addLine(to: CGPoint(x: size.width / 2 + 22, y: body.maxY - 2))
+            spike.close()
+            path.append(spike)
+            // Outline first, then the white over its inner half, so no line shows across the tail.
+            (picked ? Measurer.pickedColour : UIColor.black).setStroke()
+            path.lineWidth = 10
+            path.lineJoinStyle = .round
+            path.stroke()
+            UIColor.white.setFill()
+            path.fill()
+            words.draw(
+                in: CGRect(x: (size.width - textSize.width) / 2, y: body.minY + (body.height - textSize.height) / 2,
+                           width: textSize.width, height: textSize.height),
+                withAttributes: attributes)
+        }
+        let unit = CGFloat(height) / 64
+        let plane = SCNPlane(width: size.width * unit, height: size.height * unit)
+        let material = flat(.white)
+        material.diffuse.contents = image
+        material.isDoubleSided = true
+        plane.materials = [material]
+        let node = SCNNode(geometry: plane)
+        node.simdPosition = position
+        // The tail tip, not the middle, sits on the spot.
+        var pivot = matrix_identity_float4x4
+        pivot.columns.3 = SIMD4(0, -Float(plane.height) / 2, 0, 1)
+        node.simdPivot = pivot
+        let facing = SCNBillboardConstraint()
+        facing.freeAxes = .all
+        node.constraints = [facing]
+        return node
+    }
+
     /// Unlit and drawn over the model and the room, like a drawing on the screen.
     static func flat(_ colour: UIColor) -> SCNMaterial {
         let material = SCNMaterial()

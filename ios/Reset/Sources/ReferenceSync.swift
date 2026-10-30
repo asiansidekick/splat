@@ -254,7 +254,7 @@ final class ReferenceSyncLibrary: SyncLibrary {
                 result.models.append(model)
             }
         }
-        // Measurements and notes: new ones are added, deleted ones go, typed lengths take the newest.
+        // Measurements and notes: new ones are added, deleted ones go, typed lengths and edited notes take the newest.
         let unmarked = Set(result.removedMarks)
         result.removedMarks += incoming.removedMarks.filter { !unmarked.contains($0) }.sorted { $0.uuidString < $1.uuidString }
         let goneMarks = Set(result.removedMarks)
@@ -270,8 +270,14 @@ final class ReferenceSyncLibrary: SyncLibrary {
                 result.measurements.append(measurement)
             }
         }
-        for note in incoming.notes where !goneMarks.contains(note.id) && !result.notes.contains(where: { $0.id == note.id }) {
-            result.notes.append(note)
+        for note in incoming.notes where !goneMarks.contains(note.id) {
+            if let index = result.notes.firstIndex(where: { $0.id == note.id }) {
+                // Text and place can change: the newest edit wins on every phone.
+                let mine = result.notes[index]
+                if newer(note.edited, key(note), than: mine.edited, key(mine)) { result.notes[index] = note }
+            } else {
+                result.notes.append(note)
+            }
         }
         result.measurements.removeAll { goneMarks.contains($0.id) }
         result.notes.removeAll { goneMarks.contains($0.id) }

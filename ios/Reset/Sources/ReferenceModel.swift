@@ -160,6 +160,8 @@ struct RoomNote: Codable, Identifiable, Equatable {
     var text: String
     var position: [Float]  // x, y, z
     var created: Date
+    /// When the text or place was last changed, so syncing phones keep the newest.
+    var edited: Date?
 
     var spot: SIMD3<Float> { vector3(position) }
 }

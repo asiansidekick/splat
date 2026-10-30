@@ -1051,6 +1051,7 @@ struct CaptureStage: View {
                 }
                 ModelSizeBadge(placer: recorder.placer)
                 MeasureReticle(measurer: recorder.measurer)
+                MeasureEntry(measurer: recorder.measurer)
                 if mode == .snapshot && (recorder.pendingSave || recorder.saving || justSaved) {
                     ScanProgressOverlay(
                         progress: justSaved ? 1 : recorder.scanProgress, saved: justSaved,
@@ -1503,6 +1504,7 @@ struct ResetStage: View {
                 ModelSizeBadge(placer: restorer.placer)
                 if !restorer.paused {
                     MeasureReticle(measurer: restorer.measurer)
+                    MeasureEntry(measurer: restorer.measurer)
                 }
             }
             .overlay {

@@ -3,10 +3,11 @@ import SceneKit
 import SwiftUI
 import simd
 
-/// Measuring with a crosshair (Phil, 2026-10-30): aim the middle of the screen at a point, tap +
-/// to start a line, aim at the other end and tap + again. Lines and notes stay in the room, saved
-/// with the reference, each with its length; with Axes on, also its level and upright parts, so
-/// several sizes show at once. Uses LiDAR depth where there is some, ARKit's surfaces otherwise.
+/// Dimensioning and notes in the room (Phil, 2026-10-30): drag a line across something, or aim the
+/// middle of the screen and tap + at each end, and the line stays in the room with a size on it.
+/// The phone's own reading is only a guess ("~"); a large pop-out asks for the real length, which
+/// is what the line then shows. Notes are comic-book bubbles that can sit on a surface or in mid-air,
+/// at the crosshair or where a finger is held down, and be moved later. All saved with the reference.
 @MainActor
 final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     @Published var active = false {
@@ -26,6 +27,18 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         var b: SIMD3<Float>
     }
     @Published private(set) var drag: DragLine?
+    /// What the large pop-out is asking for: a line's real length, or a note's text (nil = a new one).
+    enum Entry: Hashable {
+        case length(UUID)
+        case note(UUID?)
+    }
+    @Published private(set) var entry: Entry?
+    /// Where a new note goes when it was started by holding a finger down; nil = at the crosshair.
+    private var noteSpot: SIMD3<Float>?
+    /// The note being carried: it follows the crosshair until dropped.
+    @Published private(set) var moving: UUID?
+    /// How far ahead a note hangs in mid-air when the crosshair is on nothing.
+    private var airDistance: Float = 1
     /// What the last drag was made of, written to the log when the line is kept so a wrong length
     /// can be traced to the depth, the mapping or the pose.
     private var dragDetail = ""
@@ -75,10 +88,45 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         pan.maximumNumberOfTouches = 1
         pan.delegate = self
         view.addGestureRecognizer(pan)
+        let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleHold(_:)))
+        hold.minimumPressDuration = 0.6
+        hold.delegate = self
+        view.addGestureRecognizer(hold)
+    }
+
+    /// Holding a finger down puts a note right there: on the surface under the finger, or in mid-air.
+    @objc private func handleHold(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, active, moving == nil, entry == nil, let view = gesture.view as? ARSCNView else { return }
+        let location = gesture.location(in: view)
+        var spot: SIMD3<Float>?
+        if let frame = session.currentFrame, case .normal = frame.camera.trackingState, let depth = Measurer.depth(of: frame) {
+            spot = Measurer.point(in: frame, depth: depth, at: location, view: view)
+        }
+        if spot == nil {
+            let near = view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 0))
+            let far = view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 1))
+            let direction = simd_normalize(SIMD3(far.x - near.x, far.y - near.y, far.z - near.z))
+            spot = SIMD3(near.x, near.y, near.z) + direction * airDistance
+        }
+        noteSpot = spot
+        Haptics.tap()
+        entry = .note(nil)
+    }
+
+    func askLength(_ id: UUID) { entry = .length(id) }
+
+    func askNote(editing id: UUID? = nil) {
+        if id == nil { noteSpot = nil }
+        entry = .note(id)
+    }
+
+    func dismissEntry() {
+        entry = nil
+        noteSpot = nil
     }
 
     nonisolated func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard gestureRecognizer is UIPanGestureRecognizer else { return true }
+        guard gestureRecognizer is UIPanGestureRecognizer || gestureRecognizer is UILongPressGestureRecognizer else { return true }
         return MainActor.assumeIsolated { self.active }
     }
 
@@ -126,7 +174,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             updatePreview()
         }
         guard let drag, screenLength > 24, simd_distance(drag.a, drag.b) > 0.005 else { return }
-        measurements.append(RoomMeasurement(a: array(drag.a), b: array(drag.b), created: Date()))
+        let line = RoomMeasurement(a: array(drag.a), b: array(drag.b), created: Date())
+        measurements.append(line)
+        entry = .length(line.id)
         Haptics.success()
         Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (drawn on the screen, one frame)")
         Diagnostics.log("Drag detail: \(dragDetail)")
@@ -138,7 +188,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-        guard active, let view = gesture.view as? ARSCNView else { return }
+        guard active, moving == nil, let view = gesture.view as? ARSCNView else { return }
         let hits = view.hitTest(gesture.location(in: view), options: [.searchMode: SCNHitTestSearchMode.all.rawValue])
         let picked = hits.lazy.compactMap { Measurer.markID(of: $0.node) }.first
         if picked != nil { Haptics.tap() }
@@ -192,15 +242,20 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     /// What the readout under the crosshair says.
     var readout: String {
-        if let drag { return Measurer.text(simd_distance(drag.a, drag.b)) }
-        if selected != nil { return "Edit or delete the red one" }
+        if let drag { return "~" + Measurer.text(simd_distance(drag.a, drag.b)) }
+        if moving != nil { return "Aim where it goes, tap ✓" }
+        if selected != nil { return "Edit, move or delete the red one" }
         guard let cursor else { return trackingNote ?? "Aim at a surface" }
-        if let start { return Measurer.text(simd_distance(start, cursor)) }
-        return measurements.isEmpty && notes.isEmpty ? "Drag a line across it, or aim and tap +" : "Drag a line, or aim and tap +"
+        if let start { return "~" + Measurer.text(simd_distance(start, cursor)) }
+        return measurements.isEmpty && notes.isEmpty ? "Drag a line across it, or hold to add a note" : "Drag a line, or hold to add a note"
     }
 
     /// Starts a line at the crosshair, or finishes the one started.
     func addPoint() {
+        if moving != nil {
+            dropNote()
+            return
+        }
         guard let cursor else {
             Haptics.warning()
             return
@@ -216,7 +271,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             updatePreview()
             return
         }
-        measurements.append(RoomMeasurement(a: array(start), b: array(cursor), created: Date()))
+        let line = RoomMeasurement(a: array(start), b: array(cursor), created: Date())
+        measurements.append(line)
+        entry = .length(line.id)
         Haptics.success()
         let camera = session.currentFrame?.camera.transform.columns.3
         let away = camera.map { simd_distance(cursor, SIMD3($0.x, $0.y, $0.z)) }
@@ -224,12 +281,51 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         changed()
     }
 
-    func addNote(_ text: String) {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let cursor, !text.isEmpty else { return }
-        notes.append(RoomNote(text: String(text.prefix(120)), position: array(cursor), created: Date()))
+    /// What a note currently says, for editing it.
+    func noteText(_ id: UUID) -> String? { notes.first { $0.id == id }?.text }
+
+    /// Saves the note from the pop-out: a new one at the held spot, the crosshair or in mid-air,
+    /// or new words for one already there.
+    func saveNote(_ text: String, editing id: UUID?) {
+        let text = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
+        defer { dismissEntry() }
+        guard !text.isEmpty else { return }
+        if let id, let index = notes.firstIndex(where: { $0.id == id }) {
+            notes[index].text = text
+            notes[index].edited = Date()
+        } else if let spot = noteSpot ?? cursor ?? airPoint() {
+            notes.append(RoomNote(text: text, position: array(spot), created: Date()))
+        } else {
+            Haptics.warning()
+            return
+        }
         Haptics.success()
         changed()
+    }
+
+    /// Picks the selected note up so it follows the crosshair, or puts it down where it is.
+    func toggleMove() {
+        if moving != nil {
+            dropNote()
+        } else if let id = selected, notes.contains(where: { $0.id == id }) {
+            moving = id
+            Haptics.tap()
+        }
+    }
+
+    private func dropNote() {
+        guard let id = moving else { return }
+        moving = nil
+        if let index = notes.firstIndex(where: { $0.id == id }) { notes[index].edited = Date() }
+        Haptics.success()
+        changed()
+    }
+
+    /// A point straight ahead of the phone, for a note that hangs in the air.
+    private func airPoint() -> SIMD3<Float>? {
+        guard let t = session.currentFrame?.camera.transform else { return nil }
+        let forward = -SIMD3(t.columns.2.x, t.columns.2.y, t.columns.2.z)
+        return SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z) + forward * airDistance
     }
 
     /// Takes back the line being started, or else the newest measurement or note.
@@ -280,6 +376,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         trackingNote = nil
         loggedNote = nil
         drag = nil
+        moving = nil
+        entry = nil
+        noteSpot = nil
         updatePreview()
         guard active else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
@@ -316,6 +415,13 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         if loggedSource != fromLiDAR {
             loggedSource = fromLiDAR
             Diagnostics.log("Measure: distance from \(fromLiDAR ? "LiDAR depth" : "estimated surfaces (no LiDAR depth)")")
+        }
+        if let cursor, let camera = session.currentFrame?.camera.transform.columns.3 {
+            airDistance = min(max(simd_distance(cursor, SIMD3(camera.x, camera.y, camera.z)), 0.4), 4)
+        }
+        if let id = moving, let index = notes.firstIndex(where: { $0.id == id }), let spot = cursor ?? airPoint() {
+            notes[index].position = array(spot)
+            rebuild()
         }
         updatePreview()
     }
@@ -444,25 +550,26 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let line = node(
                 for: measurement.start, measurement.end, axes: showAxes && !picked,
                 colour: picked ? Measurer.pickedColour : Measurer.lineColour,
-                scale: measurement.measured > 0 ? measurement.length / measurement.measured : 1)
+                scale: measurement.measured > 0 ? measurement.length / measurement.measured : 1,
+                approx: measurement.typed == nil)
             line.name = "mark:\(measurement.id.uuidString)"
             root.addChildNode(line)
         }
         for note in notes {
             let pin = SCNNode()
             pin.name = "mark:\(note.id.uuidString)"
-            let colour = note.id == selected ? Measurer.pickedColour : Measurer.noteColour
+            let picked = note.id == selected
             let height = labelHeight(at: note.spot)
-            pin.addChildNode(Measurer.dot(at: note.spot, radius: max(height * 0.18, 0.004), colour: colour))
-            pin.addChildNode(Measurer.line(from: note.spot, to: note.spot + SIMD3(0, height * 1.2, 0), radius: max(height * 0.04, 0.001), colour: colour))
-            pin.addChildNode(ModelDimensions.tag(note.text, colour: colour, height: height, at: note.spot + SIMD3(0, height * 1.8, 0)))
+            pin.addChildNode(Measurer.dot(at: note.spot, radius: max(height * 0.12, 0.003), colour: picked ? Measurer.pickedColour : Measurer.noteColour))
+            pin.addChildNode(ModelDimensions.bubble(note.text, picked: picked, height: height * 1.2, at: note.spot + SIMD3(0, height * 0.2, 0)))
             root.addChildNode(pin)
         }
         ModelDimensions.onTop(root)
     }
 
     /// A measured line with its length; with axes, its level part and upright part beside it.
-    private func node(for a: SIMD3<Float>, _ b: SIMD3<Float>, axes: Bool, colour: UIColor = Measurer.lineColour, scale: Float = 1) -> SCNNode {
+    private func node(for a: SIMD3<Float>, _ b: SIMD3<Float>, axes: Bool, colour: UIColor = Measurer.lineColour, scale: Float = 1, approx: Bool = false) -> SCNNode {
+        let guess = approx ? "~" : ""
         let node = SCNNode()
         let middle = (a + b) / 2
         let height = labelHeight(at: middle)
@@ -470,7 +577,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         node.addChildNode(Measurer.line(from: a, to: b, radius: radius, colour: colour))
         node.addChildNode(Measurer.dot(at: a, radius: radius * 3, colour: .white))
         node.addChildNode(Measurer.dot(at: b, radius: radius * 3, colour: .white))
-        node.addChildNode(ModelDimensions.tag(Measurer.text(simd_distance(a, b) * scale), colour: colour, height: height, at: middle + SIMD3(0, height * 0.9, 0)))
+        node.addChildNode(ModelDimensions.tag(guess + Measurer.text(simd_distance(a, b) * scale), colour: colour, height: height, at: middle + SIMD3(0, height * 0.9, 0)))
         guard axes else { return node }
         let low = a.y <= b.y ? a : b
         let high = a.y <= b.y ? b : a
@@ -481,9 +588,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         guard level > 0.01, rise > 0.01 else { return node }
         node.addChildNode(Measurer.line(from: low, to: corner, radius: radius * 0.6, colour: ModelDimensions.depth.withAlphaComponent(0.85)))
         node.addChildNode(Measurer.line(from: corner, to: high, radius: radius * 0.6, colour: ModelDimensions.height.withAlphaComponent(0.85)))
-        node.addChildNode(ModelDimensions.tag("↔ " + Measurer.text(level * scale), colour: ModelDimensions.depth, height: height * 0.8,
+        node.addChildNode(ModelDimensions.tag("↔ " + guess + Measurer.text(level * scale), colour: ModelDimensions.depth, height: height * 0.8,
                                               at: (low + corner) / 2 - SIMD3(0, height * 0.8, 0)))
-        node.addChildNode(ModelDimensions.tag("↕ " + Measurer.text(rise * scale), colour: ModelDimensions.height, height: height * 0.8,
+        node.addChildNode(ModelDimensions.tag("↕ " + guess + Measurer.text(rise * scale), colour: ModelDimensions.height, height: height * 0.8,
                                               at: (corner + high) / 2 + simd_normalize(corner - low) * height * 1.6))
         return node
     }
@@ -494,14 +601,14 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         guard active else { return }
         if let drag {
             preview.addChildNode(Measurer.dot(at: drag.a, radius: 0.004, colour: .white))
-            preview.addChildNode(node(for: drag.a, drag.b, axes: false))
+            preview.addChildNode(node(for: drag.a, drag.b, axes: false, approx: true))
             ModelDimensions.onTop(preview)
             return
         }
         guard let start else { return }
         preview.addChildNode(Measurer.dot(at: start, radius: 0.004, colour: .white))
         if let cursor, simd_distance(start, cursor) > 0.002 {
-            preview.addChildNode(node(for: start, cursor, axes: false))
+            preview.addChildNode(node(for: start, cursor, axes: false, approx: true))
         }
         ModelDimensions.onTop(preview)
     }
@@ -548,13 +655,6 @@ struct MeasureReticle: View {
                     .foregroundStyle(.white)
                     .fixedSize()
                     .offset(y: 40)
-                if found && !measurer.fromLiDAR {
-                    Text("Estimated: may be out")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.orange)
-                        .fixedSize()
-                        .offset(y: 66)
-                }
             }
             .shadow(color: .black.opacity(0.5), radius: 2)
             .allowsHitTesting(false)
@@ -565,70 +665,47 @@ struct MeasureReticle: View {
 /// The measuring buttons, above the bottom controls while measuring.
 struct MeasureBar: View {
     @ObservedObject var measurer: Measurer
-    @State private var writing = false
-    @State private var draft = ""
     @State private var confirmingClear = false
-    @State private var editing = false
-    @State private var draftLength = ""
 
     var body: some View {
         if measurer.active {
             HStack(spacing: 18) {
-                small("arrow.uturn.backward", "Undo") { measurer.undo() }
-                    .disabled(measurer.start == nil && measurer.isEmpty)
-                small(measurer.showAxes ? "move.3d" : "line.diagonal", measurer.showAxes ? "Axes on" : "Axes off") {
-                    measurer.showAxes.toggle()
+                if measurer.selected != nil && measurer.moving == nil {
+                    if let line = measurer.selectedMeasurement {
+                        small("pencil", "Size", tint: .yellow) { measurer.askLength(line.id) }
+                    } else if let id = measurer.selected {
+                        small("pencil", "Edit", tint: .yellow) { measurer.askNote(editing: id) }
+                        small("arrow.up.and.down.and.arrow.left.and.right", "Move", tint: .yellow) { measurer.toggleMove() }
+                    }
+                } else if measurer.moving == nil {
+                    small("arrow.uturn.backward", "Undo") { measurer.undo() }
+                        .disabled(measurer.start == nil && measurer.isEmpty)
+                    small(measurer.showAxes ? "move.3d" : "line.diagonal", measurer.showAxes ? "Axes on" : "Axes off") {
+                        measurer.showAxes.toggle()
+                    }
                 }
                 Button { measurer.addPoint() } label: {
-                    Image(systemName: measurer.start == nil ? "plus" : "checkmark")
+                    Image(systemName: measurer.start == nil && measurer.moving == nil ? "plus" : "checkmark")
                         .font(.title.bold())
                         .frame(width: 62, height: 62)
                         .background(Color.yellow, in: Circle())
                         .foregroundStyle(.black)
                 }
-                .accessibilityLabel(measurer.start == nil ? "Start a measurement here" : "End the measurement here")
-                small("text.bubble", "Note") {
-                    draft = ""
-                    writing = true
-                }
-                .disabled(measurer.cursor == nil)
-                if measurer.selected != nil {
-                    if let line = measurer.selectedMeasurement {
-                        small("pencil", "Edit", tint: .yellow) {
-                            draftLength = String(format: "%.1f", line.length * 100)
-                            editing = true
-                        }
+                .accessibilityLabel(measurer.moving != nil ? "Put the note down here" : measurer.start == nil ? "Start a line here" : "End the line here")
+                if measurer.moving == nil {
+                    small("text.bubble", "Note") { measurer.askNote() }
+                    if measurer.selected != nil {
+                        small("trash.fill", "Delete", tint: .red) { measurer.deleteSelected() }
+                    } else {
+                        small("trash", "Delete") { confirmingClear = true }
+                            .disabled(measurer.isEmpty)
                     }
-                    small("trash.fill", "Delete", tint: .red) { measurer.deleteSelected() }
-                } else {
-                    small("trash", "Delete") { confirmingClear = true }
-                        .disabled(measurer.isEmpty)
                 }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             .background(Color.black.opacity(0.45), in: Capsule())
-            .alert("Note at the crosshair", isPresented: $writing) {
-                TextField("For example: cup handle faces camera", text: $draft)
-                Button("Cancel", role: .cancel) {}
-                Button("Add") { measurer.addNote(draft) }
-            }
-            .alert("Real length", isPresented: $editing) {
-                TextField("For example: 29.7 cm, 0.3 m, 12 in", text: $draftLength)
-                    .keyboardType(.numbersAndPunctuation)
-                Button("Cancel", role: .cancel) {}
-                if let line = measurer.selectedMeasurement, line.typed != nil {
-                    Button("Use measured") { measurer.setLength(nil, for: line.id) }
-                }
-                Button("Set") {
-                    if let line = measurer.selectedMeasurement, let metres = LengthText.parse(draftLength) {
-                        measurer.setLength(metres, for: line.id)
-                    }
-                }
-            } message: {
-                Text("Type the true length of what you measured. A number on its own is centimetres; add mm, m, in or ft for other units.")
-            }
-            .confirmationDialog("Delete every measurement and note?", isPresented: $confirmingClear, titleVisibility: .visible) {
+            .confirmationDialog("Delete every dimension and note?", isPresented: $confirmingClear, titleVisibility: .visible) {
                 Button("Delete all", role: .destructive) { measurer.clear() }
             }
         }
@@ -644,6 +721,202 @@ struct MeasureBar: View {
             .foregroundStyle(tint)
         }
         .accessibilityLabel(title)
+    }
+}
+
+/// The large pop-outs over the camera: one for typing a line's real length, one for writing a
+/// note in a comic-book speech bubble. They zoom in from the middle of the screen.
+struct MeasureEntry: View {
+    @ObservedObject var measurer: Measurer
+    @State private var text = ""
+    @AppStorage("lengthUnit") private var unit = "cm"
+    @FocusState private var focused: Bool
+
+    private static let units: [(name: String, metres: Float)] = [("cm", 0.01), ("mm", 0.001), ("m", 1), ("in", 0.0254), ("ft", 0.3048)]
+
+    private func comic(_ size: CGFloat) -> Font { .custom("MarkerFelt-Wide", size: size) }
+
+    var body: some View {
+        ZStack {
+            if let entry = measurer.entry {
+                Color.black.opacity(0.6).ignoresSafeArea()
+                Group {
+                    switch entry {
+                    case .length(let id): lengthCard(id)
+                    case .note(let id): noteCard(id)
+                    }
+                }
+                .transition(.scale(scale: 0.2).combined(with: .opacity))
+                .id(entry)
+            }
+        }
+        .animation(.spring(response: 0.38, dampingFraction: 0.7), value: measurer.entry)
+        .onChange(of: measurer.entry, initial: true) { _, entry in prepare(entry) }
+    }
+
+    private func prepare(_ entry: Measurer.Entry?) {
+        switch entry {
+        case .length(let id)?:
+            if let typed = measurer.measurements.first(where: { $0.id == id })?.typed {
+                text = String(format: "%.4g", Double(typed / factor))
+            } else {
+                text = ""
+            }
+        case .note(let id)?:
+            text = id.flatMap { measurer.noteText($0) } ?? ""
+        case nil:
+            text = ""
+        }
+        if entry != nil { DispatchQueue.main.async { focused = true } }
+    }
+
+    private var factor: Float { Self.units.first { $0.name == unit }?.metres ?? 0.01 }
+
+    private func lengthCard(_ id: UUID) -> some View {
+        let guess = measurer.measurements.first { $0.id == id }?.measured
+        return VStack(spacing: 14) {
+            Text("HOW BIG IS IT?").font(comic(32)).foregroundStyle(.black)
+            TextField("0", text: $text)
+                .keyboardType(.decimalPad)
+                .focused($focused)
+                .font(.system(size: 68, weight: .black, design: .rounded).monospacedDigit())
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.black)
+                .padding(.vertical, 8)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 18))
+                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.black, lineWidth: 4))
+            HStack(spacing: 8) {
+                ForEach(Self.units, id: \.name) { item in
+                    Button { unit = item.name } label: {
+                        Text(item.name).font(comic(24))
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .background(unit == item.name ? Color.black : Color.white, in: RoundedRectangle(cornerRadius: 12))
+                            .foregroundStyle(unit == item.name ? Color.yellow : Color.black)
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.black, lineWidth: 3))
+                    }
+                }
+            }
+            if let guess {
+                Button {
+                    text = String(format: "%.4g", Double(guess / factor))
+                } label: {
+                    Text("The phone guesses ~\(Measurer.text(guess)). Tap to use it.")
+                        .font(.footnote.bold())
+                        .foregroundStyle(.black.opacity(0.7))
+                }
+            }
+            HStack(spacing: 14) {
+                comicButton("SKIP", fill: .white) { measurer.dismissEntry() }
+                comicButton("SET IT!", fill: .black, text: .yellow) {
+                    var typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let last = typed.last, last.isNumber || last == "." { typed += unit }
+                    guard let metres = LengthText.parse(typed) else {
+                        Haptics.warning()
+                        return
+                    }
+                    measurer.setLength(metres, for: id)
+                    measurer.dismissEntry()
+                }
+            }
+        }
+        .padding(20)
+        .background(Color.yellow, in: RoundedRectangle(cornerRadius: 28))
+        .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.black, lineWidth: 6))
+        .shadow(color: .black, radius: 0, x: 7, y: 7)
+        .padding(.horizontal, 18)
+    }
+
+    private func noteCard(_ id: UUID?) -> some View {
+        VStack(spacing: 22) {
+            ZStack {
+                SpeechBubble().fill(Color.white)
+                SpeechBubble().stroke(Color.black, style: StrokeStyle(lineWidth: 6, lineJoin: .round))
+                TextField("WRITE SOMETHING!", text: $text, axis: .vertical)
+                    .lineLimit(2...6)
+                    .focused($focused)
+                    .textInputAutocapitalization(.characters)
+                    .font(comic(30))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 30)
+                    .padding(.top, 26)
+                    .padding(.bottom, 62)
+                    .onChange(of: text) { _, value in
+                        if value.count > 120 { text = String(value.prefix(120)) }
+                    }
+            }
+            .frame(minHeight: 230)
+            .shadow(color: .black, radius: 0, x: 7, y: 7)
+            .overlay(alignment: .topLeading) {
+                Text(id == nil ? "NOTE!" : "EDIT!")
+                    .font(comic(26))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 16)
+                    .background(Starburst().fill(Color.yellow))
+                    .background(Starburst().stroke(Color.black, lineWidth: 4))
+                    .rotationEffect(.degrees(-8))
+                    .offset(x: -8, y: -26)
+            }
+            HStack(spacing: 14) {
+                comicButton("CANCEL", fill: .white) { measurer.dismissEntry() }
+                comicButton(id == nil ? "PLACE IT!" : "SAVE IT!", fill: .yellow) { measurer.saveNote(text, editing: id) }
+            }
+        }
+        .padding(.horizontal, 22)
+    }
+
+    private func comicButton(_ title: String, fill: Color, text color: Color = .black, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(comic(26))
+                .frame(maxWidth: .infinity, minHeight: 56)
+                .background(fill, in: RoundedRectangle(cornerRadius: 16))
+                .foregroundStyle(color)
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black, lineWidth: 4))
+                .shadow(color: .black, radius: 0, x: 4, y: 4)
+        }
+    }
+}
+
+/// A rounded speech bubble with a tail at the bottom left.
+struct SpeechBubble: Shape {
+    func path(in rect: CGRect) -> Path {
+        let tail: CGFloat = 38
+        let body = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height - tail)
+        let c: CGFloat = 34
+        var p = Path()
+        p.move(to: CGPoint(x: body.minX + c, y: body.minY))
+        p.addLine(to: CGPoint(x: body.maxX - c, y: body.minY))
+        p.addQuadCurve(to: CGPoint(x: body.maxX, y: body.minY + c), control: CGPoint(x: body.maxX, y: body.minY))
+        p.addLine(to: CGPoint(x: body.maxX, y: body.maxY - c))
+        p.addQuadCurve(to: CGPoint(x: body.maxX - c, y: body.maxY), control: CGPoint(x: body.maxX, y: body.maxY))
+        p.addLine(to: CGPoint(x: body.minX + 110, y: body.maxY))
+        p.addLine(to: CGPoint(x: body.minX + 46, y: rect.maxY))
+        p.addLine(to: CGPoint(x: body.minX + 62, y: body.maxY))
+        p.addLine(to: CGPoint(x: body.minX + c, y: body.maxY))
+        p.addQuadCurve(to: CGPoint(x: body.minX, y: body.maxY - c), control: CGPoint(x: body.minX, y: body.maxY))
+        p.addLine(to: CGPoint(x: body.minX, y: body.minY + c))
+        p.addQuadCurve(to: CGPoint(x: body.minX + c, y: body.minY), control: CGPoint(x: body.minX, y: body.minY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// A comic-book starburst for the "NOTE!" flash.
+struct Starburst: Shape {
+    func path(in rect: CGRect) -> Path {
+        let points = 12
+        let centre = CGPoint(x: rect.midX, y: rect.midY)
+        var p = Path()
+        for i in 0..<(points * 2) {
+            let angle = Double(i) * .pi / Double(points)
+            let radius = i % 2 == 0 ? 1.0 : 0.72
+            let point = CGPoint(x: centre.x + CGFloat(cos(angle) * radius) * rect.width / 2,
+                                y: centre.y + CGFloat(sin(angle) * radius) * rect.height / 2)
+            if i == 0 { p.move(to: point) } else { p.addLine(to: point) }
+        }
+        p.closeSubpath()
+        return p
     }
 }
 
