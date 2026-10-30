@@ -21,6 +21,8 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     /// 3D models placed before recording; each reference saved afterwards keeps them.
     let modelsNode = SCNNode()
     lazy var placer = ModelPlacer(session: session, root: modelsNode, folder: Recorder.staging)
+    /// Measurements and notes made while recording go into each reference saved.
+    lazy var measurer = Measurer(session: session, parent: modelsNode)
 
     /// Where model files wait until a reference is saved.
     static var staging: URL {
@@ -148,6 +150,8 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
                 try placer.copyFiles(to: ReferenceStore.folder(for: reference.id))
                 reference.models = placer.models
             }
+            reference.measurements = measurer.measurements
+            reference.notes = measurer.notes
             try ReferenceStore.save(reference)
             // The session keeps running, so the next reference starts with the room already mapped.
             self.reference = nil
@@ -169,6 +173,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
 
     /// Stops the camera and throws away a reference that was started but not saved.
     func stop() {
+        measurer.active = false
         session.pause()
         if let reference { ReferenceStore.delete(reference) }
         reference = nil

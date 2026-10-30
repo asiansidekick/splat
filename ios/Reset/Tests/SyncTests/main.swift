@@ -261,6 +261,27 @@ func runSyncTests() throws {
     expect(b.has(desk)!.takes[0].note == "boom in shot", "the edited note reached B")
     expect(a.has(desk)! == b.has(desk)!, "both phones end with the same reference")
 
+    // Measurements and notes go across; one deleted on B goes everywhere.
+    let line = RoomMeasurement(a: [0, 0, 0], b: [0.3, 0.4, 0], created: base)
+    let pin = RoomNote(text: "cup handle faces camera", position: [0.1, 0.8, -1], created: base)
+    let spare = RoomMeasurement(a: [0, 0, 0], b: [1, 0, 0], created: base)
+    a.update(desk.id) {
+        $0.measurements += [line, spare]
+        $0.notes.append(pin)
+    }
+    a.engine.localChanged()
+    expect(air.run(limit: 2_000), "measurements sync")
+    expect(b.has(desk)!.measurements.map(\.id) == [line.id, spare.id] && b.has(desk)!.notes == [pin], "B has A's measurements and note")
+    expect(abs(line.length - 0.5) < 0.0001, "a 30-40-50 line measures 50 cm")
+    b.update(desk.id) {
+        $0.measurements.removeAll { $0.id == spare.id }
+        $0.removedMarks.append(spare.id)
+    }
+    b.engine.localChanged()
+    expect(air.run(limit: 2_000), "a deleted measurement settles")
+    expect(a.has(desk)!.measurements.map(\.id) == [line.id] && b.has(desk)!.measurements.map(\.id) == [line.id], "the deleted one is gone from both")
+    expect(a.has(desk)! == b.has(desk)!, "both phones still match")
+
     // A third phone joins B only, and gets A's things through B.
     let c = try Phone("C")
     link(b, c, air: air)

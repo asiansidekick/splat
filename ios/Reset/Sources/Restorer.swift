@@ -68,6 +68,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Everything this screen draws in 3D.
     let sceneContent = SCNNode()
     lazy var placer = ModelPlacer(session: session, root: modelsNode, folder: ReferenceStore.folder(for: reference.id))
+    /// Measurements and notes in the room, shown with the models once the room is found.
+    lazy var measurer = Measurer(session: session, parent: modelsNode)
 
     let session = ARSession()
     let reference: Reference
@@ -156,6 +158,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             session.run(config, options: [.resetTracking, .removeExistingAnchors])
             loadStartPhoto()
             placer.load(reference.models)
+            measurer.load(measurements: reference.measurements, notes: reference.notes, removed: reference.removedMarks)
             modelsNode.isHidden = false
             status = .ready
             Diagnostics.log("Reset start: photo \(reference.title)")
@@ -179,6 +182,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             relocalizingSince = Date()
             if Restorer.offers3D { buildCloud() }
             placer.load(reference.models)
+            measurer.load(measurements: reference.measurements, notes: reference.notes, removed: reference.removedMarks)
             loadStartPhoto()
             Diagnostics.log("Reset start: \(reference.title), \(reference.keyframes.count) keyframes, depth \(usesDepth)")
         } catch {
@@ -188,6 +192,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func stop() {
+        measurer.active = false
         session.pause()
     }
 

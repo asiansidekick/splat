@@ -13,6 +13,8 @@ struct HelpView: View {
                     step("camera.circle", "The app opens on the camera. In Quick Scan mode, point at the props and tap the shutter: that saves a reference for the setup shown at the top (tap it to change scene or setup).")
                     step("figure.walk", "For a fuller reference, swipe the modes to Walk around, tap record, walk slowly round the props and tap stop.")
                     step("cube", "Mock up the set: tap 3D models and pick one or more USDZ files. They appear at real size where the camera points. Drag to move, pinch to scale (the size shows as you pinch), twist to turn. Width, depth and height arrows show each model's size; tap a model and the ruler button to hide or show them. Photo mode takes a picture with them in, ready to share.")
+                    step("ruler", "Measure: tap the ruler at the top. Aim the crosshair at one end and tap +, aim at the other end and tap the tick. The length stays in place; with Axes on you also see how far across and how far up it goes. Note pins your own text to the spot under the crosshair. Measurements and notes are saved with the reference.")
+                    step("pencil.tip", "Sketch: after the shutter, tap Sketch to draw and write over the photo (models and measurements included), then share it or save it. Any reference photo can be sketched on from its menu in the gallery.")
                     step("hourglass", "If the room is not mapped yet, it saves by itself as soon as it is. Move the phone gently side to side.")
                 }
                 Section("Between takes") {

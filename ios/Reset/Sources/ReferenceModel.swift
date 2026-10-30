@@ -41,6 +41,11 @@ struct Reference: Codable, Identifiable, Equatable {
     var slateEdited: Date?
     /// Takes deleted on any phone, so syncing does not bring them back.
     var removedTakes: [UUID] = []
+    /// Lines measured in the room, and notes pinned in it (Phil, 2026-10-30).
+    var measurements: [RoomMeasurement] = []
+    var notes: [RoomNote] = []
+    /// Measurements and notes deleted on any phone, so syncing does not bring them back.
+    var removedMarks: [UUID] = []
 
     var hasDepth: Bool { keyframes.contains { $0.depthFile != nil } }
     var slate: String { scene + setup }
@@ -67,6 +72,9 @@ extension Reference {
         photoOnly = try c.decodeIfPresent(Bool.self, forKey: .photoOnly) ?? false
         slateEdited = try c.decodeIfPresent(Date.self, forKey: .slateEdited)
         removedTakes = try c.decodeIfPresent([UUID].self, forKey: .removedTakes) ?? []
+        measurements = try c.decodeIfPresent([RoomMeasurement].self, forKey: .measurements) ?? []
+        notes = try c.decodeIfPresent([RoomNote].self, forKey: .notes) ?? []
+        removedMarks = try c.decodeIfPresent([UUID].self, forKey: .removedMarks) ?? []
     }
 }
 
@@ -99,6 +107,33 @@ struct PlacedModel: Codable, Identifiable, Equatable {
     var transform: [Float]  // model-to-world, 16 values, column major
     /// When it was last moved, scaled or turned, so syncing phones keep the newest place.
     var moved: Date?
+}
+
+/// A straight line measured in the room, between two points in its coordinates (metres).
+struct RoomMeasurement: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var a: [Float]  // x, y, z
+    var b: [Float]
+    var created: Date
+
+    var start: SIMD3<Float> { vector3(a) }
+    var end: SIMD3<Float> { vector3(b) }
+    var length: Float { simd_distance(start, end) }
+}
+
+/// A note pinned to a spot in the room, such as "cup handle faces camera".
+struct RoomNote: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var text: String
+    var position: [Float]  // x, y, z
+    var created: Date
+
+    var spot: SIMD3<Float> { vector3(position) }
+}
+
+/// A point saved as three numbers; nonsense (too few) reads as the origin.
+func vector3(_ v: [Float]) -> SIMD3<Float> {
+    v.count >= 3 ? SIMD3(v[0], v[1], v[2]) : .zero
 }
 
 // MARK: - Matrix helpers

@@ -1,0 +1,386 @@
+import ARKit
+import SceneKit
+import SwiftUI
+import simd
+
+/// Measuring with a crosshair (Phil, 2026-10-30): aim the middle of the screen at a point, tap +
+/// to start a line, aim at the other end and tap + again. Lines and notes stay in the room, saved
+/// with the reference, each with its length; with Axes on, also its level and upright parts, so
+/// several sizes show at once. Uses LiDAR depth where there is some, ARKit's surfaces otherwise.
+@MainActor
+final class Measurer: ObservableObject {
+    @Published var active = false {
+        didSet { if active != oldValue { activeChanged() } }
+    }
+    @Published private(set) var measurements: [RoomMeasurement] = []
+    @Published private(set) var notes: [RoomNote] = []
+    @Published private(set) var removed: [UUID] = []
+    /// Where the crosshair meets the room, nil when it is on nothing.
+    @Published private(set) var cursor: SIMD3<Float>?
+    /// The first end of the line being drawn.
+    @Published private(set) var start: SIMD3<Float>?
+    /// Bumped when the person adds or deletes something, so the reference is saved.
+    @Published private(set) var revision = 0
+    @Published var showAxes = UserDefaults.standard.object(forKey: "measureAxes") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(showAxes, forKey: "measureAxes")
+            rebuild()
+        }
+    }
+
+    let session: ARSession
+    private let root = SCNNode()
+    private let preview = SCNNode()
+    private var timer: Timer?
+
+    static let lineColour = UIColor(red: 1, green: 0.84, blue: 0.1, alpha: 1)
+    static let noteColour = UIColor(red: 1, green: 0.55, blue: 0.15, alpha: 1)
+
+    init(session: ARSession, parent: SCNNode) {
+        self.session = session
+        root.name = "measurements"
+        parent.addChildNode(root)
+        parent.addChildNode(preview)
+    }
+
+    /// Shows what a reference has saved.
+    func load(measurements: [RoomMeasurement], notes: [RoomNote], removed: [UUID]) {
+        self.measurements = measurements
+        self.notes = notes
+        self.removed = removed
+        rebuild()
+    }
+
+    /// What the readout under the crosshair says.
+    var readout: String {
+        guard let cursor else { return "Aim at a surface" }
+        if let start { return Measurer.text(simd_distance(start, cursor)) }
+        return measurements.isEmpty && notes.isEmpty ? "Tap + at one end" : "Tap + to measure"
+    }
+
+    /// Starts a line at the crosshair, or finishes the one started.
+    func addPoint() {
+        guard let cursor else {
+            Haptics.warning()
+            return
+        }
+        guard let start else {
+            start = cursor
+            Haptics.tap()
+            updatePreview()
+            return
+        }
+        self.start = nil
+        guard simd_distance(start, cursor) > 0.005 else {
+            updatePreview()
+            return
+        }
+        measurements.append(RoomMeasurement(a: array(start), b: array(cursor), created: Date()))
+        Haptics.success()
+        Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length))")
+        changed()
+    }
+
+    func addNote(_ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let cursor, !text.isEmpty else { return }
+        notes.append(RoomNote(text: String(text.prefix(120)), position: array(cursor), created: Date()))
+        Haptics.success()
+        changed()
+    }
+
+    /// Takes back the line being started, or else the newest measurement or note.
+    func undo() {
+        if start != nil {
+            start = nil
+            updatePreview()
+            return
+        }
+        let lastLine = measurements.last?.created ?? .distantPast
+        let lastNote = notes.last?.created ?? .distantPast
+        if let line = measurements.last, lastLine >= lastNote {
+            measurements.removeLast()
+            removed.append(line.id)
+        } else if let note = notes.last {
+            notes.removeLast()
+            removed.append(note.id)
+        } else {
+            return
+        }
+        changed()
+    }
+
+    func clear() {
+        start = nil
+        removed += measurements.map(\.id) + notes.map(\.id)
+        measurements = []
+        notes = []
+        changed()
+    }
+
+    var isEmpty: Bool { measurements.isEmpty && notes.isEmpty }
+
+    private func changed() {
+        revision += 1
+        rebuild()
+        updatePreview()
+    }
+
+    private func activeChanged() {
+        timer?.invalidate()
+        timer = nil
+        start = nil
+        cursor = nil
+        updatePreview()
+        guard active else { return }
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+    }
+
+    private func tick() {
+        guard let frame = session.currentFrame, case .normal = frame.camera.trackingState else {
+            cursor = nil
+            updatePreview()
+            return
+        }
+        cursor = Measurer.depthPoint(frame) ?? Measurer.surfacePoint(frame, session: session)
+        updatePreview()
+    }
+
+    // MARK: Finding the point under the crosshair
+
+    /// The LiDAR depth in the middle of the picture (the median of the middle 3 by 3 readings),
+    /// along the ray through the middle of the screen.
+    static func depthPoint(_ frame: ARFrame) -> SIMD3<Float>? {
+        guard let map = (frame.smoothedSceneDepth ?? frame.sceneDepth)?.depthMap,
+            CVPixelBufferGetPixelFormatType(map) == kCVPixelFormatType_DepthFloat32
+        else { return nil }
+        CVPixelBufferLockBaseAddress(map, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(map, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(map) else { return nil }
+        let width = CVPixelBufferGetWidth(map)
+        let height = CVPixelBufferGetHeight(map)
+        let row = CVPixelBufferGetBytesPerRow(map)
+        var readings: [Float] = []
+        for dy in -1...1 {
+            for dx in -1...1 {
+                let x = width / 2 + dx
+                let y = height / 2 + dy
+                guard x >= 0, y >= 0, x < width, y < height else { continue }
+                let value = base.advanced(by: y * row).assumingMemoryBound(to: Float32.self)[x]
+                if value.isFinite && value > 0.05 && value < 6 { readings.append(value) }
+            }
+        }
+        guard readings.count >= 5 else { return nil }
+        let depth = readings.sorted()[readings.count / 2]
+        let k = frame.camera.intrinsics
+        let size = frame.camera.imageResolution
+        // ARKit's camera looks down -z with y up; the picture counts y down.
+        let x = (Float(size.width) / 2 - k[2][0]) / k[0][0]
+        let y = -(Float(size.height) / 2 - k[2][1]) / k[1][1]
+        let world = frame.camera.transform * SIMD4(x * depth, y * depth, -depth, 1)
+        return SIMD3(world.x, world.y, world.z)
+    }
+
+    /// Where the middle of the screen meets a surface ARKit has found or estimates.
+    static func surfacePoint(_ frame: ARFrame, session: ARSession) -> SIMD3<Float>? {
+        let query = frame.raycastQuery(from: CGPoint(x: 0.5, y: 0.5), allowing: .estimatedPlane, alignment: .any)
+        guard let hit = session.raycast(query).first else { return nil }
+        let p = hit.worldTransform.columns.3
+        return SIMD3(p.x, p.y, p.z)
+    }
+
+    // MARK: Drawing
+
+    /// Millimetres are noise from a phone: tenths of a centimetre up to a metre, then centimetres.
+    static func text(_ metres: Float) -> String {
+        if metres < 1 { return String(format: "%.1f cm", metres * 100) }
+        return String(format: "%.2f m", metres)
+    }
+
+    private func array(_ p: SIMD3<Float>) -> [Float] { [p.x, p.y, p.z] }
+
+    /// How tall labels are: readable from where the phone is now.
+    private func labelHeight(at p: SIMD3<Float>) -> Float {
+        guard let camera = session.currentFrame?.camera.transform.columns.3 else { return 0.03 }
+        let distance = simd_distance(p, SIMD3(camera.x, camera.y, camera.z))
+        return min(max(distance * 0.035, 0.012), 0.12)
+    }
+
+    private func rebuild() {
+        root.childNodes.forEach { $0.removeFromParentNode() }
+        for measurement in measurements {
+            root.addChildNode(node(for: measurement.start, measurement.end, axes: showAxes))
+        }
+        for note in notes {
+            let pin = SCNNode()
+            let height = labelHeight(at: note.spot)
+            pin.addChildNode(Measurer.dot(at: note.spot, radius: max(height * 0.18, 0.004), colour: Measurer.noteColour))
+            pin.addChildNode(Measurer.line(from: note.spot, to: note.spot + SIMD3(0, height * 1.2, 0), radius: max(height * 0.04, 0.001), colour: Measurer.noteColour))
+            pin.addChildNode(ModelDimensions.tag(note.text, colour: Measurer.noteColour, height: height, at: note.spot + SIMD3(0, height * 1.8, 0)))
+            root.addChildNode(pin)
+        }
+        ModelDimensions.onTop(root)
+    }
+
+    /// A measured line with its length; with axes, its level part and upright part beside it.
+    private func node(for a: SIMD3<Float>, _ b: SIMD3<Float>, axes: Bool) -> SCNNode {
+        let node = SCNNode()
+        let middle = (a + b) / 2
+        let height = labelHeight(at: middle)
+        let radius = max(height * 0.05, 0.0012)
+        node.addChildNode(Measurer.line(from: a, to: b, radius: radius, colour: Measurer.lineColour))
+        node.addChildNode(Measurer.dot(at: a, radius: radius * 3, colour: .white))
+        node.addChildNode(Measurer.dot(at: b, radius: radius * 3, colour: .white))
+        node.addChildNode(ModelDimensions.tag(Measurer.text(simd_distance(a, b)), colour: Measurer.lineColour, height: height, at: middle + SIMD3(0, height * 0.9, 0)))
+        guard axes else { return node }
+        let low = a.y <= b.y ? a : b
+        let high = a.y <= b.y ? b : a
+        let corner = SIMD3(high.x, low.y, high.z)
+        let level = simd_distance(low, corner)
+        let rise = high.y - low.y
+        // Only when the line really slopes; a level or upright line is its own axis.
+        guard level > 0.01, rise > 0.01 else { return node }
+        node.addChildNode(Measurer.line(from: low, to: corner, radius: radius * 0.6, colour: ModelDimensions.depth.withAlphaComponent(0.85)))
+        node.addChildNode(Measurer.line(from: corner, to: high, radius: radius * 0.6, colour: ModelDimensions.height.withAlphaComponent(0.85)))
+        node.addChildNode(ModelDimensions.tag("↔ " + Measurer.text(level), colour: ModelDimensions.depth, height: height * 0.8,
+                                              at: (low + corner) / 2 - SIMD3(0, height * 0.8, 0)))
+        node.addChildNode(ModelDimensions.tag("↕ " + Measurer.text(rise), colour: ModelDimensions.height, height: height * 0.8,
+                                              at: (corner + high) / 2 + simd_normalize(corner - low) * height * 1.6))
+        return node
+    }
+
+    /// The line being drawn: from where it started to the crosshair, with its length.
+    private func updatePreview() {
+        preview.childNodes.forEach { $0.removeFromParentNode() }
+        guard active, let start else { return }
+        preview.addChildNode(Measurer.dot(at: start, radius: 0.004, colour: .white))
+        if let cursor, simd_distance(start, cursor) > 0.002 {
+            preview.addChildNode(node(for: start, cursor, axes: false))
+        }
+        ModelDimensions.onTop(preview)
+    }
+
+    static func line(from a: SIMD3<Float>, to b: SIMD3<Float>, radius: Float, colour: UIColor) -> SCNNode {
+        let length = simd_distance(a, b)
+        let node = SCNNode(geometry: SCNCylinder(radius: CGFloat(radius), height: CGFloat(max(length, 0.0005))))
+        node.geometry?.materials = [ModelDimensions.flat(colour)]
+        node.simdPosition = (a + b) / 2
+        if length > 0 {
+            // Cylinders stand along y; straight down needs a half turn, which from(_:to:) can't pick.
+            let direction = (b - a) / length
+            node.simdOrientation = simd_dot(direction, SIMD3(0, 1, 0)) < -0.9999
+                ? simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))
+                : simd_quatf(from: SIMD3(0, 1, 0), to: direction)
+        }
+        return node
+    }
+
+    static func dot(at p: SIMD3<Float>, radius: Float, colour: UIColor) -> SCNNode {
+        let node = SCNNode(geometry: SCNSphere(radius: CGFloat(radius)))
+        node.geometry?.materials = [ModelDimensions.flat(colour)]
+        node.simdPosition = p
+        return node
+    }
+}
+
+/// Over the camera while measuring: the crosshair and what it reads.
+struct MeasureReticle: View {
+    @ObservedObject var measurer: Measurer
+
+    var body: some View {
+        if measurer.active {
+            let found = measurer.cursor != nil
+            // The crosshair's middle sits on the middle of the screen, the reading just under it.
+            ZStack {
+                Circle().stroke(found ? Color.yellow : Color.white.opacity(0.6), lineWidth: 2).frame(width: 34, height: 34)
+                Circle().fill(found ? Color.yellow : Color.white.opacity(0.6)).frame(width: 6, height: 6)
+                Text(measurer.readout)
+                    .font(.subheadline.bold().monospacedDigit())
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.55), in: Capsule())
+                    .foregroundStyle(.white)
+                    .fixedSize()
+                    .offset(y: 40)
+            }
+            .shadow(color: .black.opacity(0.5), radius: 2)
+            .allowsHitTesting(false)
+        }
+    }
+}
+
+/// The measuring buttons, above the bottom controls while measuring.
+struct MeasureBar: View {
+    @ObservedObject var measurer: Measurer
+    @State private var writing = false
+    @State private var draft = ""
+    @State private var confirmingClear = false
+
+    var body: some View {
+        if measurer.active {
+            HStack(spacing: 18) {
+                small("arrow.uturn.backward", "Undo") { measurer.undo() }
+                    .disabled(measurer.start == nil && measurer.isEmpty)
+                small(measurer.showAxes ? "move.3d" : "line.diagonal", measurer.showAxes ? "Axes on" : "Axes off") {
+                    measurer.showAxes.toggle()
+                }
+                Button { measurer.addPoint() } label: {
+                    Image(systemName: measurer.start == nil ? "plus" : "checkmark")
+                        .font(.title.bold())
+                        .frame(width: 62, height: 62)
+                        .background(Color.yellow, in: Circle())
+                        .foregroundStyle(.black)
+                }
+                .accessibilityLabel(measurer.start == nil ? "Start a measurement here" : "End the measurement here")
+                small("text.bubble", "Note") {
+                    draft = ""
+                    writing = true
+                }
+                .disabled(measurer.cursor == nil)
+                small("trash", "Clear") { confirmingClear = true }
+                    .disabled(measurer.isEmpty)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.black.opacity(0.45), in: Capsule())
+            .alert("Note at the crosshair", isPresented: $writing) {
+                TextField("For example: cup handle faces camera", text: $draft)
+                Button("Cancel", role: .cancel) {}
+                Button("Add") { measurer.addNote(draft) }
+            }
+            .confirmationDialog("Remove every measurement and note?", isPresented: $confirmingClear, titleVisibility: .visible) {
+                Button("Remove all", role: .destructive) { measurer.clear() }
+            }
+        }
+    }
+
+    private func small(_ symbol: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Image(systemName: symbol).font(.title3)
+                Text(title).font(.system(size: 10, weight: .semibold))
+            }
+            .frame(minWidth: 40)
+            .foregroundStyle(.white)
+        }
+        .accessibilityLabel(title)
+    }
+}
+
+/// The top-bar ruler that turns measuring on and off.
+struct MeasureToggle: View {
+    @ObservedObject var measurer: Measurer
+
+    var body: some View {
+        Button {
+            Haptics.tap()
+            measurer.active.toggle()
+        } label: {
+            Image(systemName: "ruler").font(.title3)
+                .foregroundStyle(measurer.active ? Color.yellow : Color.white)
+        }
+        .accessibilityLabel(measurer.active ? "Stop measuring" : "Measure")
+    }
+}

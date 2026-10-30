@@ -71,10 +71,11 @@ struct CameraHome: View {
     @State private var lastPhoto: UIImage?
     @State private var lastPhotoTask: Task<Void, Never>?
     @State private var sharingPhoto: UIImage?
+    @State private var sketching: UIImage?
     @AppStorage("saveToPhotos") private var saveToPhotos = true
 
     enum Panel: Identifiable {
-        case takeLog(UUID), compare(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery, sharePhoto, sync
+        case takeLog(UUID), compare(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery, sharePhoto, sync, sketch
 
         var id: String {
             switch self {
@@ -87,6 +88,7 @@ struct CameraHome: View {
             case .gallery: return "gallery"
             case .sharePhoto: return "share"
             case .sync: return "sync"
+            case .sketch: return "sketch"
             }
         }
     }
@@ -120,16 +122,29 @@ struct CameraHome: View {
         }
         .overlay(alignment: .bottomTrailing) {
             if lastPhoto != nil {
-                Button {
-                    sharingPhoto = lastPhoto
-                    panel = .sharePhoto
-                } label: {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                        .font(.subheadline.bold())
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Color.yellow, in: Capsule())
-                        .foregroundStyle(.black)
+                HStack(spacing: 8) {
+                    Button {
+                        sketching = lastPhoto
+                        panel = .sketch
+                    } label: {
+                        Label("Sketch", systemImage: "pencil.tip")
+                            .font(.subheadline.bold())
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Color.white, in: Capsule())
+                            .foregroundStyle(.black)
+                    }
+                    Button {
+                        sharingPhoto = lastPhoto
+                        panel = .sharePhoto
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                            .font(.subheadline.bold())
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Color.yellow, in: Capsule())
+                            .foregroundStyle(.black)
+                    }
                 }
                 .padding(.trailing, 16)
                 .padding(.bottom, 100)
@@ -307,6 +322,11 @@ struct CameraHome: View {
                     case .pdf: self.panel = .pdf(reference.id)
                     case .delete: deleting = reference
                     case .photos: exportPhotos(reference)
+                    case .sketch:
+                        if let photo = PhotoLibrary.images(of: reference).first {
+                            sketching = photo
+                            self.panel = .sketch
+                        }
                     }
                 }
             }
@@ -314,6 +334,8 @@ struct CameraHome: View {
             if let sharingPhoto { ShareSheet(items: [sharingPhoto]) }
         case .sync:
             ReferenceSyncView()
+        case .sketch:
+            if let sketching { SketchEditor(photo: sketching) }
         }
     }
 }
@@ -595,6 +617,7 @@ struct TopPill: View {
 enum Haptics {
     @MainActor static func tap() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
     @MainActor static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+    @MainActor static func warning() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
 }
 
 /// A status line over the camera.
@@ -682,7 +705,7 @@ struct ReferenceThumbnail: View {
 /// older ones, tap Load (or double-tap the photo) to bring up its ghost. The grid button shows them
 /// all by scene. Press and hold a photo for its take log, compare, report, slate or delete.
 struct Gallery: View {
-    enum Action { case takeLog, compare, slate, pdf, delete, photos }
+    enum Action { case takeLog, compare, slate, pdf, delete, photos, sketch }
 
     @Environment(\.dismiss) private var dismiss
     /// Oldest first, so the newest is the last page, as in Photos.
@@ -868,6 +891,7 @@ struct Gallery: View {
         Button { dismiss(); action(.compare, reference) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
         Button { dismiss(); action(.pdf, reference) } label: { Label("Share PDF report", systemImage: "square.and.arrow.up") }
         Button { dismiss(); action(.photos, reference) } label: { Label("Save photos to Photos", systemImage: "photo.on.rectangle.angled") }
+        Button { dismiss(); action(.sketch, reference) } label: { Label("Sketch on the photo", systemImage: "pencil.tip.crop.circle") }
         Button { dismiss(); action(.slate, reference) } label: { Label("Edit slate", systemImage: "pencil") }
         Button(role: .destructive) { dismiss(); action(.delete, reference) } label: { Label("Delete", systemImage: "trash") }
     }
@@ -996,6 +1020,8 @@ struct CaptureStage: View {
                     .disabled(recorder.capturing)
                     .accessibilityLabel(useLiDAR ? "LiDAR on" : "LiDAR off")
                 }
+                MeasureToggle(measurer: recorder.measurer)
+                    .disabled(recorder.capturing)
                 Button { open(.help) } label: { Image(systemName: "questionmark.circle").font(.title3) }
                     .accessibilityLabel("Help")
             }
@@ -1021,6 +1047,7 @@ struct CaptureStage: View {
                         .transition(.opacity)
                 }
                 ModelSizeBadge(placer: recorder.placer)
+                MeasureReticle(measurer: recorder.measurer)
                 if mode == .snapshot && (recorder.pendingSave || recorder.saving || justSaved) {
                     ScanProgressOverlay(
                         progress: justSaved ? 1 : recorder.scanProgress, saved: justSaved,
@@ -1033,6 +1060,7 @@ struct CaptureStage: View {
                         .onAppear { timeBearingsHint(recorder.trackingNormal) }
                         .onChange(of: recorder.trackingNormal) { _, normal in timeBearingsHint(normal) }
                     Spacer()
+                    MeasureBar(measurer: recorder.measurer)
                     ModelOverlay(placer: recorder.placer)
                     if let error = recorder.error {
                         Text(error).font(.callout).padding(10)
@@ -1079,6 +1107,9 @@ struct CaptureStage: View {
             recorder.prepare(useLiDAR: useLiDAR)
         }
         .onDisappear { recorder.stop() }
+        .onChange(of: recorder.capturing) { _, capturing in
+            if capturing { recorder.measurer.active = false }
+        }
         .onChange(of: showPoints) { _, show in
             holder.view?.debugOptions = show ? [.showFeaturePoints] : []
         }
@@ -1263,6 +1294,17 @@ struct ResetStage: View {
             reference.models = models
             save()
         }
+        .onReceive(restorer.measurer.$revision.dropFirst()) { _ in
+            reference.measurements = restorer.measurer.measurements
+            reference.notes = restorer.measurer.notes
+            reference.removedMarks = restorer.measurer.removed
+            save()
+        }
+        .onChange(of: reference.measurements) { _, _ in followSyncedMarks() }
+        .onChange(of: reference.notes) { _, _ in followSyncedMarks() }
+        .onChange(of: restorer.paused) { _, paused in
+            if paused { restorer.measurer.active = false }
+        }
         .onChange(of: restorer.matched) { _, matched in
             if matched { Diagnostics.log("Edge guides all seated") }
         }
@@ -1338,6 +1380,10 @@ struct ResetStage: View {
                     }
                     .accessibilityLabel(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow the camera")
                 }
+            }
+            if !restorer.paused {
+                MeasureToggle(measurer: restorer.measurer)
+                    .disabled(restorer.status != .ready)
             }
             Menu {
                 Button { open(.gallery) } label: { Label("References", systemImage: "photo.on.rectangle") }
@@ -1429,6 +1475,7 @@ struct ResetStage: View {
                     if restorer.paused {
                         ScrubCursor(value: toNow, start: "THEN", end: "NOW")
                     } else {
+                        MeasureBar(measurer: restorer.measurer)
                         ModelOverlay(placer: restorer.placer)
                         if swipingStrength {
                             ScrubCursor(value: 1 - ghostOpacity, start: "THEN", end: "NOW")
@@ -1439,6 +1486,9 @@ struct ResetStage: View {
                 .padding(8)
                 .clearOfControls()
                 ModelSizeBadge(placer: restorer.placer)
+                if !restorer.paused {
+                    MeasureReticle(measurer: restorer.measurer)
+                }
             }
             .overlay {
                 if let tagsValue {
@@ -1567,6 +1617,13 @@ struct ResetStage: View {
 
     private func save() {
         try? ReferenceStore.save(reference)
+    }
+
+    /// A teammate's measurements or notes arrived by sync: show them.
+    private func followSyncedMarks() {
+        let measurer = restorer.measurer
+        guard reference.measurements != measurer.measurements || reference.notes != measurer.notes else { return }
+        measurer.load(measurements: reference.measurements, notes: reference.notes, removed: reference.removedMarks)
     }
 }
 

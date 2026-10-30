@@ -75,7 +75,7 @@ enum ModelDimensions {
     }
 
     /// The length on a dark rounded tag, `height` metres tall, turned to face the camera.
-    private static func tag(_ text: String, colour: UIColor, height: Float, at position: SIMD3<Float>) -> SCNNode {
+    static func tag(_ text: String, colour: UIColor, height: Float, at position: SIMD3<Float>) -> SCNNode {
         let font = UIFont.monospacedDigitSystemFont(ofSize: 44, weight: .bold)
         let textSize = (text as NSString).size(withAttributes: [.font: font])
         let size = CGSize(width: ceil(textSize.width) + 40, height: ceil(textSize.height) + 20)
@@ -105,7 +105,7 @@ enum ModelDimensions {
     }
 
     /// Unlit and drawn over the model and the room, like a drawing on the screen.
-    private static func flat(_ colour: UIColor) -> SCNMaterial {
+    static func flat(_ colour: UIColor) -> SCNMaterial {
         let material = SCNMaterial()
         material.lightingModel = .constant
         material.diffuse.contents = colour
@@ -114,7 +114,7 @@ enum ModelDimensions {
         return material
     }
 
-    private static func onTop(_ node: SCNNode) {
+    static func onTop(_ node: SCNNode) {
         node.renderingOrder = 1000
         node.childNodes.forEach(onTop)
     }

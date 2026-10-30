@@ -202,6 +202,9 @@ final class ReferenceSyncLibrary: SyncLibrary {
             result.snapshots = []
             result.models = []
             result.removedTakes = []
+            result.measurements = []
+            result.notes = []
+            result.removedMarks = []
         }
 
         result.keyframes = result.keyframes.map { upgraded($0, from: incoming.keyframes) }
@@ -251,6 +254,18 @@ final class ReferenceSyncLibrary: SyncLibrary {
                 result.models.append(model)
             }
         }
+        // Measurements and notes never change once made: new ones are added, deleted ones go.
+        let unmarked = Set(result.removedMarks)
+        result.removedMarks += incoming.removedMarks.filter { !unmarked.contains($0) }.sorted { $0.uuidString < $1.uuidString }
+        let goneMarks = Set(result.removedMarks)
+        for measurement in incoming.measurements where !goneMarks.contains(measurement.id) && !result.measurements.contains(where: { $0.id == measurement.id }) {
+            result.measurements.append(measurement)
+        }
+        for note in incoming.notes where !goneMarks.contains(note.id) && !result.notes.contains(where: { $0.id == note.id }) {
+            result.notes.append(note)
+        }
+        result.measurements.removeAll { goneMarks.contains($0.id) }
+        result.notes.removeAll { goneMarks.contains($0.id) }
         return result
     }
 
