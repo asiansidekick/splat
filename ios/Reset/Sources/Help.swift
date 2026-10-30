@@ -4,6 +4,7 @@ import SwiftUI
 struct HelpView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("saveToPhotos") private var saveToPhotos = true
+    @AppStorage("leftHanded") private var leftHanded = false
 
     var body: some View {
         NavigationStack {
@@ -25,6 +26,10 @@ struct HelpView: View {
                     step("square.fill", "With LiDAR, red marks something in front of where it was, blue where something is missing.")
                     step("checkmark.circle", "Log logs the take in one tap. Press and hold it to add a note. The shutter saves a snapshot to compare later.")
                     step("xmark", "The cross at the top goes back to recording.")
+                }
+                Section("Controls") {
+                    Toggle("Left-handed controls", isOn: $leftHanded)
+                    step("hand.raised", "Puts the controls down the left edge when the phone is turned sideways, and swaps Pause and Log.")
                 }
                 Section("Photos") {
                     Toggle("Save shutter photos to Photos", isOn: $saveToPhotos)

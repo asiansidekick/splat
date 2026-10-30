@@ -345,6 +345,8 @@ struct NextSlateSheet: View {
 struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutter: View, Trailing: View>: View {
     /// Dark bars behind the controls. Without them the controls float straight on the picture.
     var bars = true
+    /// Left-handed: in landscape the control column runs down the left edge instead.
+    @AppStorage("leftHanded") var leftHanded = false
     @ViewBuilder let top: () -> Top
     @ViewBuilder let preview: () -> Preview
     @ViewBuilder let modes: (_ vertical: Bool) -> Modes
@@ -360,8 +362,11 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
         GeometryReader { geometry in
             let landscape = geometry.size.width > geometry.size.height
             let safe = geometry.safeAreaInsets
+            let left = leftHanded
             let insets = landscape
-                ? EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom, trailing: max(safe.trailing, Self.sideWidth))
+                ? (left
+                    ? EdgeInsets(top: safe.top + Self.topHeight, leading: max(safe.leading, Self.sideWidth), bottom: safe.bottom, trailing: safe.trailing)
+                    : EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom, trailing: max(safe.trailing, Self.sideWidth)))
                 : EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom + Self.bottomHeight, trailing: safe.trailing)
             ZStack {
                 VStack(spacing: 0) {
@@ -387,10 +392,11 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .background(shade(.top, .bottom).ignoresSafeArea(edges: .bottom))
                     }
                 }
-                .padding(.trailing, landscape ? max(0, Self.sideWidth - safe.trailing) : 0)
+                .padding(.trailing, landscape && !left ? max(0, Self.sideWidth - safe.trailing) : 0)
+                .padding(.leading, landscape && left ? max(0, Self.sideWidth - safe.leading) : 0)
                 if landscape {
                     HStack(spacing: 0) {
-                        Spacer(minLength: 0)
+                        if !left { Spacer(minLength: 0) }
                         VStack(spacing: 14) {
                             trailing()
                             Spacer(minLength: 0)
@@ -402,11 +408,12 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .padding(.vertical, 8)
                         .frame(width: Self.sideWidth)
                         .frame(maxHeight: .infinity)
-                        .background(shade(.leading, .trailing).ignoresSafeArea(edges: [.top, .bottom]))
+                        .background((left ? shade(.trailing, .leading) : shade(.leading, .trailing)).ignoresSafeArea(edges: [.top, .bottom]))
+                        if left { Spacer(minLength: 0) }
                     }
                     // Right against the edge of the screen, like the Camera app, not inset by the
                     // safe area, which only leaves an empty strip.
-                    .ignoresSafeArea(edges: .trailing)
+                    .ignoresSafeArea(edges: left ? .leading : .trailing)
                 }
             }
             .background {
