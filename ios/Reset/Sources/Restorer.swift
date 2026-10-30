@@ -438,15 +438,25 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let live = CIImage(cvPixelBuffer: frame.capturedImage)
         let placement = Placement(display: frame.displayTransform(for: orientation, viewportSize: viewport), viewport: viewport)
         let keyframe = lockedKeyframe ?? current
-        // The reference is shown exactly as shot (not turned or stretched onto the frame), so
-        // the compare is clean: Phil found the turned one messy.
-        let source: CIImage? = nil
-        let warp: Warp? = nil
+        // THEN is the ghost exactly as it was on screen when paused: the same photo turned the
+        // same way for this frame's camera, so what was lined up live stays lined up. (Showing
+        // the photo as shot instead left it offset, Phil, 2026-10-30.)
+        var source: CIImage?
+        var warp: Warp?
+        heldPhoto = nil
         if let keyframe {
+            // Shown only when the ghost cannot be drawn (none yet, or the phone faces away).
             let url = ReferenceStore.folder(for: reference.id).appendingPathComponent(keyframe.imageFile)
             heldPhoto = UIImage(contentsOfFile: url.path)?.cgImage.map {
                 UIImage(cgImage: $0, scale: 1, orientation: keyframe.uprightOrientation)
             }
+        }
+        if let keyframe, let ghostSource, ghostSource.id == keyframe.id {
+            source = ghostSource.image
+            warp = Warp(
+                reference: keyframe.cameraToWorld, referenceIntrinsics: keyframe.cameraIntrinsics,
+                referenceSize: CGSize(width: keyframe.imageWidth, height: keyframe.imageHeight),
+                live: frame.camera.transform, liveIntrinsics: frame.camera.intrinsics, liveSize: frame.camera.imageResolution)
         }
         let context = ciContext
         let layout = (orientation, viewport)
@@ -463,7 +473,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
                 self.heldParts = (frame, live, placed.image, placed.registered)
                 self.heldLayout = layout
                 self.held = built
-                Diagnostics.log("Paused: reference \(built.registered ? "stretched by the pictures" : source == nil ? "none" : "turned by the phone")")
+                Diagnostics.log("Paused: reference \(built.reference != nil ? "as the ghost was" : self.heldPhoto != nil ? "photo as shot" : "none")")
             }
         }
     }

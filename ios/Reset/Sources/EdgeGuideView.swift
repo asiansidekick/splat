@@ -113,6 +113,63 @@ struct EdgeGuideOverlay: View {
     }
 }
 
+/// Watches taps on the whole window without taking them. On device, taps on the Pause button
+/// in landscape never reached it although it showed (something above swallowed them), so a tap
+/// inside a watched control's frame runs its action from here too and logs what was on top.
+/// Actions given here must ignore a second call that comes straight after the first.
+final class WindowTapCatcher: NSObject, UIGestureRecognizerDelegate {
+    /// Watched controls, in window coordinates (SwiftUI's global space). No action: just logged.
+    var targets: [String: (frame: CGRect, action: (() -> Void)?)] = [:]
+    private var recognizer: UITapGestureRecognizer?
+    private weak var window: UIWindow?
+
+    @MainActor func install() {
+        guard recognizer == nil else { return }
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        guard let window = windows.first(where: \.isKeyWindow) ?? windows.first else { return }
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
+        tap.cancelsTouchesInView = false
+        tap.delaysTouchesBegan = false
+        tap.delaysTouchesEnded = false
+        tap.delegate = self
+        window.addGestureRecognizer(tap)
+        recognizer = tap
+        self.window = window
+    }
+
+    @MainActor func remove() {
+        if let recognizer { window?.removeGestureRecognizer(recognizer) }
+        recognizer = nil
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
+    }
+
+    @MainActor @objc private func tapped(_ gesture: UITapGestureRecognizer) {
+        guard let window else { return }
+        let point = gesture.location(in: window)
+        for (name, target) in targets where target.frame.insetBy(dx: -6, dy: -6).contains(point) {
+            let top = window.hitTest(point, with: nil).map { String(describing: type(of: $0)) } ?? "nothing"
+            Diagnostics.log("Tap on \(name) (\(Screen.orientation.isLandscape ? "landscape" : "portrait")), top view \(top)")
+            target.action?()
+        }
+    }
+}
+
+/// Reports a view's frame in window coordinates as it changes.
+struct WindowFrame: ViewModifier {
+    let changed: (CGRect) -> Void
+
+    func body(content: Content) -> some View {
+        content.background(GeometryReader { geometry in
+            Color.clear
+                .onAppear { changed(geometry.frame(in: .global)) }
+                .onChange(of: geometry.frame(in: .global)) { _, frame in changed(frame) }
+        })
+    }
+}
+
 /// Pause and play, the same size and in the same spot.
 struct PauseButton: View {
     let paused: Bool

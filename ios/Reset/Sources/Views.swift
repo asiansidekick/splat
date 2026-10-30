@@ -1156,6 +1156,11 @@ struct CaptureStage: View {
 
 // MARK: - Reset
 
+/// A time kept by reference, so closures captured from older copies of a view share it.
+final class LastTime {
+    var date = Date.distantPast
+}
+
 /// Putting a set back: the reference's ghost over the live camera, with edge guides to line it
 /// up. The shutter saves a snapshot, Log logs the take, and Pause freezes the picture to fade or
 /// wipe between the reference and now.
@@ -1183,6 +1188,8 @@ struct ResetStage: View {
     @State private var importingModel = false
     @State private var notingTake: Take?
     @State private var holder = CameraViewHolder()
+    @State private var tapCatcher = WindowTapCatcher()
+    @State private var lastPauseToggle = LastTime()
 
     init(
         reference: Binding<Reference>, thumbnails: Thumbnails,
@@ -1213,6 +1220,7 @@ struct ResetStage: View {
             if leftHanded { pauseButton } else { logButton }
         } shutter: {
             ShutterButton(style: .photo, ring: restorer.matched ? .green : .white) { snapshot() }
+                .modifier(WindowFrame { frame in tapCatcher.targets["Shutter"] = (frame, nil) })
                 .disabled(restorer.status != .ready || restorer.paused)
                 .opacity(restorer.paused ? 0 : restorer.status == .ready ? 1 : 0.5)
                 .shadow(color: .black.opacity(0.5), radius: 3)
@@ -1237,13 +1245,18 @@ struct ResetStage: View {
         .onChange(of: restorer.matched) { _, matched in
             if matched { Diagnostics.log("Edge guides all seated") }
         }
-        .onDisappear { restorer.stop() }
+        .onAppear { tapCatcher.install() }
+        .onDisappear {
+            tapCatcher.remove()
+            restorer.stop()
+        }
     }
 
     private var logButton: some View {
         SideButton(title: "Log T\(reference.nextTakeNumber)", systemImage: "checkmark.circle", tint: .yellow) {
             logTake()
         }
+        .modifier(WindowFrame { frame in tapCatcher.targets["Log"] = (frame, nil) })
         .shadow(color: .black.opacity(0.6), radius: 3)
         .contextMenu {
             Button { notingTake = newTake() } label: { Label("Log with a note", systemImage: "square.and.pencil") }
@@ -1256,6 +1269,7 @@ struct ResetStage: View {
 
     private var pauseButton: some View {
         PauseButton(paused: restorer.paused) { togglePause() }
+            .modifier(WindowFrame { frame in tapCatcher.targets["Pause"] = (frame, { togglePause() }) })
     }
 
     private var topBar: some View {
@@ -1454,6 +1468,10 @@ struct ResetStage: View {
     }
 
     private func togglePause() {
+        // The button and the window's tap watcher can both fire for one tap: act once.
+        let now = Date()
+        guard now.timeIntervalSince(lastPauseToggle.date) > 0.4 else { return }
+        lastPauseToggle.date = now
         Diagnostics.log("Pause toggled: \(restorer.paused ? "resume" : "pause"), \(Screen.orientation.isLandscape ? "landscape" : "portrait"), status \(restorer.status)")
         if restorer.paused {
             restorer.resume()
