@@ -307,7 +307,8 @@ final class Guide: ObservableObject {
 /// The guide, kept to the edges and corners of the screen so the face, hair and costume stay clear.
 /// Two things: a frame (where the reference's corners are now, in yellow, against the screen's
 /// corners in white; when they meet, it's lined up), and one big instruction at a time in camera
-/// words: MOVE (slide the phone), PAN or TILT (aim it), ROTATE (twist it level), STEP IN or BACK.
+/// words: MOVE (slide the phone), PAN or TILT (aim it), ROTATE (twist it level), STEP IN or BACK
+/// (BRING PHONE CLOSER or HOLD PHONE FURTHER on the front camera).
 struct EdgeGuide: View {
     let reading: GuideReading?
     let cue: GuideCue?
@@ -408,7 +409,10 @@ struct EdgeGuide: View {
                 Image(systemName: "arrow.right.to.line").font(.system(size: 76, weight: .bold))
             }
         case .step(let closer):
-            centre(word: (closer ? "STEP IN" : "STEP BACK") + Self.metres(reading?.stepMetres), in: size) {
+            // Front camera: the phone is usually at arm's length facing the person, so it's the
+            // phone that moves, not the photographer's feet.
+            let words = mirrored ? (closer ? "BRING PHONE CLOSER" : "HOLD PHONE FURTHER") : (closer ? "STEP IN" : "STEP BACK")
+            centre(word: words + Self.metres(reading?.stepMetres), in: size) {
                 Image(systemName: closer ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                     .font(.system(size: 72, weight: .bold))
                     .phaseAnimator([1.0, closer ? 0.8 : 1.2]) { content, scale in
