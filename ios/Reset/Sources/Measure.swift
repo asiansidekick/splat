@@ -46,9 +46,21 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var dragDetail = ""
     private var dragView: ARSCNView?
     private var dragLocation: CGPoint?
+    private var dragFinger: CGPoint = .zero
     private var dragSamples: [DragLine] = []
     private var dragSampleTime: TimeInterval = 0
     private var dragTooClose = false
+    /// Where the finger is, the point it is aiming at above it, and where the corner snap put
+    /// that point, all in screen points, so the aim can be drawn where it can be seen.
+    struct Pointer: Equatable {
+        var finger: CGPoint
+        var aim: CGPoint
+        var landed: CGPoint
+        var start: CGPoint
+    }
+    @Published private(set) var pointer: Pointer?
+    /// The aim point sits this far above the finger, so the finger never hides it.
+    static let aimOffset: CGFloat = 70
     /// The crosshair is nearer than the LiDAR can read.
     @Published private(set) var tooClose = false
     private var drawStart: CGPoint = .zero
@@ -161,7 +173,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         case .began:
             // The pan starts a few points into the drag: the line starts where the finger went down.
             let moved = gesture.translation(in: view)
-            drawStart = CGPoint(x: location.x - moved.x, y: location.y - moved.y)
+            drawStart = Measurer.aim(for: CGPoint(x: location.x - moved.x, y: location.y - moved.y), in: view)
             start = nil
             selected = nil
             updateDrag(to: location, in: view)
@@ -169,13 +181,14 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             updateDrag(to: location, in: view)
         case .ended:
             updateDrag(to: location, in: view)
-            finishDrag(screenLength: hypot(location.x - drawStart.x, location.y - drawStart.y))
+            finishDrag(screenLength: hypot(Measurer.aim(for: location, in: view).x - drawStart.x, Measurer.aim(for: location, in: view).y - drawStart.y))
         default:
             endDrag()
         }
     }
 
     private func endDrag() {
+        pointer = nil
         drag = nil
         dragLocation = nil
         dragView = nil
@@ -186,8 +199,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     private func updateDrag(to location: CGPoint, in view: ARSCNView) {
         // Moving the finger starts the averaging again; holding it still builds it up.
-        if let last = dragLocation, hypot(last.x - location.x, last.y - location.y) > 1.5 { dragSamples = [] }
-        dragLocation = location
+        let aim = Measurer.aim(for: location, in: view)
+        if let last = dragLocation, hypot(last.x - aim.x, last.y - aim.y) > 1.5 { dragSamples = [] }
+        dragFinger = location
+        dragLocation = aim
         dragView = view
         sampleDrag()
     }
@@ -203,9 +218,14 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         else {
             dragSamples = []
             drag = nil
+            pointer = nil
             updatePreview()
             return
         }
+        pointer = Pointer(
+            finger: dragFinger, aim: location,
+            landed: Measurer.screenPoint(of: b.normalized, frame: frame, view: view),
+            start: Measurer.screenPoint(of: a.normalized, frame: frame, view: view))
         dragSamples.append(DragLine(a: a.point, b: b.point))
         if dragSamples.count > 8 { dragSamples.removeFirst() }
         let line = DragLine(a: Measurer.median(dragSamples.map(\.a)), b: Measurer.median(dragSamples.map(\.b)))
@@ -532,7 +552,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     /// Like `point`, and with `snap` first moves the place onto the sharp corner nearest to it in
     /// the camera picture, if there is a clear one. Says whether it moved.
-    static func locate(in frame: ARFrame, depth: Depth, at location: CGPoint, view: UIView, snap: Bool) -> (point: SIMD3<Float>, snapped: Bool)? {
+    static func locate(in frame: ARFrame, depth: Depth, at location: CGPoint, view: UIView, snap: Bool) -> (point: SIMD3<Float>, snapped: Bool, normalized: CGPoint)? {
         let size = view.bounds.size
         guard size.width > 0, size.height > 0 else { return nil }
         // From the view's points to the camera picture's own 0 to 1 coordinates.
@@ -544,7 +564,19 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             moved = true
         }
         guard let point = point(in: frame, depth: depth, normalized: n) else { return nil }
-        return (point, moved)
+        return (point, moved, n)
+    }
+
+    /// The aim point for a finger: straight above it, kept on the screen.
+    static func aim(for finger: CGPoint, in view: UIView) -> CGPoint {
+        CGPoint(x: finger.x, y: max(finger.y - aimOffset, 8))
+    }
+
+    /// Where a place in the camera picture (0 to 1) shows on the screen, in points.
+    static func screenPoint(of normalized: CGPoint, frame: ARFrame, view: UIView) -> CGPoint {
+        let size = view.bounds.size
+        let shown = normalized.applying(frame.displayTransform(for: Screen.orientation, viewportSize: size))
+        return CGPoint(x: shown.x * size.width, y: shown.y * size.height)
     }
 
     /// The sharp corner nearest `n` (0 to 1 across the camera picture), found in the picture's
@@ -833,6 +865,43 @@ struct MeasureBar: View {
             .foregroundStyle(tint)
         }
         .accessibilityLabel(title)
+    }
+}
+
+/// While a line is being drawn: the aim point above the finger with a ring on it, a thin line down
+/// to the finger, and a yellow ring where the corner snap put the point.
+struct MeasurePointer: View {
+    @ObservedObject var measurer: Measurer
+
+    var body: some View {
+        GeometryReader { _ in
+            if let pointer = measurer.pointer {
+                ZStack {
+                    Path { path in
+                        path.move(to: pointer.finger)
+                        path.addLine(to: pointer.aim)
+                    }
+                    .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                    ring(at: pointer.start, colour: .white)
+                    ring(at: pointer.aim, colour: .white)
+                    if hypot(pointer.landed.x - pointer.aim.x, pointer.landed.y - pointer.aim.y) > 3 {
+                        ring(at: pointer.landed, colour: .yellow)
+                    }
+                }
+                .shadow(color: .black.opacity(0.7), radius: 2)
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .hiddenInScreenshots()
+    }
+
+    private func ring(at point: CGPoint, colour: Color) -> some View {
+        ZStack {
+            Circle().stroke(colour, lineWidth: 2).frame(width: 28, height: 28)
+            Circle().fill(colour).frame(width: 4, height: 4)
+        }
+        .position(point)
     }
 }
 

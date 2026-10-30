@@ -1104,6 +1104,7 @@ struct CaptureStage: View {
                 }
             }
         }
+        .overlay { MeasurePointer(measurer: recorder.measurer) }
         .overlay { MeasureEntry(measurer: recorder.measurer).hiddenInScreenshots() }
         .fileImporter(isPresented: $importingModels, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { recorder.placer.add(from: urls) }
@@ -1294,6 +1295,7 @@ struct ResetStage: View {
                 if leftHanded { logButton } else { pauseButton }
             }
         }
+        .overlay { MeasurePointer(measurer: restorer.measurer) }
         .overlay { MeasureEntry(measurer: restorer.measurer).hiddenInScreenshots() }
         .modifier(CaptureButtonAction { togglePause() })
         .sheet(item: $notingTake) { take in
