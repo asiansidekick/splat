@@ -37,8 +37,7 @@ defer { try? manager.removeItem(at: scratch) }
 
 /// A small JPEG, a different colour for each photo, optionally with a location and camera details
 /// as an iPhone photo imported from the Photos library would have.
-func jpeg(shade: CGFloat, private details: Bool = false) -> Data {
-    let width = 64, height = 48
+func jpeg(shade: CGFloat, private details: Bool = false, width: Int = 64, height: Int = 48) -> Data {
     let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
     context.setFillColor(CGColor(red: shade, green: 0.5, blue: 1 - shade, alpha: 1))
@@ -263,6 +262,35 @@ let empty = Board(scene: "14", subject: "Extra 3", department: .makeup, created:
 let emptyPack = try TeamPack.open(TeamPack.make(boards: [empty], content: .references, from: "", passcode: nil, root: phoneA), passcode: nil)
 let emptyResult = try TeamPack.install(emptyPack, into: phoneB, existing: [])
 expect(emptyResult.boards.count == 1 && emptyResult.report.newBoards == 1, "an empty board arrives")
+
+// MARK: Smaller photos for Messages and Mail
+
+let big = jpeg(shade: 0.4, private: true, width: 3000, height: 2000)
+expect(TeamPack.smaller(jpeg(shade: 0.4), maxPixels: 1600) == nil, "a photo already small isn't made smaller")
+if let small = TeamPack.smaller(big, maxPixels: 1600) {
+    let p = properties(small)
+    expect((p[kCGImagePropertyPixelWidth] as? Int) == 1600 && (p[kCGImagePropertyPixelHeight] as? Int) == 1067,
+           "a big photo shrinks to 1600 on its long side, same shape (\(p[kCGImagePropertyPixelWidth] ?? 0)x\(p[kCGImagePropertyPixelHeight] ?? 0))")
+    expect(TeamPack.isClean(small), "the smaller photo has no location or camera details")
+    expect(small.count < big.count, "and is a smaller file")
+} else {
+    expect(false, "a big photo can be made smaller")
+}
+var wide = Board(scene: "20", subject: "Ana", department: .costume, created: .now)
+let wideShot = Shot(taken: .now, take: 0, angle: "Front")
+let wideFolder = phoneA.appending(path: wide.id.uuidString)
+try manager.createDirectory(at: wideFolder, withIntermediateDirectories: true)
+try big.write(to: wideFolder.appending(path: wideShot.file))
+try jpeg(shade: 0.4, private: true).write(to: wideFolder.appending(path: wideShot.thumbnailFile))
+wide.shots = [wideShot]
+let mailPack = try TeamPack.make(boards: [wide], content: .all, from: "", passcode: "blue-door-42", root: phoneA, maxPixels: 1600)
+let mailOpened = try TeamPack.open(mailPack, passcode: "blue-door-42")
+let mailPhoto = mailOpened.files["\(wide.id.uuidString)/\(wideShot.file)"]
+expect(mailPhoto.map { (properties($0)[kCGImagePropertyPixelWidth] as? Int) == 1600 } == true, "Messages and Mail pack carries the smaller photo")
+expect(mailPhoto.map(TeamPack.isClean) == true && mailOpened.files["\(wide.id.uuidString)/\(wideShot.thumbnailFile)"].map(TeamPack.isClean) == true,
+       "and it and its thumbnail are clean")
+let mailInstalled = try TeamPack.install(mailOpened, into: phoneB, existing: [])
+expect(mailInstalled.report.newPhotos == 1, "a smaller-photo pack installs like any other")
 
 print(failures == 0 ? "All pack tests passed" : "\(failures) pack test(s) failed")
 exit(failures == 0 ? 0 : 1)

@@ -33,22 +33,33 @@ enum TeamPasscode {
 
 // MARK: - Sending
 
-/// The share sheet for team packs, with the online destinations (Messages, Mail, copy, print)
-/// taken out, so cast photos go by AirDrop or to Files. The pack is deleted from the phone when
-/// the sheet closes.
+/// Files on their way out of Match, deleted from the phone once the sheet closes.
+struct Outgoing: Identifiable {
+    let id = UUID()
+    let urls: [URL]
+    /// Messages and Mail allowed; otherwise AirDrop and Files only.
+    let online: Bool
+}
+
+/// The share sheet for team packs. For AirDrop, the online destinations (Messages, Mail, copy,
+/// print) are taken out, so cast photos go phone to phone or to Files. The files are deleted
+/// from the phone when the sheet closes.
 struct AirDropSheet: UIViewControllerRepresentable {
-    let url: URL
+    let outgoing: Outgoing
     var onDone: (Bool) -> Void = { _ in }
 
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-        controller.excludedActivityTypes = [
-            .message, .mail, .print, .copyToPasteboard, .assignToContact, .saveToCameraRoll, .addToReadingList,
+        let urls = outgoing.urls
+        let controller = UIActivityViewController(activityItems: urls, applicationActivities: nil)
+        var excluded: [UIActivity.ActivityType] = [
+            .print, .copyToPasteboard, .assignToContact, .saveToCameraRoll, .addToReadingList,
             .postToFacebook, .postToTwitter, .postToWeibo, .postToTencentWeibo, .postToFlickr, .postToVimeo,
             .openInIBooks, .markupAsPDF, .sharePlay, .collaborationInviteWithLink, .collaborationCopyLink,
         ]
+        if !outgoing.online { excluded += [.message, .mail] }
+        controller.excludedActivityTypes = excluded
         controller.completionWithItemsHandler = { _, completed, _, _ in
-            try? FileManager.default.removeItem(at: url)
+            urls.forEach { try? FileManager.default.removeItem(at: $0) }
             onDone(completed)
         }
         return controller
@@ -74,8 +85,15 @@ struct SendToTeamView: View {
     @AppStorage("teamLock") private var lock = true
     @State private var passcode = TeamPasscode.load() ?? ""
     @State private var making = false
-    @State private var sending: SharedFile?
+    @State private var sending: Outgoing?
     @State private var problem: String?
+    @State private var confirming: Route?
+
+    /// The ways out that aren't AirDrop.
+    private enum Route: Identifiable {
+        case online, pdf
+        var id: Self { self }
+    }
 
     init(chosen: Set<UUID>) {
         _chosen = State(initialValue: chosen)
@@ -143,6 +161,22 @@ struct SendToTeamView: View {
                     }
                 }
                 Section {
+                    Button { lock ? make(online: true) : (confirming = .online) } label: {
+                        Label("Send by Messages or Mail", systemImage: "envelope")
+                    }
+                    .disabled(picked.isEmpty || making || !passcodeOK)
+                    Button { confirming = .pdf } label: {
+                        Label("PDF for someone without Match", systemImage: "doc.richtext")
+                    }
+                    .disabled(picked.isEmpty || making)
+                } header: {
+                    Text("No AirDrop?")
+                } footer: {
+                    Text(lock
+                        ? "Messages and Mail go over the internet, but the pack stays locked on the way: only Match with the team passcode can open it. Photos are made smaller to fit. A PDF can't be locked, so send one only to people who need it."
+                        : "Messages and Mail go over the internet, and this pack isn't locked. Turn on the team passcode above unless you can't. A PDF can't be locked either.")
+                }
+                Section {
                     Text("On the AirDrop sheet, pick your teammate's phone. They tap Open in Match. Setting AirDrop to Contacts Only (Settings, General, AirDrop) stops strangers seeing your phone.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -156,17 +190,28 @@ struct SendToTeamView: View {
                     if making {
                         ProgressView()
                     } else {
-                        Button("AirDrop") { make() }
+                        Button("AirDrop") { make(online: false) }
                             .bold()
                             .disabled(picked.isEmpty || !passcodeOK)
                     }
                 }
             }
-            .sheet(item: $sending) { file in
-                AirDropSheet(url: file.url) { sent in
+            .sheet(item: $sending) { outgoing in
+                AirDropSheet(outgoing: outgoing) { sent in
                     sending = nil
                     if sent { dismiss() }
                 }
+            }
+            .confirmationDialog(confirming == .pdf ? "Send a PDF?" : "Send without a lock?",
+                                isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
+                                titleVisibility: .visible, presenting: confirming) { route in
+                Button(route == .pdf ? "Make PDF" : "Send unlocked") {
+                    if route == .pdf { makePDFs() } else { make(online: true) }
+                }
+            } message: { route in
+                Text(route == .pdf
+                    ? "A PDF can't be locked: anyone it reaches can see the photos. For the team, a locked pack is safer."
+                    : "Messages and Mail go over the internet, and anyone who gets this pack can open it.")
             }
             .alert("Send to team", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
                 Button("OK", role: .cancel) {}
@@ -176,7 +221,23 @@ struct SendToTeamView: View {
         }
     }
 
-    private func make() {
+    /// One PDF sheet per board, for people without Match (an AD, a producer).
+    private func makePDFs() {
+        let boards = picked
+        making = true
+        Task {
+            var urls: [URL] = []
+            for board in boards {
+                if let url = try? await Task.detached(priority: .userInitiated) { try BoardPDF.make(for: board) }.value {
+                    urls.append(url)
+                }
+            }
+            making = false
+            if urls.isEmpty { problem = "Could not make the PDF." } else { sending = Outgoing(urls: urls, online: true) }
+        }
+    }
+
+    private func make(online: Bool) {
         let boards = picked
         let content = content
         let from = name.trimmingCharacters(in: .whitespaces)
@@ -190,7 +251,8 @@ struct SendToTeamView: View {
         Task {
             let result = await Task.detached(priority: .userInitiated) { () -> Result<URL, Error> in
                 Result {
-                    let data = try TeamPack.make(boards: boards, content: content, from: from, passcode: code, root: BoardStore.root)
+                    let data = try TeamPack.make(boards: boards, content: content, from: from, passcode: code, root: BoardStore.root,
+                                                 maxPixels: online ? 1600 : nil)
                     try? FileManager.default.removeItem(at: url)
                     try data.write(to: url, options: [.atomic, .completeFileProtection])
                     return url
@@ -198,7 +260,7 @@ struct SendToTeamView: View {
             }.value
             making = false
             switch result {
-            case .success(let url): sending = SharedFile(url: url)
+            case .success(let url): sending = Outgoing(urls: [url], online: online)
             case .failure(let error): problem = "Could not make the pack: \(error.localizedDescription)"
             }
         }
