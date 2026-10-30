@@ -107,6 +107,8 @@ struct CaptureView: View {
         }
         .onChange(of: guideOn) { _, _ in connectGuide() }
         .onChange(of: useLiDAR) { _, _ in camera.reconfigure() }
+        // Close-ups on the macro lens: the LiDAR camera can't focus that close.
+        .onChange(of: angle) { _, value in camera.setCloseUp(value == "Close-up") }
         .onChange(of: visibleAspect) { _, _ in connectGuide() }
         .onChange(of: picked) { _, items in importPicked(items) }
         .task(id: ghostID) { await loadGhost() }
@@ -283,6 +285,7 @@ struct CaptureView: View {
                 VStack(spacing: 8) {
                     if camera.paused { Banner(text: "Camera paused. On iPad it stops while another app uses it.", tint: .red) }
                     if let error = camera.error { Banner(text: error, tint: .red) }
+                    if let notice = camera.notice { Banner(text: notice, tint: .orange) }
                     if let saveError { Banner(text: saveError, tint: .red) }
                     if let toast {
                         Text(toast)

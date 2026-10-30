@@ -33,6 +33,28 @@ jobs:
           grep "^FAIL" actor-tests.log | sed -E 's#^FAIL  (.*)$#::error title=Actor test failed::\1#'
           exit $status
 
+      # Apple's Vision on real pictures, as on the phone: the room guide on a made-up textured
+      # picture, the actor lock on a public-domain portrait (skipped if it can't be downloaded).
+      - name: Vision tests
+        working-directory: ios/Match
+        run: |
+          curl -sfL -A "MatchCI/1.0 (https://github.com/asiansidekick/splat)" -o face.jpg \
+            "https://commons.wikimedia.org/wiki/Special:FilePath/Neil_Armstrong_pose.jpg?width=900" \
+            || echo "::warning::Could not download the test portrait; face tests skipped"
+          if ! swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/ActorVision.swift Sources/Registration.swift \
+            Tests/VisionTests/main.swift -o vision-tests > compile.log 2>&1; then
+            grep -E ": error: " compile.log | sort -u | head -10 \
+              | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
+            cat compile.log | tail -40
+            exit 1
+          fi
+          set +e
+          ./vision-tests face.jpg > vision-tests.log 2>&1
+          status=$?
+          cat vision-tests.log
+          grep "^FAIL" vision-tests.log | sed -E 's#^FAIL  (.*)$#::error title=Vision test failed::\1#'
+          exit $status
+
       - name: Generate Xcode project
         working-directory: ios/Match
         run: |

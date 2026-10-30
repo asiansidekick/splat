@@ -57,8 +57,6 @@ final class Guide: ObservableObject {
     private var generation = 0
     private var lastReading = Date.distantPast
     private var linedSince: Date?
-    private nonisolated static let width: CGFloat = 480
-    private nonisolated static let actorWidth: CGFloat = 720
 
     var lockedToActor: Bool { reading?.actor == true }
 
@@ -73,8 +71,8 @@ final class Guide: ObservableObject {
         referenceCrop = whole ? nil : aspect
         liveBox = whole ? referenceAspect : nil
         self.prefersBody = prefersBody
-        let cropped = image.flatMap { CIImage(image: $0) }.map { Self.centred($0, aspect: whole ? nil : aspect) }
-        reference = cropped.map(Self.prepared)
+        let cropped = image.flatMap { CIImage(image: $0) }.map { Registration.centred($0, aspect: whole ? nil : aspect) }
+        reference = cropped.map(Registration.prepared)
         referenceFace = nil
         referenceBody = nil
         followPoint = nil
@@ -89,7 +87,7 @@ final class Guide: ObservableObject {
         linedSince = nil
         guard let cropped else { return }
         let generation = self.generation
-        let picture = Self.scaled(cropped, to: Self.actorWidth)
+        let picture = Registration.scaled(cropped, to: Registration.actorWidth)
         Task {
             let found = await Task.detached(priority: .userInitiated) { ActorVision.people(in: picture) }.value
             guard generation == self.generation else { return }
@@ -112,10 +110,10 @@ final class Guide: ObservableObject {
             guard !self.busy, let reference = self.reference else { return }
             self.busy = true
             let generation = self.generation
-            let visible = Self.centred(frame, aspect: self.aspect)
-            let cropped = Self.centred(visible, aspect: self.liveBox)
-            let live = Self.prepared(cropped)
-            let colour = Self.scaled(cropped, to: Self.actorWidth)
+            let visible = Registration.centred(frame, aspect: self.aspect)
+            let cropped = Registration.centred(visible, aspect: self.liveBox)
+            let live = Registration.prepared(cropped)
+            let colour = Registration.scaled(cropped, to: Registration.actorWidth)
             let aspect = cropped.extent.width / max(cropped.extent.height, 1)
             // Depth is read in the screen's picture; the live box sits in its middle.
             let depthSpace = LiveDepth(depth: depth, visible: self.aspect,
@@ -129,7 +127,7 @@ final class Guide: ObservableObject {
                                                              depth: depthSpace, referenceDepth: referenceDepth, referenceCrop: referenceCrop) {
                     return found
                 }
-                guard var reading = Self.read(live: live, reference: reference) else { return nil }
+                guard var reading = Registration.read(live: live, reference: reference) else { return nil }
                 // LiDAR on both: compare the distance to the reference's middle with the distance to
                 // where that middle shows now.
                 if let referenceDepth, abs(reading.move.dx) < 0.15, abs(reading.move.dy) < 0.15 {
@@ -248,56 +246,6 @@ final class Guide: ObservableObject {
         cueSince = .now
     }
 
-    private nonisolated static func read(live: CIImage, reference: CIImage) -> GuideReading? {
-        let handler = VNImageRequestHandler(ciImage: reference, options: [:])
-        let request = VNHomographicImageRegistrationRequest(targetedCIImage: live)
-        if (try? handler.perform([request])) != nil, let warp = request.results?.first?.warpTransform,
-            let reading = GuideReading.from(warp: warp, reference: reference.extent.size, live: live.extent.size),
-            reading.scale > 0.4, reading.scale < 2.5, abs(reading.turn.dx) < 1, abs(reading.turn.dy) < 1
-        {
-            return reading
-        }
-        // Too far off for a full reading: a plain shift still gives move arrows.
-        let shift = VNTranslationalImageRegistrationRequest(targetedCIImage: live)
-        guard (try? handler.perform([shift])) != nil, let t = shift.results?.first?.alignmentTransform else { return nil }
-        let width = live.extent.width
-        let height = live.extent.height
-        guard width > 0, height > 0 else { return nil }
-        // Live shifted by t lands on the reference, so the reference middle sits at -t in live
-        // pixels (Vision counts y up).
-        let dx = -t.tx / width
-        let dy = t.ty / height
-        return GuideReading(move: CGVector(dx: dx, dy: dy * height / width), turn: .zero, tilt: 0, scale: 1,
-                            corners: [CGPoint(x: dx, y: dy), CGPoint(x: 1 + dx, y: dy), CGPoint(x: 1 + dx, y: 1 + dy), CGPoint(x: dx, y: 1 + dy)])
-    }
-
-    /// The middle of a picture at the given width over height.
-    nonisolated static func centred(_ image: CIImage, aspect: CGFloat?) -> CIImage {
-        guard let aspect, aspect > 0 else { return image }
-        let e = image.extent
-        var width = e.width
-        var height = e.height
-        if width / height > aspect { width = height * aspect } else { height = width / aspect }
-        return image.cropped(to: CGRect(x: e.midX - width / 2, y: e.midY - height / 2, width: width, height: height))
-    }
-
-    /// In colour, from the origin, at the given width: for finding faces and bodies.
-    private nonisolated static func scaled(_ image: CIImage, to width: CGFloat) -> CIImage {
-        let extent = image.extent
-        let scale = min(1, width / max(extent.width, 1))
-        return image.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY)
-            .concatenating(CGAffineTransform(scaleX: scale, y: scale)))
-    }
-
-    /// Grey and small, from the origin, so lighting colour does not matter and it is quick.
-    private nonisolated static func prepared(_ image: CIImage) -> CIImage {
-        let extent = image.extent
-        let scale = width / max(extent.width, 1)
-        return image
-            .transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY)
-                .concatenating(CGAffineTransform(scaleX: scale, y: scale)))
-            .applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0])
-    }
 }
 
 // MARK: - Drawing

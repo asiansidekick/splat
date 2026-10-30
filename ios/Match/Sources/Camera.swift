@@ -25,11 +25,27 @@ final class Camera: NSObject, ObservableObject {
     private var frameAngle: CGFloat = 90
     /// Live frames for the guide, upright like saved photos, about five a second, on a background
     /// queue, with the latest LiDAR depth when there is one.
-    var onFrame: ((CIImage, DepthGrid?) -> Void)?
+    /// Set on the main thread and read on the frame queue, so kept behind a lock.
+    var onFrame: ((CIImage, DepthGrid?) -> Void)? {
+        get { frameLock.lock(); defer { frameLock.unlock() }; return frameHandler }
+        set { frameLock.lock(); frameHandler = newValue; frameLock.unlock() }
+    }
+    private var frameHandler: ((CIImage, DepthGrid?) -> Void)?
+    private let frameLock = NSLock()
     private let depthOutput = AVCaptureDepthDataOutput()
     private let depthLock = NSLock()
     private var latestDepth: DepthGrid?
+    private var latestDepthTime: CFTimeInterval = 0
     private var lastDepth: CFTimeInterval = 0
+    /// When a camera frame last arrived, to notice the LiDAR camera stalling.
+    private var lastAnyFrame: CFTimeInterval = 0
+    private var watchdog: Timer?
+    /// The LiDAR camera stalled this session: stay on the ordinary camera until the app restarts.
+    private var lidarFailed = false
+    /// Close-ups (makeup detail) use the ordinary camera, which switches to its macro lens; the
+    /// LiDAR camera is the main lens alone and can't focus that close.
+    private var closeUp = false
+    @Published private(set) var notice: String?
     /// This iPhone or iPad has a LiDAR camera, and whether it is being used now.
     @Published private(set) var hasLiDAR = false
     @Published private(set) var usingLiDAR = false
@@ -79,16 +95,43 @@ final class Camera: NSObject, ObservableObject {
                 if !self.configured { self.configure(front: false) }
                 if !self.session.isRunning { self.session.startRunning() }
             }
+            await MainActor.run { self.startWatchdog() }
         }
     }
 
     func stop() {
+        watchdog?.invalidate()
+        watchdog = nil
         queue.async { self.session.stopRunning() }
+    }
+
+    /// Some LiDAR setups stop sending frames after a few (reported by other developers). If frames
+    /// stop for three seconds while the camera should be running, go back to the ordinary camera.
+    private func startWatchdog() {
+        watchdog?.invalidate()
+        frameQueue.async { self.lastAnyFrame = CACurrentMediaTime() }
+        watchdog = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, self.usingLiDAR, !self.paused, !self.lidarFailed else { return }
+            let last = self.frameQueue.sync { self.lastAnyFrame }
+            guard CACurrentMediaTime() - last > 3 else { return }
+            self.lidarFailed = true
+            self.notice = "LiDAR camera stopped responding, so Match switched to the ordinary camera."
+            self.reconfigure()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { self.notice = nil }
+        }
+    }
+
+    /// Close-ups use the ordinary camera (macro lens on Pro iPhones); other angles can use LiDAR.
+    func setCloseUp(_ on: Bool) {
+        guard on != closeUp else { return }
+        closeUp = on
+        if hasLiDAR, Self.lidarWanted, !isFront { reconfigure() }
     }
 
     func flip() {
         let front = !isFront
-        queue.async { self.configure(front: front) }
+        let skipLiDAR = lidarFailed || closeUp
+        queue.async { self.configure(front: front, skipLiDAR: skipLiDAR) }
     }
 
     /// Called by the preview once its layer exists, so the preview can be kept level.
@@ -127,10 +170,11 @@ final class Camera: NSObject, ObservableObject {
     /// Picks the LiDAR camera again (or not) after the setting changes.
     func reconfigure() {
         let front = isFront
-        queue.async { self.configure(front: front) }
+        let skipLiDAR = lidarFailed || closeUp
+        queue.async { self.configure(front: front, skipLiDAR: skipLiDAR) }
     }
 
-    private func configure(front: Bool) {
+    private func configure(front: Bool, skipLiDAR: Bool = false) {
         session.beginConfiguration()
         defer { session.commitConfiguration() }
         if !configured, session.isMultitaskingCameraAccessSupported {
@@ -143,11 +187,13 @@ final class Camera: NSObject, ObservableObject {
         if let input { session.removeInput(input) }
         if session.outputs.contains(depthOutput) { session.removeOutput(depthOutput) }
         // The LiDAR camera first if wanted; if anything about it fails, the ordinary camera.
-        if lidarExists, Self.lidarWanted, let lidar = Self.lidarDevice(), let lidarInput = try? AVCaptureDeviceInput(device: lidar),
-            session.canAddInput(lidarInput)
+        // Apple's order: the format first, then the input, then the depth output.
+        if lidarExists, Self.lidarWanted, !skipLiDAR, let lidar = Self.lidarDevice(), Self.chooseDepthFormat(lidar),
+            let lidarInput = try? AVCaptureDeviceInput(device: lidar), session.canAddInput(lidarInput)
         {
+            if session.canSetSessionPreset(.inputPriority) { session.sessionPreset = .inputPriority }
             session.addInput(lidarInput)
-            if Self.chooseDepthFormat(lidar), session.canAddOutput(depthOutput) {
+            if session.canAddOutput(depthOutput) {
                 session.addOutput(depthOutput)
                 depthOutput.isFilteringEnabled = true
                 depthOutput.alwaysDiscardsLateDepthData = true
@@ -207,7 +253,8 @@ final class Camera: NSObject, ObservableObject {
     private static func chooseDepthFormat(_ device: AVCaptureDevice) -> Bool {
         let candidates = device.formats.filter { format in
             let size = format.formatDescription.dimensions
-            return !format.supportedDepthDataFormats.isEmpty && size.width <= 1920
+            return !format.supportedDepthDataFormats.isEmpty && size.width <= 1920 && !format.isVideoBinned
+                && format.formatDescription.mediaSubType.rawValue == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
                 && abs(Double(size.width) / Double(max(size.height, 1)) - 4.0 / 3.0) < 0.01
         }
         func photoPixels(_ format: AVCaptureDevice.Format) -> Int32 {
@@ -281,9 +328,13 @@ extension Camera {
 
 extension Camera: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let onFrame else { return }
         let now = CACurrentMediaTime()
-        guard now - lastFrame > 0.2, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        lastAnyFrame = now
+        guard let onFrame else { return }
+        // Five checks a second; fewer when the phone is getting hot, so it doesn't overheat on a long day.
+        let thermal = ProcessInfo.processInfo.thermalState
+        let interval = thermal == .critical ? 1.0 : thermal == .serious ? 0.5 : 0.2
+        guard now - lastFrame > interval, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         lastFrame = now
         // Frames arrive in the sensor's layout; turn them the way photos are saved.
         let orientation: CGImagePropertyOrientation
@@ -301,6 +352,8 @@ extension Camera: AVCaptureDepthDataOutputDelegate {
     func depthDataOutput(_ output: AVCaptureDepthDataOutput, didOutput depthData: AVDepthData, timestamp: CMTime, connection: AVCaptureConnection) {
         let now = CACurrentMediaTime()
         guard now - lastDepth > 0.15 else { return }
+        // Only true distances in metres; relative depth would give wrong centimetres.
+        guard depthData.depthDataAccuracy == .absolute else { return }
         lastDepth = now
         let converted = depthData.depthDataType == kCVPixelFormatType_DepthFloat32
             ? depthData : depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
@@ -323,15 +376,17 @@ extension Camera: AVCaptureDepthDataOutputDelegate {
 
 extension Camera {
     /// The latest LiDAR depth, upright like saved photos; nil without LiDAR.
+    /// Older than a second counts as none, so a stalled depth stream never gives old distances.
     func currentDepth() -> DepthGrid? {
         depthLock.lock()
         defer { depthLock.unlock() }
-        return latestDepth
+        return CACurrentMediaTime() - latestDepthTime < 1 ? latestDepth : nil
     }
 
     fileprivate func setDepth(_ grid: DepthGrid?) {
         depthLock.lock()
         latestDepth = grid
+        latestDepthTime = CACurrentMediaTime()
         depthLock.unlock()
     }
 }
