@@ -1,0 +1,124 @@
+name: iOS build (Match)
+
+on:
+  push:
+    branches: [main]
+    paths: ["ios/Match/**", ".github/workflows/ios-match.yml"]
+  pull_request:
+    paths: ["ios/Match/**", ".github/workflows/ios-match.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Intel macOS runners: the arm64 pool repeatedly had no capacity for this repo.
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # The actor lock and guide maths, checked against a pinhole camera on a modelled head.
+      - name: Actor lock tests
+        working-directory: ios/Match
+        run: |
+          if ! swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/Depth.swift Sources/OverlayFit.swift Tests/ActorTests/main.swift -o actor-tests > compile.log 2>&1; then
+            grep -E ": error: " compile.log | sort -u | head -10 \
+              | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
+            cat compile.log | tail -40
+            exit 1
+          fi
+          set +e
+          ./actor-tests > actor-tests.log 2>&1
+          status=$?
+          cat actor-tests.log
+          grep "^FAIL" actor-tests.log | sed -E 's#^FAIL  (.*)$#::error title=Actor test failed::\1#'
+          exit $status
+
+      # Apple's Vision on real pictures, as on the phone: the room guide on a made-up textured
+      # picture, the actor lock on a public-domain portrait (skipped if it can't be downloaded).
+      - name: Vision tests
+        working-directory: ios/Match
+        run: |
+          curl -sfL -A "MatchCI/1.0 (https://github.com/asiansidekick/splat)" -o face.jpg \
+            "https://commons.wikimedia.org/wiki/Special:FilePath/Neil_Armstrong_pose.jpg?width=900" \
+            || echo "::warning::Could not download the test portrait; face tests skipped"
+          if ! swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/ActorVision.swift Sources/Registration.swift Sources/OverlayFit.swift \
+            Tests/VisionTests/main.swift -o vision-tests > compile.log 2>&1; then
+            grep -E ": error: " compile.log | sort -u | head -10 \
+              | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
+            cat compile.log | tail -40
+            exit 1
+          fi
+          set +e
+          ./vision-tests face.jpg > vision-tests.log 2>&1
+          status=$?
+          cat vision-tests.log
+          grep "^FAIL" vision-tests.log | sed -E 's#^FAIL  (.*)$#::error title=Vision test failed::\1#'
+          exit $status
+
+      # Team packs for AirDrop: passcode lock, photos without location, merging, bad packs refused.
+      - name: Team pack tests
+        working-directory: ios/Match
+        run: |
+          if ! swiftc -O Sources/Board.swift Sources/OverlayFit.swift Sources/TeamPack.swift Sources/Shared/PhotoPrivacy.swift Sources/Shared/SecurePack.swift \
+            Tests/PackTests/main.swift -o pack-tests > compile.log 2>&1; then
+            grep -E ": error: " compile.log | sort -u | head -10 \
+              | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
+            cat compile.log | tail -40
+            exit 1
+          fi
+          set +e
+          ./pack-tests > pack-tests.log 2>&1
+          status=$?
+          cat pack-tests.log
+          grep "^FAIL" pack-tests.log | sed -E 's#^FAIL  (.*)$#::error title=Pack test failed::\1#'
+          exit $status
+
+      # Nearby sync: three phones in memory through the real engine and sealing, other passcodes refused.
+      - name: Sync tests
+        working-directory: ios/Match
+        run: |
+          if ! swiftc -O Sources/Board.swift Sources/OverlayFit.swift Sources/TeamPack.swift Sources/BoardSync.swift Sources/Shared/PhotoPrivacy.swift \
+            Sources/Shared/SecurePack.swift Sources/Shared/SyncEngine.swift Tests/SyncTests/main.swift -o sync-tests > compile.log 2>&1; then
+            grep -E ": error: " compile.log | sort -u | head -10 \
+              | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
+            cat compile.log | tail -40
+            exit 1
+          fi
+          set +e
+          ./sync-tests > sync-tests.log 2>&1
+          status=$?
+          cat sync-tests.log
+          grep "^FAIL" sync-tests.log | sed -E 's#^FAIL  (.*)$#::error title=Sync test failed::\1#'
+          exit $status
+
+      - name: Generate Xcode project
+        working-directory: ios/Match
+        run: |
+          brew install xcodegen
+          xcodegen
+
+      - name: Build for device (unsigned)
+        working-directory: ios/Match
+        run: |
+          # Compiler errors become annotations, so they show on the run summary and in the PR.
+          if ! xcodebuild -project Match.xcodeproj -target Match -configuration Release \
+            -sdk iphoneos SYMROOT="$PWD/build" CODE_SIGNING_ALLOWED=NO \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} build > build.log 2>&1; then
+            grep -E ": error: " build.log | sort -u | head -10 \
+              | sed -E 's#^.*/(Sources/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\2,col=\3::\4#'
+            tail -60 build.log
+            exit 1
+          fi
+
+      # Sideloading tools (AltStore, Sideloadly) sign this with the user's own Apple ID.
+      - name: Package unsigned IPA
+        working-directory: ios/Match
+        run: |
+          mkdir -p Payload
+          cp -R build/Release-iphoneos/Match.app Payload/
+          zip -qr Match-build-${{ github.run_number }}.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Match-build-${{ github.run_number }}
+          path: ios/Match/Match-build-${{ github.run_number }}.ipa
