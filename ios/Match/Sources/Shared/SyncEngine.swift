@@ -236,12 +236,12 @@ final class SyncEngine {
     }
 
     /// One plain name: no folders, no "..", nothing hidden, nothing odd.
-    static func safe(_ name: String) -> Bool {
+    nonisolated static func safe(_ name: String) -> Bool {
         !name.isEmpty && name.count <= 120 && !name.hasPrefix(".") && !name.contains("/") && !name.contains("\\")
             && !name.contains("..") && name.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0) }
     }
 
-    static func split(_ resource: String) -> (String, String)? {
+    nonisolated static func split(_ resource: String) -> (String, String)? {
         let parts = resource.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 2, safe(parts[0]), safe(parts[1]) else { return nil }
         return (parts[0], parts[1])
