@@ -189,7 +189,7 @@ func testPlaneDepth() {
     // A tilted flat surface: its inverse depth is a straight function of the pixel.
     var tilted = [Float](repeating: 0, count: width * height)
     for y in 0..<height { for x in 0..<width { tilted[y * width + x] = 1 / (0.8 + 0.01 * Float(x) + 0.02 * Float(y)) } }
-    let truth = 1 / (0.8 + 0.01 * 20 + 0.02 * 15)  // the middle of pixel (20, 15)
+    let truth: Float = 1 / (0.8 + 0.01 * 20 + 0.02 * 15)  // the middle of pixel (20, 15)
     expect(abs((DepthMap.planeDepth(tilted, width: width, height: height, x: 20.5, y: 15.5) ?? 0) - truth) < 0.002, "a tilted plane reads true between pixels")
     // A sheet at 1 m with the floor 1.5 m away beyond its edge, a point right at the edge.
     var edge = [Float](repeating: 1, count: width * height)

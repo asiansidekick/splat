@@ -67,7 +67,7 @@ enum CornerSnap {
                 if isPeak { candidates.append((p, here)) }
             }
         }
-        guard let best = candidates.map(\.score).max() else { return nil }
+        guard let best = candidates.map { $0.score }.max() else { return nil }
         // Of the clear corners, the one nearest where the finger was.
         return candidates.filter { $0.score >= best * 0.5 }.min { simd_distance($0.point, centre) < simd_distance($1.point, centre) }?.point
     }
