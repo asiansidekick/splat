@@ -16,6 +16,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The actor lock and guide maths, checked against a pinhole camera on a modelled head.
+      - name: Actor lock tests
+        working-directory: ios/Match
+        run: |
+          if ! swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Tests/ActorTests/main.swift -o actor-tests > compile.log 2>&1; then
+            grep -E ": error: " compile.log | sort -u | head -10 \
+              | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
+            cat compile.log | tail -40
+            exit 1
+          fi
+          set +e
+          ./actor-tests > actor-tests.log 2>&1
+          status=$?
+          cat actor-tests.log
+          grep "^FAIL" actor-tests.log | sed -E 's#^FAIL  (.*)$#::error title=Actor test failed::\1#'
+          exit $status
+
       - name: Generate Xcode project
         working-directory: ios/Match
         run: |

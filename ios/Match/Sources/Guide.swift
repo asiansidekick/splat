@@ -3,121 +3,26 @@ import SwiftUI
 import Vision
 import simd
 
-/// What the live picture needs to line up with the reference, worked out from the pictures alone
-/// (no AR), so it works on any iPhone or iPad and on people as well as objects. Everything is in
-/// the saved photo's own directions: x to the right, y down.
-struct GuideReading: Equatable {
-    /// How far the reference's middle sits from the live picture's middle, as a share of its width.
-    /// Positive x: move right. Positive y: move down.
-    var move: CGVector
-    /// Perspective difference: positive x means turn right, positive y means turn down.
-    var turn: CGVector
-    /// Degrees to rotate the phone clockwise to level it with the reference.
-    var tilt: Double
-    /// Above 1: everything looks bigger than in the reference, so step back. Below 1: step closer.
-    var scale: Double
-    /// Where the reference's corners show in the live picture (0...1 across and down): top left,
-    /// top right, bottom right, bottom left.
-    var corners: [CGPoint] = [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0), CGPoint(x: 1, y: 1), CGPoint(x: 0, y: 1)]
+/// Where the ghost is pinned when it follows an actor: the reference's eyes (or shoulders) and
+/// where the same points are live, in 0...1 picture points.
+struct GhostAnchor: Equatable {
+    var from: (CGPoint, CGPoint)
+    var to: (CGPoint, CGPoint)
 
-    static let moveTolerance: CGFloat = 0.035
-    static let turnTolerance: CGFloat = 0.06
-    static let tiltTolerance: Double = 3
-    static let scaleTolerance: Double = 0.06
-
-    var lined: Bool {
-        abs(move.dx) < Self.moveTolerance && abs(move.dy) < Self.moveTolerance
-            && abs(turn.dx) < Self.turnTolerance && abs(turn.dy) < Self.turnTolerance
-            && abs(tilt) < Self.tiltTolerance && abs(scale - 1) < Self.scaleTolerance
+    static func == (a: GhostAnchor, b: GhostAnchor) -> Bool {
+        a.from.0 == b.from.0 && a.from.1 == b.from.1 && a.to.0 == b.to.0 && a.to.1 == b.to.1
     }
 
-    /// Reads the guide from Vision's warp, which takes the live picture onto the reference
-    /// (pixels counted up from the bottom, as Vision does).
-    static func from(warp: simd_float3x3, reference: CGSize, live: CGSize) -> GuideReading? {
-        guard abs(warp.determinant) > 1e-9, live.width > 0, live.height > 0 else { return nil }
-        let inverse = warp.inverse
-        let w = Float(reference.width)
-        let h = Float(reference.height)
-        // A reference point (0...1 across and down) to where it shows live (0...1 across and down).
-        func toLive(_ x: Float, _ y: Float) -> SIMD2<Float>? {
-            let p = inverse * SIMD3(x * w, (1 - y) * h, 1)
-            guard abs(p.z) > 1e-6 else { return nil }
-            return SIMD2(p.x / p.z / Float(live.width), 1 - p.y / p.z / Float(live.height))
-        }
-        guard let topLeft = toLive(0, 0), let topRight = toLive(1, 0), let bottomLeft = toLive(0, 1), let bottomRight = toLive(1, 1),
-            let middle = toLive(0.5, 0.5), let leftMiddle = toLive(0, 0.5), let rightMiddle = toLive(1, 0.5)
-        else { return nil }
-        // Lengths in live-width units, so tall and wide pictures compare fairly.
-        let aspect = Float(live.height / live.width)
-        func length(_ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Float {
-            simd_length(SIMD2(b.x - a.x, (b.y - a.y) * aspect))
-        }
-        let left = length(topLeft, bottomLeft)
-        let right = length(topRight, bottomRight)
-        let top = length(topLeft, topRight)
-        let bottom = length(bottomLeft, bottomRight)
-        guard left > 0, right > 0, top > 0, bottom > 0 else { return nil }
-        // The far side of something looks smaller: a short right edge means the phone is turned
-        // too far left, so turn right; a short top edge means it looks too far up, so turn down.
-        let turnX = (left - right) / ((left + right) / 2)
-        let turnY = (bottom - top) / ((bottom + top) / 2)
-        let across = SIMD2(rightMiddle.x - leftMiddle.x, (rightMiddle.y - leftMiddle.y) * aspect)
-        let tilt = Double(atan2(across.y, across.x)) * 180 / .pi
-        let scale = Double((top + bottom) / 2)
-        return GuideReading(
-            move: CGVector(dx: CGFloat(middle.x - 0.5), dy: CGFloat((middle.y - 0.5) * aspect)),
-            turn: CGVector(dx: CGFloat(turnX), dy: CGFloat(turnY)),
-            tilt: tilt,
-            scale: scale,
-            corners: [topLeft, topRight, bottomRight, bottomLeft].map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) })
+    func blended(towards new: GhostAnchor, by k: CGFloat) -> GhostAnchor {
+        func mix(_ p: CGPoint, _ q: CGPoint) -> CGPoint { CGPoint(x: p.x + (q.x - p.x) * k, y: p.y + (q.y - p.y) * k) }
+        return GhostAnchor(from: new.from, to: (mix(to.0, new.to.0), mix(to.1, new.to.1)))
     }
-
-    /// Eased towards a new reading, so the guide doesn't jump about with every frame.
-    func blended(towards new: GuideReading, by k: CGFloat) -> GuideReading {
-        func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * k }
-        return GuideReading(
-            move: CGVector(dx: mix(move.dx, new.move.dx), dy: mix(move.dy, new.move.dy)),
-            turn: CGVector(dx: mix(turn.dx, new.turn.dx), dy: mix(turn.dy, new.turn.dy)),
-            tilt: Double(mix(CGFloat(tilt), CGFloat(new.tilt))),
-            scale: Double(mix(CGFloat(scale), CGFloat(new.scale))),
-            corners: zip(corners, new.corners).map { CGPoint(x: mix($0.x, $1.x), y: mix($0.y, $1.y)) })
-    }
-
-    /// The one thing most out of line. Nil when everything is within tolerance.
-    var biggest: GuideCue? { cues.max { $0.size < $1.size }?.cue }
-
-    /// Each correction still needed, with how many tolerances out it is.
-    var cues: [(cue: GuideCue, size: Double)] {
-        var list: [(cue: GuideCue, size: Double)] = []
-        let mx = Double(abs(move.dx) / Self.moveTolerance)
-        let my = Double(abs(move.dy) / Self.moveTolerance)
-        if max(mx, my) >= 1 {
-            let side: GuideCue.Side = mx >= my ? (move.dx > 0 ? .right : .left) : (move.dy > 0 ? .down : .up)
-            list.append((cue: .move(side), size: max(mx, my)))
-        }
-        let ax = Double(abs(turn.dx) / Self.turnTolerance)
-        let ay = Double(abs(turn.dy) / Self.turnTolerance)
-        if ax >= 1 { list.append((cue: .pan(turn.dx > 0 ? .right : .left), size: ax)) }
-        if ay >= 1 { list.append((cue: .tilt(turn.dy > 0 ? .down : .up), size: ay)) }
-        let r = abs(tilt) / Self.tiltTolerance
-        if r >= 1 { list.append((cue: .rotate(clockwise: tilt > 0), size: r)) }
-        let d = abs(scale - 1) / Self.scaleTolerance
-        if d >= 1 { list.append((cue: .step(closer: scale < 1), size: d)) }
-        return list
-    }
-}
-
-/// One instruction, in the saved photo's directions.
-enum GuideCue: Equatable {
-    enum Side { case left, right, up, down }
-    case move(Side)
-    case pan(Side)
-    case tilt(Side)
-    case rotate(clockwise: Bool)
-    case step(closer: Bool)
 }
 
 /// Compares camera frames with the reference a few times a second and publishes the guide.
+/// When the reference has a person in it and the same kind of person is in view (a face for hair
+/// and makeup, a body for costume), the guide locks to the actor rather than the room, so it
+/// follows them wherever they stand. Otherwise it lines up the whole picture.
 /// Lined up counts only after holding still and lined up for half a second, as in Reset.
 @MainActor
 final class Guide: ObservableObject {
@@ -125,27 +30,68 @@ final class Guide: ObservableObject {
     @Published private(set) var matched = false
     /// The one instruction shown. Held for at least a second and a half so it can be read.
     @Published private(set) var cue: GuideCue?
+    /// Following an actor: where to pin the ghost.
+    @Published private(set) var anchor: GhostAnchor?
+    /// Everyone in view of the kind being followed, and which one is followed, so a tap can switch.
+    @Published private(set) var people: [CGRect] = []
+    @Published private(set) var followed: Int?
+    /// No reading for a second: shown so it is clear the guide is on but can't find the reference.
+    @Published private(set) var searching = false
     private var cueSince = Date.distantPast
     private var reference: CIImage?
+    private var referenceFace: ActorPose?
+    private var referenceBody: ActorPose?
+    private var prefersBody = false
+    /// Where the followed actor was last, or where the screen was tapped.
+    private var followPoint: CGPoint?
     /// The part of the picture the screen shows (width over height, upright), so the guide lines up
     /// what you see rather than the whole camera frame.
     private var aspect: CGFloat?
     private var busy = false
+    private var generation = 0
     private var lastReading = Date.distantPast
-    /// No reading for a second: shown so it is clear the guide is on but can't find the reference.
-    @Published private(set) var searching = false
     private var linedSince: Date?
     private nonisolated static let width: CGFloat = 480
+    private nonisolated static let actorWidth: CGFloat = 720
 
-    func setReference(_ image: UIImage?, aspect: CGFloat?) {
+    var lockedToActor: Bool { reading?.actor == true }
+
+    /// `prefersBody`: costume, where the whole body matters more than the face.
+    func setReference(_ image: UIImage?, aspect: CGFloat?, prefersBody: Bool = false) {
+        generation += 1
         self.aspect = aspect
-        reference = image.flatMap { CIImage(image: $0) }.map { Self.prepared(Self.centred($0, aspect: aspect)) }
+        self.prefersBody = prefersBody
+        let cropped = image.flatMap { CIImage(image: $0) }.map { Self.centred($0, aspect: aspect) }
+        reference = cropped.map(Self.prepared)
+        referenceFace = nil
+        referenceBody = nil
+        followPoint = nil
         reading = nil
+        anchor = nil
+        people = []
+        followed = nil
         cue = nil
         searching = false
         lastReading = .now
         matched = false
         linedSince = nil
+        guard let cropped else { return }
+        let generation = self.generation
+        let picture = Self.scaled(cropped, to: Self.actorWidth)
+        Task {
+            let found = await Task.detached(priority: .userInitiated) { ActorVision.people(in: picture) }.value
+            guard generation == self.generation else { return }
+            // The biggest face and body in the reference are the actor it was taken for.
+            self.referenceFace = found.faces.max { $0.box.area < $1.box.area }
+            self.referenceBody = found.bodies.max { $0.box.area < $1.box.area }
+        }
+    }
+
+    /// Follow the actor nearest this point (0...1 across and down in the photo), from a tap.
+    func follow(at point: CGPoint) {
+        guard people.count > 1 else { return }
+        followPoint = point
+        Haptics.tap()
     }
 
     /// A live frame, upright the same way as saved photos. Dropped if the last is still being read.
@@ -153,26 +99,86 @@ final class Guide: ObservableObject {
         Task { @MainActor in
             guard !self.busy, let reference = self.reference else { return }
             self.busy = true
-            let live = Self.prepared(Self.centred(frame, aspect: self.aspect))
-            let reading = await Task.detached(priority: .utility) { Self.read(live: live, reference: reference) }.value
+            let generation = self.generation
+            let cropped = Self.centred(frame, aspect: self.aspect)
+            let live = Self.prepared(cropped)
+            let colour = Self.scaled(cropped, to: Self.actorWidth)
+            let aspect = self.aspect ?? (cropped.extent.width / max(cropped.extent.height, 1))
+            let kinds = self.kindsToTry()
+            let follow = self.followPoint
+            let result = await Task.detached(priority: .utility) { () -> ActorResult? in
+                if !kinds.isEmpty, let found = Self.readActor(colour, kinds: kinds, follow: follow, aspect: aspect) {
+                    return found
+                }
+                return Self.read(live: live, reference: reference).map { ActorResult(reading: $0) }
+            }.value
             self.busy = false
-            guard self.reference != nil else { return }
-            self.update(reading)
+            guard generation == self.generation, self.reference != nil else { return }
+            self.update(result)
         }
     }
 
-    private func update(_ reading: GuideReading?) {
-        if let reading {
-            self.reading = self.reading.map { $0.blended(towards: reading, by: 0.4) } ?? reading
+    /// The reference poses to look for live, the department's preferred kind first.
+    private func kindsToTry() -> [ActorPose] {
+        let order = prefersBody ? [referenceBody, referenceFace] : [referenceFace, referenceBody]
+        return order.compactMap { $0 }
+    }
+
+    private struct ActorResult {
+        var reading: GuideReading
+        var anchor: GhostAnchor?
+        var people: [CGRect] = []
+        var followed: Int?
+    }
+
+    private nonisolated static func readActor(_ picture: CIImage, kinds: [ActorPose], follow: CGPoint?, aspect: CGFloat) -> ActorResult? {
+        let found = ActorVision.people(in: picture)
+        for reference in kinds {
+            let live = reference.kind == .face ? found.faces : found.bodies
+            guard let index = ActorMatch.pick(live, near: follow, like: reference),
+                let reading = ActorMatch.reading(reference: reference, live: live[index], aspect: aspect)
+            else { continue }
+            return ActorResult(
+                reading: reading,
+                anchor: GhostAnchor(from: (reference.left, reference.right), to: (live[index].left, live[index].right)),
+                people: live.map(\.box),
+                followed: index)
+        }
+        return nil
+    }
+
+    private func update(_ result: ActorResult?) {
+        if let result {
+            let new = result.reading
+            // Switching between actor and room starts afresh rather than easing between them.
+            if let old = reading, old.actor == new.actor {
+                reading = old.blended(towards: new, by: 0.4)
+            } else {
+                reading = new
+            }
+            if let fresh = result.anchor {
+                anchor = anchor.map { $0.blended(towards: fresh, by: 0.5) } ?? fresh
+            } else {
+                anchor = nil
+            }
+            if people != result.people { people = result.people }
+            if followed != result.followed { followed = result.followed }
+            if let index = result.followed, result.people.indices.contains(index) {
+                let box = result.people[index]
+                if followPoint != nil { followPoint = CGPoint(x: box.midX, y: box.midY) }
+            }
             lastReading = .now
         } else if Date.now.timeIntervalSince(lastReading) > 1.5 {
             // Keep the last reading through a few missed frames; clear it after a moment.
-            self.reading = nil
+            reading = nil
+            anchor = nil
+            people = []
+            followed = nil
         }
         pickCue()
-        let lost = self.reading == nil
+        let lost = reading == nil
         if searching != lost { searching = lost }
-        if let current = self.reading, current.lined {
+        if let current = reading, current.lined {
             let since = linedSince ?? .now
             linedSince = since
             if !matched, Date.now.timeIntervalSince(since) >= 0.5 {
@@ -232,6 +238,14 @@ final class Guide: ObservableObject {
         return image.cropped(to: CGRect(x: e.midX - width / 2, y: e.midY - height / 2, width: width, height: height))
     }
 
+    /// In colour, from the origin, at the given width: for finding faces and bodies.
+    private nonisolated static func scaled(_ image: CIImage, to width: CGFloat) -> CIImage {
+        let extent = image.extent
+        let scale = min(1, width / max(extent.width, 1))
+        return image.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY)
+            .concatenating(CGAffineTransform(scaleX: scale, y: scale)))
+    }
+
     /// Grey and small, from the origin, so lighting colour does not matter and it is quick.
     private nonisolated static func prepared(_ image: CIImage) -> CIImage {
         let extent = image.extent
@@ -254,6 +268,8 @@ struct EdgeGuide: View {
     let cue: GuideCue?
     let matched: Bool
     let searching: Bool
+    /// How many people are in view when following an actor; with several, a tap picks one.
+    var people = 0
     /// Quarter turns clockwise from the photo's directions to the screen's (rotation lock).
     let quarterTurns: Int
     /// Front camera: the screen is a mirror.
@@ -280,6 +296,10 @@ struct EdgeGuide: View {
                     instruction(cue, in: size)
                         .id(cue.screenID(turns: quarterTurns, mirrored: mirrored))
                         .transition(.opacity)
+                } else if people > 1 {
+                    banner("TAP SOMEONE TO FOLLOW THEM", systemImage: "hand.tap", tint: .yellow)
+                        .opacity(0.8)
+                        .position(x: size.width / 2, y: 70)
                 } else if searching {
                     banner("POINT AT THE REFERENCE", systemImage: "viewfinder", tint: .yellow)
                         .opacity(0.8)
@@ -296,10 +316,8 @@ struct EdgeGuide: View {
 
     /// A point in the photo (0...1 across and down) to the screen.
     private func place(_ p: CGPoint, in rect: CGRect) -> CGPoint {
-        var q = p
-        for _ in 0..<((quarterTurns % 4 + 4) % 4) { q = CGPoint(x: 1 - q.y, y: q.x) }
-        if mirrored { q.x = 1 - q.x }
-        return CGPoint(x: rect.minX + q.x * rect.width, y: rect.minY + q.y * rect.height)
+        let q = ScreenMap(size: rect.size, quarterTurns: quarterTurns, mirrored: mirrored).toScreen(p)
+        return CGPoint(x: rect.minX + q.x, y: rect.minY + q.y)
     }
 
     private func screen(_ side: GuideCue.Side) -> GuideCue.Side {
@@ -330,6 +348,18 @@ struct EdgeGuide: View {
                         content.rotationEffect(.degrees(angle))
                     } animation: { _ in .easeInOut(duration: 0.9) }
             }
+        case .circle(let side):
+            // Words in the photographer's terms; the arrow points that way on screen.
+            let s = screen(side)
+            arrow(at: s, in: size, word: "WALK ROUND " + side.word) {
+                // Kept upright whichever edge it sits on.
+                Image(systemName: "rotate.3d").font(.system(size: 76, weight: .bold))
+                    .rotationEffect(.degrees(-Self.edgeAngle(s)))
+            }
+        case .height(let raise):
+            arrow(at: screen(raise ? .up : .down), in: size, word: raise ? "RAISE PHONE" : "LOWER PHONE") {
+                Image(systemName: "arrow.right.to.line").font(.system(size: 76, weight: .bold))
+            }
         case .step(let closer):
             centre(word: closer ? "STEP IN" : "STEP BACK", in: size) {
                 Image(systemName: closer ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
@@ -346,13 +376,13 @@ struct EdgeGuide: View {
                                     @ViewBuilder glyph: () -> Glyph) -> some View {
         let inset: CGFloat = 62
         let position: CGPoint
-        let angle: Double
         switch side {
-        case .left: position = CGPoint(x: inset, y: size.height / 2); angle = 180
-        case .right: position = CGPoint(x: size.width - inset, y: size.height / 2); angle = 0
-        case .up: position = CGPoint(x: size.width / 2, y: inset); angle = -90
-        case .down: position = CGPoint(x: size.width / 2, y: size.height - inset); angle = 90
+        case .left: position = CGPoint(x: inset, y: size.height / 2)
+        case .right: position = CGPoint(x: size.width - inset, y: size.height / 2)
+        case .up: position = CGPoint(x: size.width / 2, y: inset)
+        case .down: position = CGPoint(x: size.width / 2, y: size.height - inset)
         }
+        let angle = Self.edgeAngle(side)
         return VStack(spacing: 6) {
             glyph()
                 .phaseAnimator([CGFloat(0), 18]) { content, nudge in
@@ -365,6 +395,16 @@ struct EdgeGuide: View {
         .shadow(color: .black.opacity(0.6), radius: 2)
         .opacity(0.8)
         .position(position)
+    }
+
+    /// How far a right-pointing glyph turns to point at that edge.
+    static func edgeAngle(_ side: GuideCue.Side) -> Double {
+        switch side {
+        case .right: 0
+        case .down: 90
+        case .left: 180
+        case .up: -90
+        }
     }
 
     private func centre<Glyph: View>(word: String, in size: CGSize, @ViewBuilder glyph: () -> Glyph) -> some View {
@@ -397,38 +437,28 @@ struct EdgeGuide: View {
     }
 }
 
-extension GuideCue.Side {
-    var word: String {
-        switch self {
-        case .left: "LEFT"
-        case .right: "RIGHT"
-        case .up: "UP"
-        case .down: "DOWN"
-        }
-    }
+/// When following an actor with several people in view: a ring round each, the followed one in
+/// yellow. Drawn over the whole camera picture, since the rings sit on the people.
+struct PeopleRings: View {
+    let people: [CGRect]
+    let followed: Int?
+    let quarterTurns: Int
+    let mirrored: Bool
 
-    var horizontal: Bool { self == .left || self == .right }
-}
-
-extension GuideCue {
-    /// From the photo's directions to the screen's: quarter turns clockwise, then the mirror.
-    static func screen(_ side: Side, turns: Int, mirrored: Bool) -> Side {
-        let order: [Side] = [.up, .right, .down, .left]
-        var s = order[((order.firstIndex(of: side) ?? 0) + (turns % 4 + 4) % 4) % 4]
-        if mirrored {
-            if s == .left { s = .right } else if s == .right { s = .left }
+    var body: some View {
+        GeometryReader { geometry in
+            let map = ScreenMap(size: geometry.size, quarterTurns: quarterTurns, mirrored: mirrored)
+            ForEach(people.indices, id: \.self) { index in
+                let box = map.toScreen(people[index])
+                let side = max(box.width, box.height) * 1.2
+                Circle()
+                    .stroke(index == followed ? Color.yellow.opacity(0.8) : Color.white.opacity(0.45),
+                            style: StrokeStyle(lineWidth: 2, dash: index == followed ? [] : [6, 5]))
+                    .frame(width: side, height: side)
+                    .position(x: box.midX, y: box.midY)
+            }
         }
-        return s
-    }
-
-    /// Changes whenever what the screen shows changes, so a new instruction fades in fresh.
-    func screenID(turns: Int, mirrored: Bool) -> String {
-        switch self {
-        case .move(let side): "move-\(Self.screen(side, turns: turns, mirrored: mirrored))"
-        case .pan(let side), .tilt(let side): "aim-\(Self.screen(side, turns: turns, mirrored: mirrored))"
-        case .rotate(let clockwise): "rotate-\(clockwise != mirrored)"
-        case .step(let closer): "step-\(closer)"
-        }
+        .allowsHitTesting(false)
     }
 }
 

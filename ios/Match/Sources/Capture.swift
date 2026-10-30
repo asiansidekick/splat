@@ -166,7 +166,9 @@ struct CaptureView: View {
                 Haptics.tap()
                 guideOn.toggle()
             } label: {
-                pill(guideOn ? "Guide" : "Guide off", systemImage: "arrow.up.and.down.and.arrow.left.and.right", highlighted: guideOn && ghost != nil)
+                pill(guideOn ? (guide.lockedToActor ? "Actor" : "Guide") : "Guide off",
+                     systemImage: guide.lockedToActor && guideOn ? "person.crop.rectangle" : "arrow.up.and.down.and.arrow.left.and.right",
+                     highlighted: guideOn && ghost != nil)
             }
             .accessibilityLabel(guideOn ? "Turn the guide off" : "Turn the guide on")
             Button { camera.flip() } label: { Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3) }
@@ -253,9 +255,18 @@ struct CaptureView: View {
                             ghostOffset = .zero
                         }
                     }
+                    .onTapGesture { location in
+                        // Several people in view: follow the one tapped.
+                        guide.follow(at: ScreenMap(size: geometry.size, quarterTurns: quarterTurns, mirrored: camera.isFront)
+                            .toPhoto(location))
+                    }
                 if guideOn, ghost != nil {
+                    if guide.people.count > 1 {
+                        PeopleRings(people: guide.people, followed: guide.followed,
+                                    quarterTurns: quarterTurns, mirrored: camera.isFront)
+                    }
                     EdgeGuide(reading: guide.reading, cue: guide.cue, matched: guide.matched, searching: guide.searching,
-                              quarterTurns: quarterTurns, mirrored: camera.isFront)
+                              people: guide.people.count, quarterTurns: quarterTurns, mirrored: camera.isFront)
                         .clearOfControls()
                 }
                 if ghost != nil {
@@ -347,6 +358,11 @@ struct CaptureView: View {
                     .opacity(outlines ? max(opacity, 0.6) : opacity)
                     .scaleEffect(x: camera.isFront ? -ghostScale : ghostScale, y: ghostScale)
                     .offset(ghostOffset)
+                    // Actor lock: the reference's eyes (or shoulders) sit on the actor's, wherever they stand.
+                    .modifier(ActorPin(transform: guideOn ? guide.anchor.map {
+                        ScreenMap(size: size, quarterTurns: quarterTurns, mirrored: camera.isFront).ghostTransform(from: $0.from, to: $0.to)
+                    } : nil))
+                    .animation(.easeOut(duration: 0.2), value: guide.anchor)
                     .allowsHitTesting(false)
             }
         }
@@ -447,7 +463,7 @@ struct CaptureView: View {
         } else {
             camera.onFrame = nil
         }
-        guide.setReference(guideOn ? ghost : nil, aspect: visibleAspect)
+        guide.setReference(guideOn ? ghost : nil, aspect: visibleAspect, prefersBody: board?.department == .costume)
     }
 
     private func selectAngle(_ newAngle: String) {
@@ -564,6 +580,18 @@ struct CaptureView: View {
         ghost = loaded.0
         ghostEdges = loaded.1
         connectGuide()
+    }
+}
+
+/// Scales, turns and moves the ghost about the screen's middle; nothing when there is no actor.
+private struct ActorPin: ViewModifier {
+    let transform: (scale: CGFloat, angle: CGFloat, offset: CGSize)?
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(transform?.scale ?? 1)
+            .rotationEffect(.radians(Double(transform?.angle ?? 0)))
+            .offset(transform?.offset ?? .zero)
     }
 }
 
