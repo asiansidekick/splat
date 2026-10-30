@@ -1020,6 +1020,7 @@ struct CaptureStage: View {
                     .disabled(recorder.capturing)
                     .accessibilityLabel(useLiDAR ? "LiDAR on" : "LiDAR off")
                 }
+                ScreenshotButton(camera: { holder.view }, toast: showToast)
                 TorchButton()
                 MeasureToggle(measurer: recorder.measurer)
                     .disabled(recorder.capturing)
@@ -1391,6 +1392,7 @@ struct ResetStage: View {
                     .accessibilityLabel(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow the camera")
                 }
             }
+            ScreenshotButton(camera: { holder.view }, toast: showToast)
             if !restorer.paused {
                 TorchButton()
                 MeasureToggle(measurer: restorer.measurer)

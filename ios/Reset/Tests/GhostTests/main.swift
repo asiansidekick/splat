@@ -160,6 +160,24 @@ func floatToHalf(_ value: Float) -> UInt16 {
     return sign | UInt16(exponent << 10) | mantissa
 }
 
+func testMiddleDepth() {
+    print("Middle of a depth map")
+    let width = 8, height = 6
+    var depth = [Float](repeating: 2, count: width * height)
+    expect(DepthMap.middle(depth, width: width, height: height) == 2, "a flat map reads 2 m in the middle")
+    depth[3 * width + 4] = 0.7
+    expect(DepthMap.middle(depth, width: width, height: height) == 2, "one odd reading in the middle is ignored (median)")
+    for dy in -1...1 { for dx in -1...1 { depth[(3 + dy) * width + 4 + dx] = 0 } }
+    expect(DepthMap.middle(depth, width: width, height: height) == nil, "no readings, no depth")
+    for dx in -1...1 { depth[3 * width + 4 + dx] = 1.5 }
+    depth[2 * width + 4] = 1.5
+    depth[4 * width + 4] = 1.5
+    expect(DepthMap.middle(depth, width: width, height: height) == 1.5, "five readings are enough")
+    depth[4 * width + 4] = 0
+    expect(DepthMap.middle(depth, width: width, height: height) == nil, "four are not")
+    expect(DepthMap.middle([1, 2, 3], width: 2, height: 2) == nil, "a map of the wrong size is refused")
+}
+
 func testDepthBuffers() {
     print("Depth buffers")
     let width = 256, height = 192
@@ -862,6 +880,7 @@ func testDots() {
 }
 
 testDepthBuffers()
+testMiddleDepth()
 testGhost()
 testNoisyGhost()
 testHardCases()

@@ -17,6 +17,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     @Published private(set) var removed: [UUID] = []
     /// Where the crosshair meets the room, nil when it is on nothing.
     @Published private(set) var cursor: SIMD3<Float>?
+    /// Whether the crosshair's distance comes from LiDAR or only from ARKit's estimated surfaces,
+    /// which can be well out; shown under the reading.
+    @Published private(set) var fromLiDAR = false
+    private var loggedSource: Bool?
     /// The first end of the line being drawn.
     @Published private(set) var start: SIMD3<Float>?
     /// Bumped when the person adds or deletes something, so the reference is saved.
@@ -126,7 +130,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         }
         measurements.append(RoomMeasurement(a: array(start), b: array(cursor), created: Date()))
         Haptics.success()
-        Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length))")
+        let camera = session.currentFrame?.camera.transform.columns.3
+        let away = camera.map { simd_distance(cursor, SIMD3($0.x, $0.y, $0.z)) }
+        Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (\(fromLiDAR ? "LiDAR" : "estimated surfaces")), end \(away.map { String(format: "%.2f m", $0) } ?? "?") from the camera")
         changed()
     }
 
@@ -182,6 +188,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         start = nil
         cursor = nil
         selected = nil
+        loggedSource = nil
         updatePreview()
         guard active else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
@@ -195,7 +202,17 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             updatePreview()
             return
         }
-        cursor = Measurer.depthPoint(frame) ?? Measurer.surfacePoint(frame, session: session)
+        if let point = Measurer.depthPoint(frame) {
+            cursor = point
+            fromLiDAR = true
+        } else {
+            cursor = Measurer.surfacePoint(frame, session: session)
+            fromLiDAR = false
+        }
+        if loggedSource != fromLiDAR {
+            loggedSource = fromLiDAR
+            Diagnostics.log("Measure: distance from \(fromLiDAR ? "LiDAR depth" : "estimated surfaces (no LiDAR depth)")")
+        }
         updatePreview()
     }
 
@@ -204,27 +221,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// The LiDAR depth in the middle of the picture (the median of the middle 3 by 3 readings),
     /// along the ray through the middle of the screen.
     static func depthPoint(_ frame: ARFrame) -> SIMD3<Float>? {
-        guard let map = (frame.smoothedSceneDepth ?? frame.sceneDepth)?.depthMap,
-            CVPixelBufferGetPixelFormatType(map) == kCVPixelFormatType_DepthFloat32
-        else { return nil }
-        CVPixelBufferLockBaseAddress(map, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(map, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(map) else { return nil }
-        let width = CVPixelBufferGetWidth(map)
-        let height = CVPixelBufferGetHeight(map)
-        let row = CVPixelBufferGetBytesPerRow(map)
-        var readings: [Float] = []
-        for dy in -1...1 {
-            for dx in -1...1 {
-                let x = width / 2 + dx
-                let y = height / 2 + dy
-                guard x >= 0, y >= 0, x < width, y < height else { continue }
-                let value = base.advanced(by: y * row).assumingMemoryBound(to: Float32.self)[x]
-                if value.isFinite && value > 0.05 && value < 6 { readings.append(value) }
-            }
-        }
-        guard readings.count >= 5 else { return nil }
-        let depth = readings.sorted()[readings.count / 2]
+        guard let map = (frame.smoothedSceneDepth ?? frame.sceneDepth)?.depthMap else { return nil }
+        // Whatever format ARKit sends (32 or 16 bit, depth or disparity) comes out as metres.
+        let values = DepthMap.floats(DepthMap.copy(map))
+        guard let depth = DepthMap.middle(values, width: CVPixelBufferGetWidth(map), height: CVPixelBufferGetHeight(map)) else { return nil }
         let k = frame.camera.intrinsics
         let size = frame.camera.imageResolution
         // ARKit's camera looks down -z with y up; the picture counts y down.
@@ -360,6 +360,13 @@ struct MeasureReticle: View {
                     .foregroundStyle(.white)
                     .fixedSize()
                     .offset(y: 40)
+                if found && !measurer.fromLiDAR {
+                    Text("Estimated: may be out")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.orange)
+                        .fixedSize()
+                        .offset(y: 66)
+                }
             }
             .shadow(color: .black.opacity(0.5), radius: 2)
             .allowsHitTesting(false)
@@ -398,7 +405,7 @@ struct MeasureBar: View {
                 if measurer.selected != nil {
                     small("trash.fill", "Delete", tint: .red) { measurer.deleteSelected() }
                 } else {
-                    small("trash", "Clear") { confirmingClear = true }
+                    small("trash", "Delete") { confirmingClear = true }
                         .disabled(measurer.isEmpty)
                 }
             }
@@ -410,8 +417,8 @@ struct MeasureBar: View {
                 Button("Cancel", role: .cancel) {}
                 Button("Add") { measurer.addNote(draft) }
             }
-            .confirmationDialog("Remove every measurement and note?", isPresented: $confirmingClear, titleVisibility: .visible) {
-                Button("Remove all", role: .destructive) { measurer.clear() }
+            .confirmationDialog("Delete every measurement and note?", isPresented: $confirmingClear, titleVisibility: .visible) {
+                Button("Delete all", role: .destructive) { measurer.clear() }
             }
         }
     }

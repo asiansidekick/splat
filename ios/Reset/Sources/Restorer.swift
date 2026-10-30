@@ -154,6 +154,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         if reference.photoOnly {
             // An imported photo has no room map: show it as the ghost over the live camera.
             let config = ARWorldTrackingConfiguration()
+            // Depth for measuring, even with no depth saved in the reference.
+            if Recorder.lidarAvailable { config.frameSemantics.insert(.sceneDepth) }
             session.delegate = self
             session.run(config, options: [.resetTracking, .removeExistingAnchors])
             Torch.shared.applySoon()
@@ -170,6 +172,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             let config = ARWorldTrackingConfiguration()
             config.initialWorldMap = map
             mapPoints = map.rawFeaturePoints.points
+            // Depth for measuring, even with no depth saved in the reference.
+            if Recorder.lidarAvailable { config.frameSemantics.insert(.sceneDepth) }
             if usesDepth {
                 config.frameSemantics.insert(.sceneDepth)
                 // Temporally smoothed depth is steadier for spotting changes (Apple's advice).

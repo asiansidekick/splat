@@ -85,6 +85,25 @@ enum DepthMap {
         data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
     }
 
+    /// The depth at the middle of a map, in metres: the median of the real readings (between
+    /// `range`) within `radius` pixels of the centre. Nil with fewer than 5 of the 9 around the middle.
+    static func middle(_ depth: [Float], width: Int, height: Int, radius: Int = 1, range: ClosedRange<Float> = 0.05...6) -> Float? {
+        guard width > 0, height > 0, depth.count == width * height else { return nil }
+        var readings: [Float] = []
+        for dy in -radius...radius {
+            for dx in -radius...radius {
+                let x = width / 2 + dx
+                let y = height / 2 + dy
+                guard x >= 0, y >= 0, x < width, y < height else { continue }
+                let value = depth[y * width + x]
+                if value.isFinite && range.contains(value) { readings.append(value) }
+            }
+        }
+        let needed = (2 * radius + 1) * (2 * radius + 1) / 2 + 1
+        guard readings.count >= needed else { return nil }
+        return readings.sorted()[readings.count / 2]
+    }
+
     /// IEEE half precision to Float, without relying on the Float16 type.
     static func halfToFloat(_ bits: UInt16) -> Float {
         let sign: UInt32 = UInt32(bits & 0x8000) << 16
