@@ -118,9 +118,10 @@ struct CameraHome: View {
                     .padding(.top, 52)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .allowsHitTesting(false)
+                    .hiddenInScreenshots()
             }
         }
-        .overlay(alignment: .bottomTrailing) {
+        .overlay(alignment: .topTrailing) {
             if lastPhoto != nil {
                 HStack(spacing: 8) {
                     Button {
@@ -147,8 +148,9 @@ struct CameraHome: View {
                     }
                 }
                 .padding(.trailing, 16)
-                .padding(.bottom, 100)
+                .padding(.top, 112)
                 .transition(.scale.combined(with: .opacity))
+                .hiddenInScreenshots()
             }
         }
         .sheet(item: $panel) { panel in sheet(for: panel) }
@@ -410,12 +412,13 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                     if !landscape {
                         VStack(spacing: 4) {
                             modes(false)
-                            HStack {
-                                leading().frame(width: 84)
-                                Spacer()
+                            ZStack {
                                 shutter()
-                                Spacer()
-                                trailing().frame(width: 84)
+                                HStack {
+                                    leading().frame(width: 84)
+                                    Spacer(minLength: 0)
+                                    trailing().frame(minWidth: 84, alignment: .trailing)
+                                }
                             }
                             .padding(.horizontal, 16)
                         }
@@ -427,6 +430,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                 }
                 .padding(.trailing, landscape && !left ? max(0, Self.sideWidth - safe.trailing) : 0)
                 .padding(.leading, landscape && left ? max(0, Self.sideWidth - safe.leading) : 0)
+                .hiddenInScreenshots()
                 if landscape {
                     HStack(spacing: 0) {
                         if !left { Spacer(minLength: 0) }
@@ -434,7 +438,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         // sits in the screen's top corner (taps there went unanswered).
                         VStack(spacing: 18) {
                             Spacer(minLength: 0)
-                            trailing()
+                            trailing().environment(\.chromeVertical, true)
                             modes(true)
                             shutter()
                             leading()
@@ -449,6 +453,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                     // Right against the edge of the screen, like the Camera app, not inset by the
                     // safe area, which only leaves an empty strip.
                     .ignoresSafeArea(edges: left ? .leading : .trailing)
+                    .hiddenInScreenshots()
                 }
             }
             .background {
@@ -1020,7 +1025,6 @@ struct CaptureStage: View {
                     .disabled(recorder.capturing)
                     .accessibilityLabel(useLiDAR ? "LiDAR on" : "LiDAR off")
                 }
-                ScreenshotButton(camera: { holder.view }, toast: showToast)
                 TorchButton()
                 // Works while a scan or recording is going, too.
                 MeasureToggle(measurer: recorder.measurer)
@@ -1049,14 +1053,15 @@ struct CaptureStage: View {
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
-                ModelSizeBadge(placer: recorder.placer)
-                MeasureReticle(measurer: recorder.measurer)
+                ModelSizeBadge(placer: recorder.placer).hiddenInScreenshots()
+                MeasureReticle(measurer: recorder.measurer).hiddenInScreenshots()
                 MeasureEntry(measurer: recorder.measurer)
                 if mode == .snapshot && (recorder.pendingSave || recorder.saving || justSaved) {
                     ScanProgressOverlay(
                         progress: justSaved ? 1 : recorder.scanProgress, saved: justSaved,
                         mapping: recorder.mappingStatus, points: recorder.pointCount)
                         .clearOfControls()
+                        .hiddenInScreenshots()
                         .transition(.opacity)
                 }
                 VStack {
@@ -1074,6 +1079,7 @@ struct CaptureStage: View {
                 }
                 .padding(8)
                 .clearOfControls()
+                .hiddenInScreenshots()
             }
         } modes: { vertical in
             ModePicker(modes: CaptureMode.allCases, label: \.label, selection: $mode, vertical: vertical)
@@ -1088,13 +1094,15 @@ struct CaptureStage: View {
             .disabled(recorder.saving)
             .accessibilityLabel(shutterLabel)
         } trailing: {
-            if recorder.capturing {
-                Text("\(recorder.keyframeCount)\n\(recorder.keyframeCount == 1 ? "view" : "views")")
-                    .font(.caption.bold().monospacedDigit())
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.white)
-            } else {
-                SideButton(title: "3D models", systemImage: "cube") { importingModels = true }
+            WithScreenshot(camera: { holder.view }, toast: showToast) {
+                if recorder.capturing {
+                    Text("\(recorder.keyframeCount)\n\(recorder.keyframeCount == 1 ? "view" : "views")")
+                        .font(.caption.bold().monospacedDigit())
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white)
+                } else {
+                    SideButton(title: "3D models", systemImage: "cube") { importingModels = true }
+                }
             }
         }
         .fileImporter(isPresented: $importingModels, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
@@ -1282,7 +1290,9 @@ struct ResetStage: View {
                 .shadow(color: .black.opacity(0.5), radius: 3)
                 .accessibilityLabel("Snapshot")
         } trailing: {
-            if leftHanded { logButton } else { pauseButton }
+            WithScreenshot(camera: { holder.view }, toast: showToast) {
+                if leftHanded { logButton } else { pauseButton }
+            }
         }
         .modifier(CaptureButtonAction { togglePause() })
         .sheet(item: $notingTake) { take in
@@ -1393,7 +1403,6 @@ struct ResetStage: View {
                     .accessibilityLabel(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow the camera")
                 }
             }
-            ScreenshotButton(camera: { holder.view }, toast: showToast)
             if !restorer.paused {
                 TorchButton()
                 MeasureToggle(measurer: restorer.measurer)
@@ -1471,8 +1480,8 @@ struct ResetStage: View {
                         .allowsHitTesting(false)
                 }
                 if restorer.status == .ready, !restorer.show3D, !reference.photoOnly, !restorer.paused {
-                    AimOverlay(state: restorer.aim)
-                    EdgeGuideOverlay(state: restorer.edges)
+                    AimOverlay(state: restorer.aim).hiddenInScreenshots()
+                    EdgeGuideOverlay(state: restorer.edges).hiddenInScreenshots()
                 }
                 if restorer.paused {
                     HeldCompare(
@@ -1501,9 +1510,10 @@ struct ResetStage: View {
                 }
                 .padding(8)
                 .clearOfControls()
-                ModelSizeBadge(placer: restorer.placer)
+                .hiddenInScreenshots()
+                ModelSizeBadge(placer: restorer.placer).hiddenInScreenshots()
                 if !restorer.paused {
-                    MeasureReticle(measurer: restorer.measurer)
+                    MeasureReticle(measurer: restorer.measurer).hiddenInScreenshots()
                     MeasureEntry(measurer: restorer.measurer)
                 }
             }
@@ -1511,13 +1521,14 @@ struct ResetStage: View {
                 if let tagsValue {
                     SwipeTags(value: tagsValue)
                         .clearOfControls()
+                        .hiddenInScreenshots()
                         .transition(.opacity)
                 }
             }
             .overlay {
                 // Green once all four edge guides are in.
                 if restorer.matched && !restorer.paused {
-                    Rectangle().strokeBorder(Color.green, lineWidth: 4).ignoresSafeArea().allowsHitTesting(false)
+                    Rectangle().strokeBorder(Color.green, lineWidth: 4).ignoresSafeArea().allowsHitTesting(false).hiddenInScreenshots()
                 }
             }
             .onAppear {

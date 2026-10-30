@@ -46,25 +46,87 @@ enum Screenshot {
     }
 }
 
-/// The top-bar button: one tap saves what is on the screen to Photos.
+/// While a screenshot is being taken the controls, banners and guides are hidden, so the picture
+/// holds only what the camera sees: the ghost, 3D models, dimensions and notes (Phil, 2026-10-30).
+final class ScreenshotMode: ObservableObject {
+    static let shared = ScreenshotMode()
+    @Published var clean = false
+}
+
+/// Hides a control or overlay while a screenshot is being taken.
+struct HiddenInScreenshots: ViewModifier {
+    @ObservedObject private var mode = ScreenshotMode.shared
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(mode.clean ? 0 : 1)
+            .animation(nil, value: mode.clean)
+    }
+}
+
+extension View {
+    func hiddenInScreenshots() -> some View { modifier(HiddenInScreenshots()) }
+}
+
+private struct ChromeVerticalKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// True for controls in the landscape side column, where they stack instead of sitting side by side.
+    var chromeVertical: Bool {
+        get { self[ChromeVerticalKey.self] }
+        set { self[ChromeVerticalKey.self] = newValue }
+    }
+}
+
+/// The screenshot button beside the control it sits with in the main row: to its left in portrait,
+/// above it in the landscape column. One tap saves a clean picture of the live view to Photos.
+struct WithScreenshot<Content: View>: View {
+    let camera: () -> ARSCNView?
+    let toast: (String) -> Void
+    @ViewBuilder let content: () -> Content
+    @Environment(\.chromeVertical) private var vertical
+
+    var body: some View {
+        let layout = vertical ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 6))
+        layout {
+            ScreenshotButton(camera: camera, toast: toast)
+            content()
+        }
+    }
+}
+
+/// One tap saves what the camera shows, without the controls, to Photos.
 struct ScreenshotButton: View {
     let camera: () -> ARSCNView?
     let toast: (String) -> Void
 
     var body: some View {
         Button {
-            guard let image = Screenshot.capture(camera: camera()) else {
-                toast("Could not take the screenshot")
-                return
-            }
-            Haptics.success()
-            Task {
+            Task { @MainActor in
+                // Hide the controls, give the screen a moment to redraw, take the picture, bring them back.
+                ScreenshotMode.shared.clean = true
+                try? await Task.sleep(for: .milliseconds(180))
+                let image = Screenshot.capture(camera: camera())
+                ScreenshotMode.shared.clean = false
+                guard let image else {
+                    toast("Could not take the screenshot")
+                    return
+                }
+                Haptics.success()
                 let saved = await PhotoLibrary.save([image])
                 toast(saved ? "Screenshot saved to Photos" : "Allow Photos in Settings, Reset, Photos to save there")
             }
         } label: {
-            Image(systemName: "camera.viewfinder").font(.title3)
+            Image(systemName: "camera.viewfinder")
+                .font(.title3)
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(Color.white.opacity(0.2), in: Circle())
+                .shadow(color: .black.opacity(0.6), radius: 3)
         }
+        .hiddenInScreenshots()
         .accessibilityLabel("Screenshot to Photos")
     }
 }
