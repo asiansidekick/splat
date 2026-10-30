@@ -26,6 +26,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         var b: SIMD3<Float>
     }
     @Published private(set) var drag: DragLine?
+    /// What the last drag was made of, written to the log when the line is kept so a wrong length
+    /// can be traced to the depth, the mapping or the pose.
+    private var dragDetail = ""
     private var drawStart: CGPoint = .zero
     private var loggedSource: Bool?
     /// Why there is no distance when tracking isn't ready, shown in place of the reading.
@@ -113,6 +116,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             return
         }
         drag = DragLine(a: a, b: b)
+        dragDetail = Measurer.detail(frame: frame, depth: depth, view: view, from: drawStart, to: location, a: a, b: b)
         updatePreview()
     }
 
@@ -125,6 +129,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         measurements.append(RoomMeasurement(a: array(drag.a), b: array(drag.b), created: Date()))
         Haptics.success()
         Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (drawn on the screen, one frame)")
+        Diagnostics.log("Drag detail: \(dragDetail)")
         changed()
     }
 
@@ -360,6 +365,39 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let toImage = frame.displayTransform(for: Screen.orientation, viewportSize: size).inverted()
         let n = CGPoint(x: location.x / size.width, y: location.y / size.height).applying(toImage)
         return point(in: frame, depth: depth, normalized: n)
+    }
+
+    /// A line of numbers for the log: where each end fell in the picture, the depth there, the
+    /// phone's tilt, the height difference, and what the length would be if the depth were the
+    /// distance along the ray instead of straight ahead.
+    static func detail(frame: ARFrame, depth: Depth, view: UIView, from p: CGPoint, to q: CGPoint, a: SIMD3<Float>, b: SIMD3<Float>) -> String {
+        let size = view.bounds.size
+        let toImage = frame.displayTransform(for: Screen.orientation, viewportSize: size).inverted()
+        func norm(_ l: CGPoint) -> CGPoint { CGPoint(x: l.x / size.width, y: l.y / size.height).applying(toImage) }
+        let na = norm(p), nb = norm(q)
+        func metres(_ n: CGPoint) -> Float {
+            DepthMap.sample(depth.values, width: depth.width, height: depth.height,
+                            x: Int(n.x * CGFloat(depth.width)), y: Int(n.y * CGFloat(depth.height))) ?? 0
+        }
+        let ma = metres(na), mb = metres(nb)
+        let k = frame.camera.intrinsics
+        let res = frame.camera.imageResolution
+        func ray(_ n: CGPoint) -> SIMD3<Float> {
+            SIMD3((Float(n.x) * Float(res.width) - k[2][0]) / k[0][0], -(Float(n.y) * Float(res.height) - k[2][1]) / k[1][1], -1)
+        }
+        // If the depth were distance along each ray, the points would be along the unit rays.
+        func world(_ v: SIMD3<Float>) -> SIMD3<Float> {
+            let w = frame.camera.transform * SIMD4(v.x, v.y, v.z, 1)
+            return SIMD3(w.x, w.y, w.z)
+        }
+        let rangeLength = simd_distance(world(simd_normalize(ray(na)) * ma), world(simd_normalize(ray(nb)) * mb))
+        let t = frame.camera.transform
+        let forward = -SIMD3(t.columns.2.x, t.columns.2.y, t.columns.2.z)
+        let pitch = asin(max(-1, min(1, forward.y))) * 180 / .pi
+        return String(format: "view %@→%@ image (%.3f,%.3f)→(%.3f,%.3f) depth %.3f/%.3f m, pitch %.0f°, rise %.1f cm, along-ray length %.1f cm, f %.0f/%.0f c %.0f,%.0f res %.0fx%.0f depth %ldx%ld %@",
+                      "\(Int(p.x)),\(Int(p.y))", "\(Int(q.x)),\(Int(q.y))", na.x, na.y, nb.x, nb.y, ma, mb, pitch,
+                      abs(a.y - b.y) * 100, rangeLength * 100, k[0][0], k[1][1], k[2][0], k[2][1], res.width, res.height,
+                      depth.width, depth.height, "\(Screen.orientation.rawValue) view \(Int(size.width))x\(Int(size.height))")
     }
 
     /// `normalized`: where in the camera picture, 0 to 1 across and down in the sensor's layout.
