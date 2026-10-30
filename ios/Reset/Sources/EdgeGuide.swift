@@ -172,6 +172,26 @@ enum EdgeGuide {
         }
     }
 
+    /// Without picture checks, from ARKit's position: metres to move right, up and forward
+    /// (into the screen). The middle shifts the way to move (a metre is 600 points) and the
+    /// strokes shorten when you need to step in, as if the set were a metre away.
+    static func fromPosition(right: CGFloat, up: CGFloat, forward: CGFloat, middle: CGPoint) -> GhostAlignment {
+        GhostAlignment(
+            centre: CGPoint(x: middle.x + right * 600, y: middle.y - up * 600),
+            roll: 0,
+            scale: Double(1 / max(0.3, 1 + forward)))
+    }
+
+    /// Which way to step, from the alignment's size: +1 step in (the set shows smaller than the
+    /// ghost), -1 step back, 0 the size is right. It shows once past the size tolerance and
+    /// goes once well inside it, so it does not flicker on the line.
+    static func step(_ a: GhostAlignment, was: Int) -> Int {
+        let off = a.scale - 1
+        let limit = was == 0 ? scaleTolerance : scaleTolerance / release
+        guard abs(off) >= limit else { return 0 }
+        return off < 0 ? 1 : -1
+    }
+
     /// The filter's share for a step of `dt` seconds, so it smooths the same at any frame rate.
     static func alpha(dt: Double) -> Double {
         1 - pow(1 - smoothing, max(0, min(dt, 1)) * 30)

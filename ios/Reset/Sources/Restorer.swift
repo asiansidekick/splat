@@ -25,7 +25,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     let edges = EdgeGuideState()
     /// The last picture check, while it is fresh: the edge guides follow it, carried on between
     /// checks by how the phone has turned since.
-    private var lastMatch: (id: String, result: ImageMatch.Result, reference: CGSize, camera: simd_float4x4, time: TimeInterval)?
+    private var lastMatch: (id: String, result: ImageMatch.Result, size: CGSize, time: TimeInterval)?
     /// The pictures' correction to the attitude, for the reference view it was found for.
     private var correction = AlignmentCorrection()
     private var correctionID: String?
@@ -296,18 +296,16 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     /// From ARKit's tracking (camera plus motion sensors): where the reference camera was aiming,
-    /// on screen, for the arrow when it is off screen; and the edge guides, from the pictures
-    /// once close.
+    /// on screen, for the arrow when it is off screen; and the edge guides.
     private func updateAim(frame: ARFrame, target: Keyframe) {
         guard viewport != .zero else { return }
         let camera = frame.camera.transform
         let move = Guidance.offset(from: camera, to: target, orientation: orientation)
         let (right, up) = Guidance.screenAxes(camera, orientation: orientation)
-        // Close: within 35 cm and 20°. Then the pictures decide, since the position ARKit found
-        // the room at can be a few centimetres out.
-        // The full turn, roll included: a phone held landscape against a portrait reference
-        // must not be matched picture to picture (Vision can pair them wrongly).
-        let close = simd_length(move.vector) < 0.35 && Restorer.angle(between: target.cameraToWorld, and: camera) < 20 * .pi / 180
+        // Close: within 35 cm and pointing within 20°. Then the pictures decide, since the
+        // position ARKit found the room at can be a few centimetres out. The ghost is turned
+        // with the phone, so this works however the phone is held.
+        let close = simd_length(move.vector) < 0.35 && move.turn < 20 * .pi / 180
         if close {
             checkImage(frame: frame, keyframe: target)
         } else {
@@ -337,56 +335,36 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
         var match = lastMatch
         if let m = match, m.id != target.id || frame.timestamp - m.time > 1.5 { match = nil }
-        let attitude = alignment(frame: frame, target: target, match: nil)
-        // Each new picture check adds once to the correction, measured on this frame.
-        if let match, match.time != correctedTime, let attitude,
-            let pictures = alignment(frame: frame, target: target, match: match)
-        {
+        let middle = CGPoint(x: viewport.width / 2, y: viewport.height / 2)
+        let level = GhostAlignment(centre: middle, roll: 0, scale: 1)
+        // Each new picture check adds once: where the ghost's crosshair really shows live.
+        if let match, match.time != correctedTime {
             correctedTime = match.time
-            correction.add(pictures: pictures, attitude: attitude)
+            if let measured = alignment(frame: frame, match: match) {
+                correction.add(pictures: measured, attitude: level)
+            }
         }
-        // Only the pictures can say it is lined up: the phone's attitude alone knows nothing of
-        // where it stands, so a stroke can seat only while picture checks are fresh and agree.
-        edges.update(
-            attitude.map { correction.apply(to: $0) },
-            canSeat: close && match != nil && correction.ready, time: frame.timestamp)
+        // The guides show how far the ghost is off what the camera sees: from the pictures
+        // (the middle of the last five checks) when close, otherwise from ARKit's position.
+        let shown = match != nil && correction.ready ? correction.apply(to: level) : EdgeGuide.fromPosition(
+            right: CGFloat(move.right), up: CGFloat(move.up), forward: CGFloat(move.forward), middle: middle)
+        // Only the pictures can say it is lined up, so a stroke seats only while checks are
+        // fresh and agree.
+        edges.update(shown, canSeat: close && match != nil && correction.ready, time: frame.timestamp)
         if matched != edges.all { matched = edges.all }
     }
 
-    /// Where the reference's crosshair shows on screen now: from a picture check (Vision's
-    /// homography, reference onto live) carried on by how the phone has turned since, or with no
-    /// match, from the phone's attitude alone.
-    private func alignment(
-        frame: ARFrame, target: Keyframe,
-        match: (id: String, result: ImageMatch.Result, reference: CGSize, camera: simd_float4x4, time: TimeInterval)?
-    ) -> GhostAlignment? {
+    /// Where the ghost's crosshair shows in the live picture, from a picture check of the ghost
+    /// (the reference as drawn on screen, turned with the phone) against the live picture.
+    private func alignment(frame: ARFrame, match: (id: String, result: ImageMatch.Result, size: CGSize, time: TimeInterval)) -> GhostAlignment? {
         let display = frame.displayTransform(for: orientation, viewportSize: viewport)
         let toImage = display.inverted()
-        let resolution = frame.camera.imageResolution
-        let referenceSize = CGSize(width: target.imageWidth, height: target.imageHeight)
-        let camera = frame.camera.transform
-        let intrinsics = frame.camera.intrinsics
         let size = viewport
         func land(_ screen: CGPoint) -> CGPoint? {
-            // The reference point that would show here if it were laid out like the live picture.
             let unit = CGPoint(x: screen.x / size.width, y: screen.y / size.height).applying(toImage)
-            let live: SIMD2<Float>?
-            if let match {
-                // In the photo's own pixels, which may be stored at another size.
-                let pixel = CGPoint(x: unit.x * match.reference.width, y: unit.y * match.reference.height)
-                guard let then = match.result.toLive(pixel, reference: match.reference, live: resolution) else { return nil }
-                let turned = Warp(
-                    reference: match.camera, referenceIntrinsics: intrinsics, referenceSize: resolution,
-                    live: camera, liveIntrinsics: intrinsics, liveSize: resolution)
-                live = turned.project(SIMD2(Float(then.x), Float(then.y)))
-            } else {
-                let turned = Warp(
-                    reference: target.cameraToWorld, referenceIntrinsics: target.cameraIntrinsics, referenceSize: referenceSize,
-                    live: camera, liveIntrinsics: intrinsics, liveSize: resolution)
-                live = turned.project(SIMD2(Float(unit.x * referenceSize.width), Float(unit.y * referenceSize.height)))
-            }
-            guard let live else { return nil }
-            let shown = CGPoint(x: CGFloat(live.x) / resolution.width, y: CGFloat(live.y) / resolution.height).applying(display)
+            let pixel = CGPoint(x: unit.x * match.size.width, y: unit.y * match.size.height)
+            guard let live = match.result.toLive(pixel, reference: match.size, live: match.size) else { return nil }
+            let shown = CGPoint(x: live.x / match.size.width, y: live.y / match.size.height).applying(display)
             return CGPoint(x: shown.x * size.width, y: shown.y * size.height)
         }
         let middle = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -413,8 +391,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         return best
     }
 
-    /// Compares the live picture with the reference photo on a background queue, a few times a
-    /// second: the edge guides follow the answer.
+    /// Compares the live picture with the ghost as it is drawn (the reference turned to how the
+    /// phone points now) on a background queue, a few times a second: what is left over is how
+    /// far the ghost is off, which the edge guides show.
     private func checkImage(frame: ARFrame, keyframe: Keyframe) {
         guard !imageBusy, Date().timeIntervalSince(lastImageCheck) > 0.3,
             let source = ghostSource, source.id == keyframe.id
@@ -423,16 +402,20 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         imageBusy = true
         let live = CIImage(cvPixelBuffer: frame.capturedImage)
         let reference = source.image
-        let camera = frame.camera.transform
+        let resolution = frame.camera.imageResolution
+        let warp = Warp(
+            reference: keyframe.cameraToWorld, referenceIntrinsics: keyframe.cameraIntrinsics,
+            referenceSize: CGSize(width: keyframe.imageWidth, height: keyframe.imageHeight),
+            live: frame.camera.transform, liveIntrinsics: frame.camera.intrinsics, liveSize: resolution)
         let time = frame.timestamp
         imageQueue.async {
-            let result = ImageMatch.compare(live: live, reference: reference)
+            let result = warp.apply(to: reference).flatMap { ImageMatch.compare(live: live, reference: $0) }
             Task { @MainActor in
                 self.imageBusy = false
                 guard let result, self.current?.id == keyframe.id else { return }
-                // A wild answer means Vision paired the wrong things: carry on from the last one.
+                // A wild answer means Vision paired the wrong things: leave it out.
                 if result.error < ImageMatch.guideLimit {
-                    self.lastMatch = (keyframe.id, result, reference.extent.size, camera, time)
+                    self.lastMatch = (keyframe.id, result, resolution, time)
                 }
             }
         }

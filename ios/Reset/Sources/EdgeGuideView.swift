@@ -8,6 +8,8 @@ import UIKit
 final class EdgeGuideState: ObservableObject {
     @Published private(set) var alignment: GhostAlignment?
     @Published private(set) var seated = [Bool](repeating: false, count: EdgeGuide.Edge.allCases.count)
+    /// +1 step in, -1 step back, 0 the size is right.
+    @Published private(set) var step = 0
     /// Set by the overlay: the screen and the part of it clear of the controls.
     var layout: EdgeGuide.Layout?
     private var seater = EdgeGuide.Seater()
@@ -27,6 +29,7 @@ final class EdgeGuideState: ObservableObject {
             if alignment != nil { alignment = nil }
             seater.reset()
             if seated != seater.seated { seated = seater.seated }
+            if step != 0 { step = 0 }
             return
         }
         if let previous = smoothed, let lastTime {
@@ -43,6 +46,8 @@ final class EdgeGuideState: ObservableObject {
             impact.impactOccurred()
         }
         if seated != seater.seated { seated = seater.seated }
+        let nextStep = EdgeGuide.step(smoothed, was: step)
+        if step != nextStep { step = nextStep }
         // Redraw only for a visible change.
         if let shown = alignment, hypot(shown.centre.x - smoothed.centre.x, shown.centre.y - smoothed.centre.y) < 0.3,
             abs(shown.roll - smoothed.roll) < 0.0005, abs(shown.scale - smoothed.scale) < 0.0005
@@ -76,6 +81,18 @@ struct EdgeGuideOverlay: View {
                             .shadow(color: .black.opacity(0.6), radius: 2)
                             .position(layout.slot(edge))
                     }
+                }
+                if state.step != 0, !state.all {
+                    // In or out, which the strokes' length alone did not make clear.
+                    Label(state.step > 0 ? "STEP IN" : "STEP BACK", systemImage: state.step > 0 ? "arrow.up" : "arrow.down")
+                        .font(.caption.weight(.heavy))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.black.opacity(0.35), in: Capsule())
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.6), radius: 2)
+                        .position(x: layout.slot(.top).x, y: layout.slot(.top).y + 40)
+                        .transition(.opacity)
                 }
                 if let alignment = state.alignment {
                     ForEach(EdgeGuide.Edge.allCases, id: \.rawValue) { edge in

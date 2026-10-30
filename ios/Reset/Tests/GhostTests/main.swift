@@ -802,6 +802,15 @@ func testEdgeGuide() {
     var fresh2 = AlignmentCorrection()
     fresh2.add(pictures: GhostAlignment(centre: CGPoint(x: middle.x + 50, y: middle.y), roll: 0, scale: 1), attitude: attitude)
     expect(fresh2.apply(to: attitude) == attitude, "correction: unused until three checks")
+    // Step in or back: past the size tolerance, held until well inside it.
+    let small = GhostAlignment(centre: middle, roll: 0, scale: 0.96)
+    let big = GhostAlignment(centre: middle, roll: 0, scale: 1.04)
+    let nearlyRight = GhostAlignment(centre: middle, roll: 0, scale: 0.98)
+    expect(EdgeGuide.step(small, was: 0) == 1 && EdgeGuide.step(big, was: 0) == -1, "step: in when small, back when big")
+    expect(EdgeGuide.step(nearlyRight, was: 0) == 0 && EdgeGuide.step(nearlyRight, was: 1) == 1, "step: 2% off shows only if already showing")
+    // From ARKit's position: 10 cm to the right moves the middle right; too far back shortens.
+    let fromARKit = EdgeGuide.fromPosition(right: 0.1, up: 0, forward: 0.2, middle: middle)
+    expect(fromARKit.centre.x > middle.x + 50 && fromARKit.scale < 0.9, String(format: "from position: middle +%.0f pt, size %.2f", fromARKit.centre.x - middle.x, fromARKit.scale))
     // The low-pass filter: 0.3 of the way per 1/30 s, the same over two 1/60 s steps.
     expect(abs(EdgeGuide.alpha(dt: 1.0 / 30) - 0.3) < 1e-9, "filter: 0.3 per 1/30 s")
     let far = GhostAlignment(centre: CGPoint(x: middle.x + 100, y: middle.y), roll: 0.1, scale: 1.2)
