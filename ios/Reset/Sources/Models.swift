@@ -27,6 +27,9 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// True while a pinch is changing the size, to show it large.
     @Published private(set) var pinching = false
     private var modelNodes: [UUID: SCNNode] = [:]
+    /// While dragging: from where the finger's ray meets the model's floor height to the model,
+    /// so the model keeps its place under the finger instead of jumping to it.
+    private var dragOffset: SIMD3<Float>?
     let session: ARSession
     /// Models are added under this node, in the session's world coordinates.
     let root: SCNNode
@@ -155,13 +158,50 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         selectedModel = hits.lazy.compactMap { self.modelID(of: $0.node) }.first
     }
 
+    /// Drags the model across the floor at its own height. Picks up the model under the finger
+    /// (or the only one) when none is selected. Works with no surface found, unlike a raycast,
+    /// which often finds nothing and had left the model stuck.
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        guard let id = selectedModel, let node = modelNodes[id], let view = gesture.view as? ARSCNView,
-            let query = view.raycastQuery(from: gesture.location(in: view), allowing: .estimatedPlane, alignment: .any),
-            let hit = session.raycast(query).first
+        guard let view = gesture.view as? ARSCNView else { return }
+        let location = gesture.location(in: view)
+        if gesture.state == .began {
+            let touched = view.hitTest(location, options: nil).lazy.compactMap { self.modelID(of: $0.node) }.first
+            if let touched {
+                selectedModel = touched
+            } else if selectedModel == nil, models.count == 1 {
+                selectedModel = models[0].id
+            }
+            dragOffset = nil
+        }
+        guard let id = selectedModel, let node = modelNodes[id],
+            let point = floorPoint(location, in: view, height: node.simdWorldPosition.y)
         else { return }
-        node.simdWorldPosition = hit.worldTransform.columns.3.xyz
-        if gesture.state == .ended { commit(id) }
+        switch gesture.state {
+        case .began:
+            dragOffset = node.simdWorldPosition - point
+        case .changed:
+            node.simdWorldPosition = point + (dragOffset ?? .zero)
+        case .ended, .cancelled:
+            if gesture.state == .ended { node.simdWorldPosition = point + (dragOffset ?? .zero) }
+            dragOffset = nil
+            commit(id)
+        default:
+            break
+        }
+    }
+
+    /// Where the finger's ray meets the level plane at `height`, nil when it points above it
+    /// or the meeting point is very far off.
+    private func floorPoint(_ location: CGPoint, in view: ARSCNView, height: Float) -> SIMD3<Float>? {
+        let near = SIMD3<Float>(view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 0)))
+        let far = SIMD3<Float>(view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 1)))
+        let direction = far - near
+        guard abs(direction.y) > 1e-6 else { return nil }
+        let t = (height - near.y) / direction.y
+        guard t > 0 else { return nil }
+        let point = near + direction * t
+        guard simd_distance(point, near) < 15 else { return nil }
+        return point
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
