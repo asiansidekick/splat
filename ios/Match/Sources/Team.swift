@@ -361,3 +361,136 @@ enum TeamReceiver {
         top.present(controller, animated: true)
     }
 }
+
+// MARK: - Nearby sync
+
+/// Keeps boards in step with teammates' phones close by, while this screen is open on each of
+/// them. Wi-Fi and Bluetooth straight between phones: works with no signal, nothing uploaded.
+struct SyncView: View {
+    @EnvironmentObject private var store: BoardStore
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("teamName") private var name = ""
+    @AppStorage("syncContent") private var contentRaw = TeamPack.Content.all.rawValue
+    @State private var passcode = TeamPasscode.load() ?? ""
+    @State private var sync: NearbySync?
+    @State private var library: BoardSyncLibrary?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let sync {
+                    SyncStatus(sync: sync)
+                } else {
+                    Section {
+                        SecureField("Team passcode (4 or more characters)", text: $passcode)
+                            .textContentType(.oneTimeCode)
+                        TextField("Your name, so teammates see who's syncing", text: $name)
+                            .textContentType(.givenName)
+                        Picker("Share", selection: $contentRaw) {
+                            ForEach(TeamPack.Content.allCases) { Text($0.name).tag($0.rawValue) }
+                        }
+                        .pickerStyle(.segmented)
+                    } footer: {
+                        Text("Open Sync on each phone with the same team passcode. They find each other over Wi-Fi and Bluetooth, with no signal needed, and swap new boards and photos both ways. Nothing is uploaded, and phones with another passcode can't join.")
+                    }
+                    Section {
+                        Button("Start syncing") { start() }
+                            .bold()
+                            .disabled(passcode.count < 4)
+                    }
+                }
+            }
+            .navigationTitle("Sync with nearby phones")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
+        .onAppear {
+            // The usual case: the passcode is set, so start straight away.
+            if passcode.count >= 4 { start() }
+        }
+        .onDisappear {
+            sync?.stop()
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+    }
+
+    @MainActor
+    private func start() {
+        TeamPasscode.save(passcode)
+        let library = BoardSyncLibrary(
+            root: BoardStore.root, content: TeamPack.Content(rawValue: contentRaw) ?? .all,
+            boards: { [store] in store.boards }, save: { [store] in store.save($0) })
+        let sync = NearbySync(service: "match-sync", name: name.trimmingCharacters(in: .whitespaces), passcode: passcode, library: library)
+        self.library = library
+        self.sync = sync
+        sync.start()
+        // Syncing stops if the screen locks, so keep it awake while this is open.
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+}
+
+private struct SyncStatus: View {
+    @ObservedObject var sync: NearbySync
+
+    var body: some View {
+        Section {
+            HStack(spacing: 14) {
+                Image(systemName: symbol)
+                    .font(.system(size: 34))
+                    .foregroundStyle(sync.state == .upToDate ? Color.green : Color.accentColor)
+                    .symbolEffect(.pulse, isActive: sync.state == .looking || sync.state == .syncing)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(headline).font(.headline)
+                    Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 6)
+        } footer: {
+            Text("Keep this screen open on every phone until it says Up to date. New boards and photos are added both ways; nothing is deleted or overwritten.")
+        }
+        if !sync.progress.teammates.isEmpty {
+            Section("Connected") {
+                ForEach(sync.progress.teammates, id: \.self) { Label($0, systemImage: "iphone") }
+            }
+        }
+        if sync.progress.received > 0 || sync.progress.refused > 0 {
+            Section {
+                Text("\(sync.progress.received) file\(sync.progress.received == 1 ? "" : "s") received"
+                    + (sync.progress.refused > 0 ? ", \(sync.progress.refused) refused (not a photo Match can use)" : ""))
+            }
+        }
+        if sync.strangerNearby {
+            Section {
+                Label("A phone nearby is using a different team passcode, so it can't sync with this one.", systemImage: "lock")
+                    .font(.footnote)
+            }
+        }
+    }
+
+    private var symbol: String {
+        switch sync.state {
+        case .starting, .looking: "antenna.radiowaves.left.and.right"
+        case .syncing: "arrow.triangle.2.circlepath"
+        case .upToDate: "checkmark.circle.fill"
+        }
+    }
+
+    private var headline: String {
+        switch sync.state {
+        case .starting: "Starting…"
+        case .looking: "Looking for teammates…"
+        case .syncing: "Syncing…"
+        case .upToDate: "Up to date"
+        }
+    }
+
+    private var detail: String {
+        switch sync.state {
+        case .starting, .looking: "Open Sync on their phone too, with the same team passcode."
+        case .syncing: sync.progress.waiting > 0 ? "\(sync.progress.waiting) file\(sync.progress.waiting == 1 ? "" : "s") to come" : "Sending to teammates"
+        case .upToDate: "With " + sync.progress.teammates.joined(separator: ", ")
+        }
+    }
+}

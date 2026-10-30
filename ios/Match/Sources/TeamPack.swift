@@ -1,5 +1,3 @@
-import CommonCrypto
-import CryptoKit
 import Foundation
 import ImageIO
 
@@ -32,22 +30,9 @@ enum TeamPack {
         var files: [String: Data]
     }
 
-    enum PackError: LocalizedError, Equatable {
-        case notAPack, needsPasscode, wrongPasscode, damaged, tooNew
+    typealias PackError = SecurePack.Failure
 
-        var errorDescription: String? {
-            switch self {
-            case .notAPack: "This isn't a Match team pack."
-            case .needsPasscode: "This pack is locked. Enter the team passcode."
-            case .wrongPasscode: "That passcode doesn't open this pack."
-            case .damaged: "This pack is damaged. Ask for it to be sent again."
-            case .tooNew: "This pack was made by a newer Match. Update Match, then open it again."
-            }
-        }
-    }
-
-    private static let magic = Data("MATCHPK1".utf8)
-    private static let iterations: UInt32 = 200_000
+    static let magic = Data("MATCHPK1".utf8)
     private static let manifestName = "manifest.json"
 
     static let encoder: JSONEncoder = {
@@ -82,8 +67,7 @@ enum TeamPack {
     static func make(boards: [Board], content: Content, from: String, passcode: String?, root: URL,
                      maxPixels: Int? = nil, made: Date = .now) throws -> Data {
         let sent = trimmed(boards, content: content, root: root)
-        var body = Data()
-        append(manifestName, try encoder.encode(Manifest(made: made, from: from, boards: sent)), to: &body)
+        var entries: [(name: String, data: Data)] = [(manifestName, try encoder.encode(Manifest(made: made, from: from, boards: sent)))]
         for board in sent {
             let folder = root.appending(path: board.id.uuidString)
             for shot in board.shots {
@@ -96,72 +80,22 @@ enum TeamPack {
                     default: photo = cleaned(data)
                     }
                     guard let clean = photo else { continue }
-                    append("\(board.id.uuidString)/\(name)", clean, to: &body)
+                    entries.append(("\(board.id.uuidString)/\(name)", clean))
                 }
             }
         }
-        var out = magic
-        if let passcode, !passcode.isEmpty {
-            var salt = Data(count: 16)
-            for i in 0..<16 { salt[i] = UInt8.random(in: 0...255) }
-            out.append(1)
-            out.append(salt)
-            put(iterations, into: &out)
-            let sealed = try AES.GCM.seal(body, using: key(passcode, salt: salt, iterations: iterations))
-            guard let combined = sealed.combined else { throw PackError.damaged }
-            out.append(combined)
-        } else {
-            out.append(0)
-            out.append(body)
-        }
-        return out
+        return try SecurePack.make(entries, magic: magic, passcode: passcode)
     }
 
     /// Whether these bytes are a locked pack, so the passcode can be asked for before opening.
     static func isLocked(_ data: Data) -> Bool {
-        data.count > magic.count && data.prefix(magic.count) == magic && data[data.startIndex + magic.count] == 1
+        SecurePack.isLocked(data, magic: magic)
     }
 
     // MARK: Opening
 
     static func open(_ data: Data, passcode: String?) throws -> Opened {
-        let bytes = data.startIndex == 0 ? data : data.subdata(in: data.startIndex..<data.endIndex)
-        guard bytes.count > magic.count, bytes.prefix(magic.count) == magic else { throw PackError.notAPack }
-        var at = magic.count
-        let flag = bytes[at]
-        at += 1
-        let body: Data
-        switch flag {
-        case 0:
-            body = bytes.subdata(in: at..<bytes.count)
-        case 1:
-            guard let passcode, !passcode.isEmpty else { throw PackError.needsPasscode }
-            guard bytes.count >= at + 20 else { throw PackError.damaged }
-            let salt = bytes.subdata(in: at..<(at + 16))
-            at += 16
-            guard let rounds = word(bytes, at), rounds > 0, rounds <= 5_000_000 else { throw PackError.damaged }
-            at += 4
-            guard let box = try? AES.GCM.SealedBox(combined: bytes.subdata(in: at..<bytes.count)) else { throw PackError.damaged }
-            guard let opened = try? AES.GCM.open(box, using: key(passcode, salt: salt, iterations: rounds)) else {
-                throw PackError.wrongPasscode
-            }
-            body = opened
-        default:
-            throw PackError.tooNew
-        }
-
-        var files: [String: Data] = [:]
-        var i = 0
-        while i < body.count {
-            guard let nameLength = word(body, i), i + 4 + Int(nameLength) + 8 <= body.count else { throw PackError.damaged }
-            i += 4
-            guard let name = String(data: body.subdata(in: i..<(i + Int(nameLength))), encoding: .utf8) else { throw PackError.damaged }
-            i += Int(nameLength)
-            guard let size = long(body, i), size <= UInt64(body.count - i - 8) else { throw PackError.damaged }
-            i += 8
-            files[name] = body.subdata(in: i..<(i + Int(size)))
-            i += Int(size)
-        }
+        var files = try SecurePack.open(data, magic: magic, passcode: passcode)
         guard let manifestData = files.removeValue(forKey: manifestName) else { throw PackError.damaged }
         let manifest: Manifest
         do {
@@ -201,11 +135,7 @@ enum TeamPack {
         }
         if board.subject.isEmpty { board.subject = incoming.subject }
         if board.look.isEmpty { board.look = incoming.look }
-        if board.notes.isEmpty {
-            board.notes = incoming.notes
-        } else if !incoming.notes.isEmpty && !board.notes.contains(incoming.notes) {
-            board.notes += "\n" + incoming.notes
-        }
+        board.notes = mergedNotes(board.notes, incoming.notes)
         let have = Set(board.shots.map(\.id))
         for shot in arriving {
             if let index = board.shots.firstIndex(where: { $0.id == shot.id }) {
@@ -215,6 +145,16 @@ enum TeamPack {
             }
         }
         return board
+    }
+
+    /// Their lines added below ours, skipping lines we already have. Merging twice, or each way
+    /// round between two phones, settles rather than growing.
+    static func mergedNotes(_ ours: String, _ theirs: String) -> String {
+        var lines = ours.isEmpty ? [] : ours.components(separatedBy: "\n")
+        for line in theirs.components(separatedBy: "\n") where !line.isEmpty && !lines.contains(line) {
+            lines.append(line)
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Writes the pack's photos into `root` and gives back the boards to save. Only files that
@@ -261,112 +201,12 @@ enum TeamPack {
         return (boards, report)
     }
 
-    // MARK: Photos without metadata
+    // MARK: Photos without metadata (shared with Reset)
 
-    /// The picture with its longest side at most `maxPixels`, upright, with no details. Nil if it
-    /// is already that small (send it as it is) or isn't a picture.
-    static func smaller(_ data: Data, maxPixels: Int) -> Data? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0,
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-            let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,
-            max(width, height) > maxPixels
-        else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
-        ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        let out = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return out as Data
-    }
-
-    /// The picture as it is if it carries nothing private, otherwise re-saved without the details.
-    /// Photos Match takes are already clean, so they go untouched and lose no quality.
-    static func cleaned(_ data: Data) -> Data? {
-        isClean(data) ? data : stripped(data)
-    }
-
-    /// True for a picture with no location, camera, lens, serial number, time taken or caption.
-    /// Nil-safe: anything that isn't a readable picture is not clean.
-    static func isClean(_ data: Data) -> Bool {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0,
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        else { return false }
-        if properties[kCGImagePropertyGPSDictionary] != nil || properties[kCGImagePropertyIPTCDictionary] != nil
-            || properties[kCGImagePropertyMakerAppleDictionary] != nil { return false }
-        if let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any],
-            [kCGImagePropertyTIFFMake, kCGImagePropertyTIFFModel, kCGImagePropertyTIFFDateTime, kCGImagePropertyTIFFSoftware,
-             kCGImagePropertyTIFFArtist, kCGImagePropertyTIFFHostComputer].contains(where: { tiff[$0] != nil }) { return false }
-        if let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any],
-            [kCGImagePropertyExifDateTimeOriginal, kCGImagePropertyExifDateTimeDigitized, kCGImagePropertyExifLensModel,
-             kCGImagePropertyExifLensMake, kCGImagePropertyExifBodySerialNumber, kCGImagePropertyExifCameraOwnerName,
-             kCGImagePropertyExifUserComment, kCGImagePropertyExifSubjectArea].contains(where: { exif[$0] != nil }) { return false }
-        return true
-    }
-
-    /// The same picture with no location, camera, date or other details: only the pixels and
-    /// which way up they go. Nil if it isn't a picture.
-    static func stripped(_ data: Data) -> Data? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil), let type = CGImageSourceGetType(source),
-            CGImageSourceGetCount(source) > 0
-        else { return nil }
-        let out = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(out, type, 1, nil) else { return nil }
-        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
-        var keep: [CFString: Any] = [:]
-        if let orientation = properties[kCGImagePropertyOrientation] { keep[kCGImagePropertyOrientation] = orientation }
-        keep[kCGImageDestinationLossyCompressionQuality] = 0.9
-        guard let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
-        CGImageDestinationAddImage(destination, image, keep as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return out as Data
-    }
-
-    // MARK: Bytes
-
-    private static func append(_ name: String, _ data: Data, to body: inout Data) {
-        let nameData = Data(name.utf8)
-        put(UInt32(nameData.count), into: &body)
-        body.append(nameData)
-        var size = UInt64(data.count).littleEndian
-        withUnsafeBytes(of: &size) { body.append(contentsOf: $0) }
-        body.append(data)
-    }
-
-    private static func put(_ value: UInt32, into data: inout Data) {
-        var v = value.littleEndian
-        withUnsafeBytes(of: &v) { data.append(contentsOf: $0) }
-    }
-
-    private static func word(_ data: Data, _ i: Int) -> UInt32? {
-        guard i >= 0, i + 4 <= data.count else { return nil }
-        return (0..<4).reduce(UInt32(0)) { $0 | UInt32(data[data.startIndex + i + $1]) << (8 * $1) }
-    }
-
-    private static func long(_ data: Data, _ i: Int) -> UInt64? {
-        guard i >= 0, i + 8 <= data.count else { return nil }
-        return (0..<8).reduce(UInt64(0)) { $0 | UInt64(data[data.startIndex + i + $1]) << (8 * $1) }
-    }
-
-    /// A 256-bit key from the passcode, slow to guess (PBKDF2-SHA256).
-    static func key(_ passcode: String, salt: Data, iterations: UInt32) -> SymmetricKey {
-        let password = Array(passcode.utf8)
-        var derived = [UInt8](repeating: 0, count: 32)
-        _ = salt.withUnsafeBytes { saltBytes in
-            password.withUnsafeBufferPointer { passwordBytes in
-                passwordBytes.baseAddress!.withMemoryRebound(to: Int8.self, capacity: password.count) { pw in
-                    CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2), pw, password.count,
-                                         saltBytes.bindMemory(to: UInt8.self).baseAddress, salt.count,
-                                         CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256), iterations, &derived, derived.count)
-                }
-            }
-        }
-        return SymmetricKey(data: derived)
-    }
+    static func smaller(_ data: Data, maxPixels: Int) -> Data? { PhotoPrivacy.smaller(data, maxPixels: maxPixels) }
+    static func cleaned(_ data: Data) -> Data? { PhotoPrivacy.cleaned(data) }
+    static func isClean(_ data: Data) -> Bool { PhotoPrivacy.isClean(data) }
+    static func stripped(_ data: Data) -> Data? { PhotoPrivacy.stripped(data) }
 }
 
 /// Checks a saved LiDAR map's header without decoding it all.

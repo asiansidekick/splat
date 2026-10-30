@@ -30,6 +30,7 @@ struct HomeView: View {
     @State private var sharing: SharedFile?
     @State private var backupError: String?
     @State private var teamPick: TeamPick?
+    @State private var syncing = false
 
     init(openBoard: UUID? = nil) {
         _path = State(initialValue: openBoard.map { [$0] } ?? [])
@@ -90,6 +91,7 @@ struct HomeView: View {
                             teamPick = TeamPick(boards: Set(store.boards.filter { $0.scene == scene }.map(\.id)))
                         } label: { Label("Send to team (AirDrop)", systemImage: "person.2.wave.2") }
                             .disabled(store.boards.isEmpty)
+                        Button { syncing = true } label: { Label("Sync with nearby phones", systemImage: "arrow.triangle.2.circlepath") }
                         Button(action: backUp) { Label("Back up all boards", systemImage: "externaldrive") }
                     } label: {
                         Label("More", systemImage: "ellipsis.circle")
@@ -116,6 +118,7 @@ struct HomeView: View {
             .sheet(isPresented: $showingHelp) { HelpView() }
             .sheet(isPresented: $showingNotes) { TesterNotesView() }
             .sheet(item: $teamPick) { pick in SendToTeamView(chosen: pick.boards).environmentObject(store) }
+            .sheet(isPresented: $syncing) { SyncView().environmentObject(store) }
             .sheet(item: $sharing) { file in ShareSheet(items: [file.url]) }
             .alert("Backup", isPresented: Binding(get: { backupError != nil }, set: { if !$0 { backupError = nil } })) {
                 Button("OK", role: .cancel) {}

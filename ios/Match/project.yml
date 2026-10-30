@@ -19,6 +19,8 @@ targets:
             CFBundleTypeRole: Editor
             LSHandlerRank: Owner
             LSItemContentTypes: [com.asiansidekick.match.pack]
+        # Nearby sync (MultipeerConnectivity): phone to phone over Wi-Fi and Bluetooth.
+        NSBonjourServices: [_match-sync._tcp, _match-sync._udp]
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: com.asiansidekick.match.pack
             UTTypeDescription: Match team pack
@@ -39,6 +41,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_NSCameraUsageDescription: "The camera takes continuity photos and shows the reference photo over the live view."
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Match finds your teammates' phones nearby to sync boards and photos directly, with no internet."
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Match saves continuity photos and comparisons to your Photos library when you ask it to."
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"

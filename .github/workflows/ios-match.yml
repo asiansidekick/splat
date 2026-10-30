@@ -59,7 +59,8 @@ jobs:
       - name: Team pack tests
         working-directory: ios/Match
         run: |
-          if ! swiftc -O Sources/Board.swift Sources/TeamPack.swift Tests/PackTests/main.swift -o pack-tests > compile.log 2>&1; then
+          if ! swiftc -O Sources/Board.swift Sources/TeamPack.swift Sources/Shared/PhotoPrivacy.swift Sources/Shared/SecurePack.swift \
+            Tests/PackTests/main.swift -o pack-tests > compile.log 2>&1; then
             grep -E ": error: " compile.log | sort -u | head -10 \
               | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
             cat compile.log | tail -40
@@ -70,6 +71,24 @@ jobs:
           status=$?
           cat pack-tests.log
           grep "^FAIL" pack-tests.log | sed -E 's#^FAIL  (.*)$#::error title=Pack test failed::\1#'
+          exit $status
+
+      # Nearby sync: three phones in memory through the real engine and sealing, other passcodes refused.
+      - name: Sync tests
+        working-directory: ios/Match
+        run: |
+          if ! swiftc -O Sources/Board.swift Sources/TeamPack.swift Sources/BoardSync.swift Sources/Shared/PhotoPrivacy.swift \
+            Sources/Shared/SecurePack.swift Sources/Shared/SyncEngine.swift Tests/SyncTests/main.swift -o sync-tests > compile.log 2>&1; then
+            grep -E ": error: " compile.log | sort -u | head -10 \
+              | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
+            cat compile.log | tail -40
+            exit 1
+          fi
+          set +e
+          ./sync-tests > sync-tests.log 2>&1
+          status=$?
+          cat sync-tests.log
+          grep "^FAIL" sync-tests.log | sed -E 's#^FAIL  (.*)$#::error title=Sync test failed::\1#'
           exit $status
 
       - name: Generate Xcode project

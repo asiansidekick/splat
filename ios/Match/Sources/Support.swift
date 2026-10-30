@@ -85,6 +85,7 @@ struct HelpView: View {
                     Text("• Your teammate taps Open in Match. New boards and photos are added; anything they already have, and their own notes, stay as they are. Send again later to pass on new photos.")
                     Text("• Team passcode: agree one passcode and enter it once on each phone. Packs are then locked with it, so a pack that lands on the wrong phone can't be opened. It stays on this phone only.")
                     Text("• Photos go without location, phone model or time-taken details. The AirDrop sheet leaves out Messages and Mail. Set AirDrop to Contacts Only (Settings, General, AirDrop) so strangers can't see your phone.")
+                    Text("• Sync with nearby phones (Boards screen, •••): open it on each phone with the same team passcode. Phones find each other over Wi-Fi and Bluetooth, with no signal needed, and swap new boards and photos both ways, passing them on round the team. Keep the screen open until it says Up to date. Phones with another passcode can't join, and nothing is deleted or overwritten.")
                     Text("• No AirDrop? Send to team also has Send by Messages or Mail (the pack stays locked on the way and photos are made smaller) and PDF for someone without Match. Both go over the internet, and a PDF can't be locked, so Match checks first.")
                 }
                 Section("Sharing and safety") {
