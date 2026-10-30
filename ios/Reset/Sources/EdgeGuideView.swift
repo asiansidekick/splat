@@ -163,10 +163,18 @@ struct HeldCompare: View {
                             Rectangle().frame(width: wipe ? size.width * (1 - toNow) : size.width)
                         }
                     if wipe {
+                        // A crisp line with a handle to drag.
                         Rectangle()
                             .fill(Color.white)
-                            .frame(width: 2)
+                            .frame(width: 2, height: size.height)
                             .shadow(color: .black.opacity(0.8), radius: 2)
+                            .position(x: size.width * (1 - toNow), y: size.height / 2)
+                        Image(systemName: "arrow.left.and.right")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.black)
+                            .frame(width: 34, height: 34)
+                            .background(Color.white, in: Circle())
+                            .shadow(color: .black.opacity(0.5), radius: 3)
                             .position(x: size.width * (1 - toNow), y: size.height / 2)
                     }
                 } else {

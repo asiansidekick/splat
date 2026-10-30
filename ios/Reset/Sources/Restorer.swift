@@ -34,6 +34,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     /// Paused: the live picture frozen, with the reference stretched onto that same frame.
     @Published private(set) var paused = false
     @Published private(set) var held: HeldFrame?
+    /// While paused: the reference photo exactly as shot, upright, to compare with the frozen frame.
+    @Published private(set) var heldPhoto: UIImage?
     /// What the held pictures are made from, kept so turning the phone while paused lays them
     /// out again for the new screen shape instead of stretching them.
     private var heldParts: (frame: ARFrame, live: CIImage, placed: CIImage?, registered: Bool)?
@@ -436,14 +438,15 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let live = CIImage(cvPixelBuffer: frame.capturedImage)
         let placement = Placement(display: frame.displayTransform(for: orientation, viewportSize: viewport), viewport: viewport)
         let keyframe = lockedKeyframe ?? current
-        var source: CIImage?
-        var warp: Warp?
-        if let keyframe, let ghostSource, ghostSource.id == keyframe.id {
-            source = ghostSource.image
-            warp = Warp(
-                reference: keyframe.cameraToWorld, referenceIntrinsics: keyframe.cameraIntrinsics,
-                referenceSize: CGSize(width: keyframe.imageWidth, height: keyframe.imageHeight),
-                live: frame.camera.transform, liveIntrinsics: frame.camera.intrinsics, liveSize: frame.camera.imageResolution)
+        // The reference is shown exactly as shot (not turned or stretched onto the frame), so
+        // the compare is clean: Phil found the turned one messy.
+        let source: CIImage? = nil
+        let warp: Warp? = nil
+        if let keyframe {
+            let url = ReferenceStore.folder(for: reference.id).appendingPathComponent(keyframe.imageFile)
+            heldPhoto = UIImage(contentsOfFile: url.path)?.cgImage.map {
+                UIImage(cgImage: $0, scale: 1, orientation: keyframe.uprightOrientation)
+            }
         }
         let context = ciContext
         let layout = (orientation, viewport)
@@ -491,6 +494,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     func resume() {
         paused = false
+        heldPhoto = nil
         heldBusy = false
         held = nil
         heldParts = nil

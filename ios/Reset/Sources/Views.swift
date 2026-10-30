@@ -397,13 +397,15 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                 if landscape {
                     HStack(spacing: 0) {
                         if !left { Spacer(minLength: 0) }
-                        VStack(spacing: 14) {
-                            trailing()
+                        // Grouped round the shutter in the middle, like the Camera app, so nothing
+                        // sits in the screen's top corner (taps there went unanswered).
+                        VStack(spacing: 18) {
                             Spacer(minLength: 0)
+                            trailing()
                             modes(true)
                             shutter()
-                            Spacer(minLength: 0)
                             leading()
+                            Spacer(minLength: 0)
                         }
                         .padding(.vertical, 8)
                         .frame(width: Self.sideWidth)
@@ -1169,7 +1171,7 @@ struct ResetStage: View {
     /// Pause on the left and Log on the right, for the left hand.
     @AppStorage("leftHanded") private var leftHanded = false
     /// Compare by wiping across instead of fading.
-    @AppStorage("compareWipe") private var wipe = false
+    @AppStorage("compareStyleWipe") private var wipe = true
     @State private var ghostShown = true
     /// While swiping the ghost strength, the cursor shows.
     @State private var swipingStrength = false
@@ -1377,7 +1379,7 @@ struct ResetStage: View {
                 }
                 if restorer.paused {
                     HeldCompare(
-                        held: restorer.held, plainReference: reference.photoOnly ? restorer.startPhoto : nil,
+                        held: restorer.held, plainReference: reference.photoOnly ? restorer.startPhoto : restorer.heldPhoto,
                         toNow: $toNow, wipe: wipe)
                 }
                 VStack(spacing: 8) {
