@@ -72,13 +72,17 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     @Published private(set) var start: SIMD3<Float>?
     /// Bumped when the person adds or deletes something, so the reference is saved.
     @Published private(set) var revision = 0
+    /// How much the phone's depth readings are stretched to agree with a real length typed in
+    /// against a tape measure (Phil, 2026-10-31). 1 = as read.
+    @Published private(set) var calibration = Measurer.depthScale
+    static var depthScale: Float = UserDefaults.standard.object(forKey: "measureDepthScale") as? Float ?? 1
     /// The line or note tapped, ready to delete on its own.
     @Published private(set) var selected: UUID? {
         didSet { if selected != oldValue { rebuild() } }
     }
-    @Published var showAxes = UserDefaults.standard.object(forKey: "measureAxes") as? Bool ?? true {
+    @Published var showAxes = UserDefaults.standard.object(forKey: "measureAxes2") as? Bool ?? false {
         didSet {
-            UserDefaults.standard.set(showAxes, forKey: "measureAxes")
+            UserDefaults.standard.set(showAxes, forKey: "measureAxes2")
             rebuild()
         }
     }
@@ -387,6 +391,27 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     }
 
     func deselect() { selected = nil }
+
+    /// Takes the real length typed for a line (say, against a tape measure laid in the scene) as
+    /// the truth: later readings are stretched by the same ratio. Returns false if it can't be used.
+    @discardableResult
+    func calibrate(_ id: UUID, to metres: Float) -> Bool {
+        guard let line = measurements.first(where: { $0.id == id }), line.measured > 0.03, metres > 0.03 else { return false }
+        let scale = min(max(Measurer.depthScale * metres / line.measured, 0.3), 3)
+        Measurer.depthScale = scale
+        calibration = scale
+        UserDefaults.standard.set(scale, forKey: "measureDepthScale")
+        Diagnostics.log(String(format: "Calibrated: read %.1f cm, real %.1f cm, depth scale now %.3f", line.measured * 100, metres * 100, scale))
+        setLength(metres, for: id)
+        return true
+    }
+
+    func resetCalibration() {
+        Measurer.depthScale = 1
+        calibration = 1
+        UserDefaults.standard.removeObject(forKey: "measureDepthScale")
+        Haptics.tap()
+    }
 
     /// Makes the text on lines and notes bigger or smaller (and remembers it).
     func scaleText(by factor: Float) {
@@ -703,7 +728,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
                                           x: Float(n.x) * Float(depth.width), y: Float(n.y) * Float(depth.height))
             ?? DepthMap.sample(depth.values, width: depth.width, height: depth.height,
                                x: Int(n.x * CGFloat(depth.width)), y: Int(n.y * CGFloat(depth.height)))
-        guard let metres else { return nil }
+        guard let metres = metres.map({ $0 * depthScale }) else { return nil }
         let k = frame.camera.intrinsics
         let size = frame.camera.imageResolution
         // ARKit's camera looks down -z with y up; the picture counts y down.
@@ -876,8 +901,8 @@ struct MeasureBar: View {
                 } else if measurer.moving == nil {
                     small("arrow.uturn.backward", "Undo") { measurer.undo() }
                         .disabled(measurer.start == nil && measurer.isEmpty)
-                    small(measurer.showAxes ? "move.3d" : "line.diagonal", measurer.showAxes ? "Axes on" : "Axes off") {
-                        measurer.showAxes.toggle()
+                    if measurer.calibration != 1 {
+                        small("scalemass", String(format: "×%.2f", measurer.calibration)) { measurer.resetCalibration() }
                     }
                 }
                 Button { measurer.addPoint() } label: {
@@ -1013,6 +1038,15 @@ struct MeasureEntry: View {
             HStack(spacing: 8) {
                 plainButton("Delete", fill: Color.red.opacity(0.85), text: .white) { measurer.deleteMark(id) }
                 plainButton("Cancel", fill: Color.white.opacity(0.15), text: .white) { measurer.dismissEntry() }
+                plainButton("Tape", fill: Color.green.opacity(0.85), text: .black) {
+                    var typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let last = typed.last, last.isNumber || last == "." { typed += unit }
+                    guard let metres = LengthText.parse(typed), measurer.calibrate(id, to: metres) else {
+                        Haptics.warning()
+                        return
+                    }
+                    measurer.dismissEntry()
+                }
                 plainButton("Set", fill: .yellow, text: .black) {
                     var typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     // Nothing typed keeps the phone's guess.
