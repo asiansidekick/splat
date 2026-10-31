@@ -184,8 +184,13 @@ enum DepthMap {
         }
         guard points.count >= 30 else { return nil }
         let limit = 0.012
-        let step = max(1, points.count / 24)
-        let sample = stride(from: 0, to: points.count, by: step).map { points[$0] }
+        // Two dozen readings scattered over the box (a fixed pseudo-random walk, so the answer is
+        // steady; an even stride would line up along a diagonal and fit nothing).
+        var seed: UInt32 = 12345
+        let sample: [(dx: Double, dy: Double, inverse: Double)] = (0..<24).map { _ in
+            seed = seed &* 1664525 &+ 1013904223
+            return points[Int(seed >> 8) % points.count]
+        }
         var best: [(dx: Double, dy: Double, inverse: Double)] = []
         for i in 0..<sample.count {
             for j in (i + 1)..<sample.count {
