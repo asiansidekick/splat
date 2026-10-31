@@ -2,6 +2,7 @@ import ARKit
 import CoreImage
 import SceneKit
 import SwiftUI
+import Vision
 import simd
 
 /// Dimensioning and notes in the room (Phil, 2026-10-30): drag a line across something, or aim the
@@ -73,6 +74,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var loggedSource: Bool?
     /// Why there is no distance when tracking isn't ready, shown in place of the reading.
     @Published private(set) var trackingNote: String?
+    /// A short result shown under the crosshair for a few seconds (the A4 check).
+    @Published private(set) var notice: String?
     private var loggedNote: String?
     /// The first end of the line being drawn.
     @Published private(set) var start: SIMD3<Float>?
@@ -683,6 +686,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     /// What the readout under the crosshair says.
     var readout: String {
+        if let notice { return notice }
         if let drag { return "~" + Measurer.text(simd_distance(drag.a, drag.b)) + (dragTooClose ? " · too close" : "") }
         if moving != nil { return "Aim where it goes, tap ✓" }
         if selected != nil { return "Edit, move or delete the red one" }
@@ -766,6 +770,65 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         Diagnostics.log(String(format: "Calibrated: read %.1f cm, real %.1f cm, depth scale now %.3f", line.measured * 100, metres * 100, scale))
         setLength(metres, for: id)
         return true
+    }
+
+    /// Finds a sheet of A4 paper in the camera picture, works out how far away it is from its size
+    /// alone (29.7 x 21 cm), compares that with the LiDAR reading there and rescales to agree.
+    func calibrateToPaper() {
+        guard let frame = session.currentFrame, let depth = Measurer.depth(of: frame) else {
+            say("A4: no LiDAR depth yet")
+            return
+        }
+        let buffer = frame.capturedImage
+        let width = Float(CVPixelBufferGetWidth(buffer)), height = Float(CVPixelBufferGetHeight(buffer))
+        let request = VNDetectRectanglesRequest()
+        request.minimumAspectRatio = 0.4
+        request.maximumAspectRatio = 1.0
+        request.minimumSize = 0.06
+        request.minimumConfidence = 0.5
+        request.quadratureTolerance = 25
+        request.maximumObservations = 6
+        try? VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up, options: [:]).perform([request])
+        let k = frame.camera.intrinsics
+        var best: (result: PaperPose.Result, area: Float, centre: SIMD2<Float>)?
+        for observation in request.results ?? [] {
+            let corners = [observation.topLeft, observation.topRight, observation.bottomRight, observation.bottomLeft]
+                .map { SIMD2<Float>(Float($0.x) * width, (1 - Float($0.y)) * height) }
+            guard let result = PaperPose.solve(corners: corners, longSide: 0.297, shortSide: 0.210,
+                                               fx: k[0][0], fy: k[1][1], cx: k[2][0], cy: k[2][1]),
+                  result.mismatch < 0.12, result.distance > 0.15, result.distance < 4 else { continue }
+            let area = Float(observation.boundingBox.width * observation.boundingBox.height)
+            if best == nil || area > best!.area {
+                best = (result, area, corners.reduce(SIMD2<Float>.zero, +) / 4)
+            }
+        }
+        guard let best else {
+            say("No A4 sheet found: lay it flat, whole sheet in view")
+            return
+        }
+        let px = best.centre.x / width * Float(depth.width), py = best.centre.y / height * Float(depth.height)
+        guard let lidar = DepthMap.planeDepth(depth.values, width: depth.width, height: depth.height, x: px, y: py, radius: 10)
+                ?? DepthMap.sample(depth.values, width: depth.width, height: depth.height, x: Int(px), y: Int(py)) else {
+            say("A4 found, but no LiDAR reading on it")
+            return
+        }
+        let pinhole = best.result.distance
+        let scale = min(max(pinhole / lidar, 0.3), 3)
+        Diagnostics.log(String(format: "A4 check: pinhole %.3f m, LiDAR %.3f m (raw), ratio %.3f, shape mismatch %.3f, previous scale %.3f",
+                               pinhole, lidar, pinhole / lidar, best.result.mismatch, Measurer.depthScale))
+        Measurer.depthScale = scale
+        calibration = scale
+        UserDefaults.standard.set(scale, forKey: "measureDepthScale")
+        Haptics.tap()
+        say(String(format: "A4 is %.0f cm away by its size; LiDAR read %.0f cm. Scale ×%.2f", pinhole * 100, lidar * 100, scale))
+    }
+
+    private func say(_ text: String) {
+        notice = text
+        let shown = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            if self?.notice == shown { self?.notice = nil }
+        }
     }
 
     func resetCalibration() {
@@ -1347,6 +1410,7 @@ struct MeasureBar: View {
                     small("ruler.fill", measurer.tapeMode ? "Drag on tape" : "Tape", tint: measurer.tapeMode ? .green : .white) {
                         measurer.tapeMode.toggle()
                     }
+                    small("doc.viewfinder", "A4") { measurer.calibrateToPaper() }
                     if measurer.calibration != 1 {
                         small("scalemass", String(format: "×%.2f", measurer.calibration)) { measurer.resetCalibration() }
                     }

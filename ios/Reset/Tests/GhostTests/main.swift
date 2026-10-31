@@ -919,6 +919,33 @@ func testDots() {
     save("12-scan-dots", ghost: scan, background: scene.capture(big).rgba, width: big.width, height: big.height)
 }
 
+/// The distance to a sheet of paper from its corners in the picture.
+func testPaperPose() {
+    let fx: Float = 1000, fy: Float = 1000, cx: Float = 960, cy: Float = 720
+    let w: Float = 0.297, h: Float = 0.210
+    // The sheet's middle 0.8 m away and a little off to one side, tipped 25 and 10 degrees.
+    let ax: Float = 25 * .pi / 180, ay: Float = 10 * .pi / 180
+    let rx = simd_float3x3(SIMD3(1, 0, 0), SIMD3(0, cos(ax), sin(ax)), SIMD3(0, -sin(ax), cos(ax)))
+    let ry = simd_float3x3(SIMD3(cos(ay), 0, -sin(ay)), SIMD3(0, 1, 0), SIMD3(sin(ay), 0, cos(ay)))
+    let r = rx * ry
+    let t = SIMD3<Float>(0.05, -0.02, 0.8)
+    func project(_ x: Float, _ y: Float) -> SIMD2<Float> {
+        let p = r * SIMD3(x, y, 0) + t
+        return SIMD2(fx * p.x / p.z + cx, fy * p.y / p.z + cy)
+    }
+    let long = [project(-w / 2, -h / 2), project(w / 2, -h / 2), project(w / 2, h / 2), project(-w / 2, h / 2)]
+    let found = PaperPose.solve(corners: long, longSide: w, shortSide: h, fx: fx, fy: fy, cx: cx, cy: cy)
+    expect(abs((found?.distance ?? 0) - 0.8) < 0.002, "a tipped A4 sheet reads 0.8 m from its corners (\(String(describing: found?.distance)))")
+    // The same sheet with the first corner on the other side: the shape picks the right way round.
+    let turned = [long[1], long[2], long[3], long[0]]
+    let other = PaperPose.solve(corners: turned, longSide: w, shortSide: h, fx: fx, fy: fy, cx: cx, cy: cy)
+    expect(abs((other?.distance ?? 0) - 0.8) < 0.002, "and with the corners going round from another one (\(String(describing: other?.distance)))")
+    // Twice the distance, the sheet looks half the size.
+    let far = long.map { SIMD2(($0.x - cx) / 2 + cx, ($0.y - cy) / 2 + cy) }
+    let faraway = PaperPose.solve(corners: far, longSide: w, shortSide: h, fx: fx, fy: fy, cx: cx, cy: cy)
+    expect(abs((faraway?.distance ?? 0) - 1.6) < 0.01, "half as big in the picture is twice as far (\(String(describing: faraway?.distance)))")
+}
+
 /// Following a patch of the picture, and fixing its distance from two views.
 func testFeatureTrack() {
     // A textured grid, with a 9 x 9 patch cut out and then looked for 3 pixels right and 2 up.
@@ -952,6 +979,7 @@ testMiddleDepth()
 testPlaneDepth()
 testCornerSnap()
 testFeatureTrack()
+testPaperPose()
 testGhost()
 testNoisyGhost()
 testHardCases()
