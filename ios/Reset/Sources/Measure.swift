@@ -155,6 +155,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// refines its map, and dropped back to plain room coordinates if the session was reset.
     private func followAnchors() {
         refineTracks()
+        scaleLabels(root)
+        scaleLabels(preview)
         guard Measurer.anchoring else { return }
         let frame = session.currentFrame
         var live: [UUID: ARAnchor] = [:]
@@ -1146,11 +1148,36 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     private func array(_ p: SIMD3<Float>) -> [Float] { [p.x, p.y, p.z] }
 
-    /// How tall labels are: readable from where the phone is now.
-    private func labelHeight(at p: SIMD3<Float>) -> Float {
+    /// How thick lines and note pins are: sized for where the phone is when they are drawn.
+    private func thickness(at p: SIMD3<Float>) -> Float {
         guard let camera = session.currentFrame?.camera.transform.columns.3 else { return 0.03 }
         let distance = simd_distance(p, SIMD3(camera.x, camera.y, camera.z))
         return min(max(distance * 0.035 * textScale, 0.008), 0.6)
+    }
+
+    /// How tall labels are one metre from the phone. A label is built at this size and scaled up
+    /// with its distance from the phone every frame, so it stays readable however far you step back.
+    private var unitLabel: Float { 0.035 * textScale }
+
+    /// Hangs a label in a holder at `around`, which `scaleLabels` resizes as the phone moves.
+    private static func label(_ node: SCNNode, around: SIMD3<Float>) -> SCNNode {
+        let holder = SCNNode()
+        holder.name = "label"
+        holder.simdPosition = around
+        node.simdPosition -= around
+        holder.addChildNode(node)
+        return holder
+    }
+
+    /// Keeps every label the same size on the screen: scaled by its distance from the phone.
+    private func scaleLabels(_ parent: SCNNode) {
+        guard let camera = session.currentFrame?.camera.transform.columns.3 else { return }
+        let eye = SIMD3(camera.x, camera.y, camera.z)
+        parent.enumerateChildNodes { node, _ in
+            guard node.name == "label" else { return }
+            let distance = min(max(simd_distance(node.simdWorldPosition, eye), 0.4), 30)
+            node.simdScale = SIMD3(repeating: distance)
+        }
     }
 
     private func rebuild() {
@@ -1172,12 +1199,15 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let pin = SCNNode()
             pin.name = "mark:\(note.id.uuidString)"
             let picked = note.id == selected
-            let height = labelHeight(at: note.spot)
-            pin.addChildNode(Measurer.dot(at: note.spot, radius: max(height * 0.12, 0.003), colour: picked ? Measurer.pickedColour : Measurer.noteColour))
-            pin.addChildNode(ModelDimensions.bubble(note.text, picked: picked, height: height * 0.8, at: note.spot + SIMD3(0, height * 0.2, 0)))
+            let height = unitLabel
+            let pinSize = thickness(at: note.spot)
+            pin.addChildNode(Measurer.dot(at: note.spot, radius: max(pinSize * 0.12, 0.003), colour: picked ? Measurer.pickedColour : Measurer.noteColour))
+            pin.addChildNode(Measurer.label(
+                ModelDimensions.bubble(note.text, picked: picked, height: height * 0.8, at: note.spot + SIMD3(0, height * 0.2, 0)), around: note.spot))
             root.addChildNode(pin)
         }
         ModelDimensions.onTop(root)
+        scaleLabels(root)
         followAnchors()
     }
 
@@ -1186,13 +1216,14 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let guess = approx ? "~" : ""
         let node = SCNNode()
         let middle = (a + b) / 2
-        let height = labelHeight(at: middle)
-        let radius = max(height * 0.05, 0.0012)
+        let height = unitLabel
+        let radius = max(thickness(at: middle) * 0.05, 0.0012)
         node.addChildNode(Measurer.line(from: a, to: b, radius: radius, colour: colour))
         // Arrowheads at both ends, like a drawing's dimension line.
         node.addChildNode(Measurer.arrowhead(tip: a, towards: b, radius: radius, colour: colour))
         node.addChildNode(Measurer.arrowhead(tip: b, towards: a, radius: radius, colour: colour))
-        node.addChildNode(ModelDimensions.tag(guess + Measurer.text(simd_distance(a, b) * scale), colour: colour, height: height, at: middle + SIMD3(0, height * 0.9, 0)))
+        node.addChildNode(Measurer.label(
+            ModelDimensions.tag(guess + Measurer.text(simd_distance(a, b) * scale), colour: colour, height: height, at: middle + SIMD3(0, height * 0.9, 0)), around: middle))
         guard axes else { return node }
         let low = a.y <= b.y ? a : b
         let high = a.y <= b.y ? b : a
@@ -1203,10 +1234,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         guard level > 0.01, rise > 0.01 else { return node }
         node.addChildNode(Measurer.line(from: low, to: corner, radius: radius * 0.6, colour: ModelDimensions.depth.withAlphaComponent(0.85)))
         node.addChildNode(Measurer.line(from: corner, to: high, radius: radius * 0.6, colour: ModelDimensions.height.withAlphaComponent(0.85)))
-        node.addChildNode(ModelDimensions.tag("↔ " + guess + Measurer.text(level * scale), colour: ModelDimensions.depth, height: height * 0.8,
-                                              at: (low + corner) / 2 - SIMD3(0, height * 0.8, 0)))
-        node.addChildNode(ModelDimensions.tag("↕ " + guess + Measurer.text(rise * scale), colour: ModelDimensions.height, height: height * 0.8,
-                                              at: (corner + high) / 2 + simd_normalize(corner - low) * height * 1.6))
+        node.addChildNode(Measurer.label(ModelDimensions.tag("↔ " + guess + Measurer.text(level * scale), colour: ModelDimensions.depth, height: height * 0.8,
+                                              at: (low + corner) / 2 - SIMD3(0, height * 0.8, 0)), around: (low + corner) / 2))
+        node.addChildNode(Measurer.label(ModelDimensions.tag("↕ " + guess + Measurer.text(rise * scale), colour: ModelDimensions.height, height: height * 0.8,
+                                              at: (corner + high) / 2 + simd_normalize(corner - low) * height * 1.6), around: (corner + high) / 2))
         return node
     }
 
