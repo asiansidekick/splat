@@ -11,6 +11,7 @@
 import CoreGraphics
 import Foundation
 import ImageIO
+import simd
 import UniformTypeIdentifiers
 
 var failures = 0
@@ -393,7 +394,9 @@ func runFrameTests() {
     let world = SIMD3<Float>(0.3, -0.2, -2)
     if let n = frame.project(world), let back = frame.point(atSensor: n, metres: 2) {
         expect(simd_distance(back, world) < 1e-4, "a point projects into a frame and comes back")
-        expect(abs(n.x - (960 + 150) / 1920) < 1e-4 && abs(n.y - (720 + 100) / 1440) < 1e-4, "it lands where the camera model says")
+        let wantX: Float = (960 + 150) / 1920
+        let wantY: Float = (720 + 100) / 1440
+        expect(abs(n.x - wantX) < 1e-4 && abs(n.y - wantY) < 1e-4, "it lands where the camera model says")
     } else {
         expect(false, "a point in front of the camera projects")
     }
