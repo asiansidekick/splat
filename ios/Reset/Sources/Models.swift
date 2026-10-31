@@ -31,6 +31,10 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// While dragging: from where the finger's ray meets the model's floor height to the model,
     /// so the model keeps its place under the finger instead of jumping to it.
     private var dragOffset: SIMD3<Float>?
+    /// One-finger drags move the selected model up and down instead of across (Phil, 2026-10-31).
+    @Published var lifting = false
+    private weak var cameraView: ARSCNView?
+    private var depthCache: (time: TimeInterval, depth: Measurer.Depth)?
     /// True while something else (measuring) uses one-finger drags on the camera view.
     var isSuspended: () -> Bool = { false }
     let session: ARSession
@@ -143,6 +147,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     /// Tap a model to select it; drag moves it over surfaces, pinch scales, twist turns.
     func attachGestures(to view: ARSCNView) {
+        cameraView = view
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.maximumNumberOfTouches = 1
@@ -164,9 +169,10 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         selectedModel = hits.lazy.compactMap { self.modelID(of: $0.node) }.first
     }
 
-    /// Drags the model across the floor at its own height. Picks up the model under the finger
-    /// (or the only one) when none is selected. Works with no surface found, unlike a raycast,
-    /// which often finds nothing and had left the model stuck.
+    /// Drags the model across the room. Where the LiDAR sees a surface under the finger (the floor, a
+    /// table), the model stands on it; with none, it slides across the level plane at its own height,
+    /// which works with no surface found, unlike a raycast. With Lift on, a drag moves it up and down.
+    /// Picks up the model under the finger (or the only one) when none is selected.
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         guard !isSuspended(), let view = gesture.view as? ARSCNView else { return }
         let location = gesture.location(in: view)
@@ -179,21 +185,98 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             }
             dragOffset = nil
         }
-        guard let id = selectedModel, let node = modelNodes[id],
-            let point = floorPoint(location, in: view, height: node.simdWorldPosition.y)
-        else { return }
+        guard let id = selectedModel, let node = modelNodes[id] else { return }
+        if lifting {
+            switch gesture.state {
+            case .changed:
+                let delta = gesture.translation(in: view)
+                gesture.setTranslation(.zero, in: view)
+                let camera = session.currentFrame?.camera.transform.columns.3.xyz ?? node.simdWorldPosition
+                // About a millimetre and a half per point for each metre away.
+                node.simdWorldPosition.y -= Float(delta.y) * 0.0016 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
+            case .ended, .cancelled:
+                commit(id)
+            default:
+                break
+            }
+            return
+        }
+        guard let point = floorPoint(location, in: view, height: node.simdWorldPosition.y) else { return }
+        let hit = surface(at: location, in: view)
         switch gesture.state {
         case .began:
-            dragOffset = node.simdWorldPosition - point
+            let anchor = hit ?? point
+            dragOffset = SIMD3(node.simdWorldPosition.x - anchor.x, 0, node.simdWorldPosition.z - anchor.z)
+            if hit == nil { dragOffset?.y = node.simdWorldPosition.y - point.y }
         case .changed:
-            node.simdWorldPosition = point + (dragOffset ?? .zero)
+            move(node, id: id, level: point, surface: hit)
         case .ended, .cancelled:
-            if gesture.state == .ended { node.simdWorldPosition = point + (dragOffset ?? .zero) }
+            if gesture.state == .ended { move(node, id: id, level: point, surface: hit) }
             dragOffset = nil
             commit(id)
         default:
             break
         }
+    }
+
+    private func move(_ node: SCNNode, id: UUID, level: SIMD3<Float>, surface: SIMD3<Float>?) {
+        let offset = dragOffset ?? .zero
+        guard let surface else {
+            node.simdWorldPosition = level + offset
+            return
+        }
+        // The lowest point of the model rests on the surface, eased so a noisy reading doesn't shake it.
+        let bottom = (boxes[id]?.low.y ?? 0) * node.simdScale.y
+        let wanted = surface.y - bottom
+        let y = node.simdWorldPosition.y * 0.6 + wanted * 0.4
+        node.simdWorldPosition = SIMD3(surface.x + offset.x, y, surface.z + offset.z)
+    }
+
+    /// The surface the LiDAR sees under a place on the screen, in the room's coordinates.
+    private func surface(at location: CGPoint, in view: ARSCNView) -> SIMD3<Float>? {
+        guard let frame = session.currentFrame, case .normal = frame.camera.trackingState else { return nil }
+        let depth: Measurer.Depth
+        if let cache = depthCache, cache.time == frame.timestamp {
+            depth = cache.depth
+        } else if let fresh = Measurer.depth(of: frame) {
+            depthCache = (frame.timestamp, fresh)
+            depth = fresh
+        } else {
+            return nil
+        }
+        return Measurer.point(in: frame, depth: depth, at: location, view: view)
+    }
+
+    /// Stands the selected model on the floor under it: looks down the screen from the model for the
+    /// LiDAR surface nearest to straight beneath it, and sets the model's lowest point on that.
+    func dropToFloor() {
+        guard let id = selectedModel, let node = modelNodes[id], let view = cameraView else { return }
+        let base = node.simdWorldPosition
+        let shown = view.projectPoint(SCNVector3(base.x, base.y, base.z))
+        guard shown.z > 0, shown.z < 1, view.bounds.height > 0 else {
+            modelError = "Keep the model on the screen, with the floor under it in view."
+            return
+        }
+        var best: SIMD3<Float>?
+        var bestDistance = Float.infinity
+        var y = CGFloat(shown.y)
+        while y < view.bounds.height - 8 {
+            if let p = surface(at: CGPoint(x: CGFloat(shown.x), y: y), in: view), p.y <= base.y + 0.05 {
+                let d = hypot(p.x - base.x, p.z - base.z)
+                if d < bestDistance {
+                    bestDistance = d
+                    best = p
+                }
+            }
+            y += 14
+        }
+        guard let floor = best else {
+            modelError = "Couldn't see the floor under the model. Tilt the phone down a little and try again."
+            return
+        }
+        node.simdWorldPosition.y = floor.y - (boxes[id]?.low.y ?? 0) * node.simdScale.y
+        Haptics.success()
+        commit(id)
     }
 
     /// Where the finger's ray meets the level plane at `height`, nil when it points above it
@@ -312,7 +395,7 @@ struct ModelOverlay: View {
         Group {
             if let name = placer.selectedModelName {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(name): drag to move, pinch to scale, twist to turn").font(.caption2)
+                    Text(placer.lifting ? "\(name): drag up or down to lift it" : "\(name): drag to move (it stands on surfaces), pinch to scale, twist to turn").font(.caption2)
                     Text("W × D × H  \(placer.sizeText)").font(.caption.bold().monospacedDigit())
                     HStack {
                         Button {
@@ -321,6 +404,14 @@ struct ModelOverlay: View {
                             Image(systemName: placer.showDimensions ? "ruler.fill" : "ruler")
                         }
                         .accessibilityLabel(placer.showDimensions ? "Hide size arrows" : "Show size arrows")
+                        Button {
+                            placer.lifting.toggle()
+                        } label: {
+                            Image(systemName: "arrow.up.and.down")
+                        }
+                        .tint(placer.lifting ? .yellow : nil)
+                        .accessibilityLabel(placer.lifting ? "Drag moves it across again" : "Drag lifts it up and down")
+                        Button("Floor") { placer.dropToFloor() }
                         Button("True size") { placer.resetSelectedModelSize() }
                         Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
                         Spacer()
