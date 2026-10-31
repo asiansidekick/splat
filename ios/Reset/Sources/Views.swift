@@ -598,6 +598,32 @@ struct SideButton: View {
     }
 }
 
+/// The 3D models button in the bottom row (phone upright); on its side it moves to the far edge instead.
+struct ModelsBesideScreenshot: View {
+    let action: () -> Void
+    @Environment(\.chromeVertical) private var vertical
+
+    var body: some View {
+        if !vertical { SideButton(title: "3D models", systemImage: "cube", action: action) }
+    }
+}
+
+/// The 3D models button at the screen's far edge when the phone is on its side, out of the way
+/// while measuring (the measuring buttons stand there).
+struct ModelsEdgeButton: View {
+    @ObservedObject var measurer: Measurer
+    let action: () -> Void
+
+    var body: some View {
+        if !measurer.active {
+            SideButton(title: "3D models", systemImage: "cube", action: action)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+                .hiddenInScreenshots()
+        }
+    }
+}
+
 struct PressScale: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -1024,6 +1050,8 @@ struct CaptureStage: View {
     let showToast: (String) -> Void
     @AppStorage("captureMode") private var mode: CaptureMode = .snapshot
     @AppStorage("useLiDAR") private var useLiDAR = true
+    @AppStorage("leftHanded") private var leftHanded = false
+    @Environment(\.verticalSizeClass) private var verticalSize
     @State private var holder = CameraViewHolder()
     @State private var importingModels = false
     @State private var justSaved = false
@@ -1117,15 +1145,21 @@ struct CaptureStage: View {
             .disabled(recorder.saving)
             .accessibilityLabel(shutterLabel)
         } trailing: {
-            WithScreenshot(camera: { holder.view }, toast: showToast) {
+            WithScreenshot(camera: { holder.view }, toast: showToast, size: 74) {
                 if recorder.capturing {
                     Text("\(recorder.keyframeCount)\n\(recorder.keyframeCount == 1 ? "view" : "views")")
                         .font(.caption.bold().monospacedDigit())
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.white)
                 } else {
-                    SideButton(title: "3D models", systemImage: "cube") { importingModels = true }
+                    // On its side the cube moves to the opposite edge of the screen (see the overlay below).
+                    ModelsBesideScreenshot { importingModels = true }
                 }
+            }
+        }
+        .overlay(alignment: leftHanded ? .bottomTrailing : .bottomLeading) {
+            if verticalSize == .compact, !recorder.capturing {
+                ModelsEdgeButton(measurer: recorder.measurer) { importingModels = true }
             }
         }
         .overlay { MeasurePointer(measurer: recorder.measurer) }

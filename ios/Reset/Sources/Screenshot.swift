@@ -85,13 +85,15 @@ extension EnvironmentValues {
 struct WithScreenshot<Content: View>: View {
     let camera: () -> ARSCNView?
     let toast: (String) -> Void
+    /// Diameter of the screenshot button (the capture screen makes it as big as the shutter).
+    var size: CGFloat = 40
     @ViewBuilder let content: () -> Content
     @Environment(\.chromeVertical) private var vertical
 
     var body: some View {
         let layout = vertical ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 6))
         layout {
-            ScreenshotButton(camera: camera, toast: toast)
+            ScreenshotButton(camera: camera, toast: toast, size: size)
             content()
         }
     }
@@ -101,6 +103,7 @@ struct WithScreenshot<Content: View>: View {
 struct ScreenshotButton: View {
     let camera: () -> ARSCNView?
     let toast: (String) -> Void
+    var size: CGFloat = 40
 
     var body: some View {
         Button {
@@ -120,9 +123,9 @@ struct ScreenshotButton: View {
             }
         } label: {
             Image(systemName: "camera.viewfinder")
-                .font(.title3)
+                .font(.system(size: size * 0.4))
                 .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
+                .frame(width: size, height: size)
                 .background(Color.white.opacity(0.2), in: Circle())
                 .shadow(color: .black.opacity(0.6), radius: 3)
         }

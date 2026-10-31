@@ -804,8 +804,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let height = labelHeight(at: middle)
         let radius = max(height * 0.05, 0.0012)
         node.addChildNode(Measurer.line(from: a, to: b, radius: radius, colour: colour))
-        node.addChildNode(Measurer.dot(at: a, radius: radius * 3, colour: .white))
-        node.addChildNode(Measurer.dot(at: b, radius: radius * 3, colour: .white))
+        // Arrowheads at both ends, like a drawing's dimension line.
+        node.addChildNode(Measurer.arrowhead(tip: a, towards: b, radius: radius, colour: colour))
+        node.addChildNode(Measurer.arrowhead(tip: b, towards: a, radius: radius, colour: colour))
         node.addChildNode(ModelDimensions.tag(guess + Measurer.text(simd_distance(a, b) * scale), colour: colour, height: height, at: middle + SIMD3(0, height * 0.9, 0)))
         guard axes else { return node }
         let low = a.y <= b.y ? a : b
@@ -829,13 +830,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         preview.childNodes.forEach { $0.removeFromParentNode() }
         guard active else { return }
         if let drag {
-            preview.addChildNode(Measurer.dot(at: drag.a, radius: 0.004, colour: .white))
             preview.addChildNode(node(for: drag.a, drag.b, axes: false, approx: true))
             ModelDimensions.onTop(preview)
             return
         }
         guard let start else { return }
-        preview.addChildNode(Measurer.dot(at: start, radius: 0.004, colour: .white))
         if let cursor, simd_distance(start, cursor) > 0.002 {
             preview.addChildNode(node(for: start, cursor, axes: false, approx: true))
         }
@@ -854,6 +853,22 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
                 ? simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))
                 : simd_quatf(from: SIMD3(0, 1, 0), to: direction)
         }
+        return node
+    }
+
+    /// A cone whose point is at `tip`, pointing away from `towards` (so it caps the end of a line).
+    static func arrowhead(tip: SIMD3<Float>, towards other: SIMD3<Float>, radius: Float, colour: UIColor) -> SCNNode {
+        let span = simd_distance(tip, other)
+        let length = min(radius * 14, span * 0.3)
+        let cone = SCNCone(topRadius: 0, bottomRadius: CGFloat(length * 0.3), height: CGFloat(max(length, 0.0005)))
+        let node = SCNNode(geometry: cone)
+        node.geometry?.materials = [ModelDimensions.flat(colour)]
+        guard span > 0 else { return node }
+        let outward = (tip - other) / span
+        node.simdPosition = tip - outward * (length / 2)
+        node.simdOrientation = simd_dot(outward, SIMD3(0, 1, 0)) < -0.9999
+            ? simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))
+            : simd_quatf(from: SIMD3(0, 1, 0), to: outward)
         return node
     }
 
