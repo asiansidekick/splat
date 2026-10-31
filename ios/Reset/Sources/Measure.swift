@@ -838,8 +838,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     static func point(in frame: ARFrame, depth: Depth, normalized n: CGPoint) -> SIMD3<Float>? {
         guard (0...1).contains(n.x), (0...1).contains(n.y) else { return nil }
         // A plane fitted to the depth round the place, falling back to its middle reading.
-        let metres = DepthMap.planeDepth(depth.values, width: depth.width, height: depth.height,
-                                          x: Float(n.x) * Float(depth.width), y: Float(n.y) * Float(depth.height))
+        // A wide window first (a flat surface reads far more steadily over 20 depth pixels than over 7),
+        // then a narrow one for things that aren't flat.
+        let px = Float(n.x) * Float(depth.width), py = Float(n.y) * Float(depth.height)
+        let metres = DepthMap.planeDepth(depth.values, width: depth.width, height: depth.height, x: px, y: py, radius: 10)
+            ?? DepthMap.planeDepth(depth.values, width: depth.width, height: depth.height, x: px, y: py)
             ?? DepthMap.sample(depth.values, width: depth.width, height: depth.height,
                                x: Int(n.x * CGFloat(depth.width)), y: Int(n.y * CGFloat(depth.height)))
         guard let metres = metres.map({ $0 * depthScale }) else { return nil }

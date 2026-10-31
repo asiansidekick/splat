@@ -400,7 +400,8 @@ struct FramePage: View {
     private func depth(at n: SIMD2<Float>) -> Float? {
         guard let values = loaded?.depth, frame.depthWidth > 0, frame.depthHeight > 0 else { return nil }
         let x = n.x * Float(frame.depthWidth), y = n.y * Float(frame.depthHeight)
-        let metres = DepthMap.planeDepth(values, width: frame.depthWidth, height: frame.depthHeight, x: x, y: y)
+        let metres = DepthMap.planeDepth(values, width: frame.depthWidth, height: frame.depthHeight, x: x, y: y, radius: 10)
+            ?? DepthMap.planeDepth(values, width: frame.depthWidth, height: frame.depthHeight, x: x, y: y)
             ?? DepthMap.sample(values, width: frame.depthWidth, height: frame.depthHeight, x: Int(x), y: Int(y))
         return metres.map { $0 * Measurer.depthScale }
     }
