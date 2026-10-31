@@ -52,10 +52,10 @@ struct Reference: Codable, Identifiable, Equatable {
     var hasDepth: Bool { keyframes.contains { $0.depthFile != nil } }
     var slate: String { Reference.label(scene: scene, setup: setup) }
 
-    /// How a scene and setup read: "Sc 1 · Take 3" for numbered takes, "12B" the way old setup
-    /// letters were slated.
+    /// How a scene and setup read: "Sc 1 · Take 3", or "Sc 1 · Take 3B" with a letter after the
+    /// number; a setup that is only a letter reads the way old ones were slated, "12B".
     static func label(scene: String, setup: String) -> String {
-        guard Int(setup) != nil else { return scene + setup }
+        guard setup.first?.isNumber == true else { return scene + setup }
         return scene.isEmpty ? "Take \(setup)" : "Sc \(scene) · Take \(setup)"
     }
     var title: String {

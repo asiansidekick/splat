@@ -13,7 +13,8 @@ enum Slate {
     /// The next take number in this scene: Take 1, Take 2, and on, one after the highest used.
     /// (Setups slated with letters in older references are left as they were.)
     static func nextSetup(scene: String, in references: [Reference]) -> String {
-        let numbers = references.filter { $0.scene == scene }.compactMap { Int($0.setup) }
+        // "3B" counts as take 3.
+        let numbers = references.filter { $0.scene == scene }.compactMap { Int($0.setup.prefix(while: \.isNumber)) }
         return String((numbers.max() ?? 0) + 1)
     }
 
@@ -167,8 +168,10 @@ struct SlateFields: View {
                 .multilineTextAlignment(.trailing)
         }
         LabeledContent("Take") {
+            // A number, then a letter if the take is redone: 1, 1B, 2C.
             TextField("1", text: $setup)
                 .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
                 .multilineTextAlignment(.trailing)
         }
         LabeledContent("Description") {
