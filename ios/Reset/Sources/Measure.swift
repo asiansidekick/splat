@@ -92,6 +92,12 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     }
 
     let session: ARSession
+    /// Each mark rides on an ARKit anchor once the phone is tracking, so when ARKit corrects its
+    /// map the marks move with the room instead of floating (Phil, 2026-10-31).
+    private var anchored: [UUID: (anchor: ARAnchor, rest: simd_float4x4, point: SIMD3<Float>, added: Date)] = [:]
+    private var anchorPoints: [UUID: SIMD3<Float>] = [:]
+    private var followTimer: Timer?
+    private var lastMarkCheck: TimeInterval = 0
     private let root = SCNNode()
     private let preview = SCNNode()
     private var timer: Timer?
@@ -106,6 +112,91 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         root.name = "measurements"
         parent.addChildNode(root)
         parent.addChildNode(preview)
+        followTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            MainActor.assumeIsolated { self.followAnchors() }
+        }
+    }
+
+    /// Keeps each mark on its anchor: made once the phone is tracking normally, followed as ARKit
+    /// refines its map, and dropped back to plain room coordinates if the session was reset.
+    private func followAnchors() {
+        let frame = session.currentFrame
+        var live: [UUID: ARAnchor] = [:]
+        for anchor in frame?.anchors ?? [] where anchor.name?.hasPrefix("mark:") == true { live[anchor.identifier] = anchor }
+        var tracking = false
+        if let camera = frame?.camera, case .normal = camera.trackingState { tracking = true }
+        var present = Set<UUID>()
+        for node in root.childNodes {
+            guard let name = node.name, name.hasPrefix("mark:"), let id = UUID(uuidString: String(name.dropFirst(5))),
+                  let point = anchorPoints[id] else { continue }
+            present.insert(id)
+            if id == moving {
+                // A note being carried follows the crosshair in plain room coordinates.
+                if let entry = anchored[id] { session.remove(anchor: entry.anchor) }
+                anchored[id] = nil
+                node.simdTransform = matrix_identity_float4x4
+                continue
+            }
+            if let entry = anchored[id] {
+                if simd_distance(entry.point, point) > 0.001 {
+                    // The mark moved (a note being carried): anchor it afresh where it is now.
+                    session.remove(anchor: entry.anchor)
+                    anchored[id] = nil
+                    node.simdTransform = matrix_identity_float4x4
+                } else if let current = live[entry.anchor.identifier] {
+                    node.simdTransform = current.transform * entry.rest.inverse
+                } else if Date().timeIntervalSince(entry.added) > 1 {
+                    anchored[id] = nil
+                    node.simdTransform = matrix_identity_float4x4
+                }
+            } else if tracking, frame != nil {
+                var rest = matrix_identity_float4x4
+                rest.columns.3 = SIMD4(point.x, point.y, point.z, 1)
+                let anchor = ARAnchor(name: "mark:\(id.uuidString)", transform: rest)
+                session.add(anchor: anchor)
+                anchored[id] = (anchor, rest, point, Date())
+            }
+        }
+        for (id, entry) in anchored where !present.contains(id) {
+            session.remove(anchor: entry.anchor)
+            anchored[id] = nil
+        }
+        // Anchors saved with an old room map come back; they are not ours any more.
+        let ours = Set(anchored.values.map { $0.anchor.identifier })
+        for (identifier, anchor) in live where !ours.contains(identifier) { session.remove(anchor: anchor) }
+    }
+
+    /// Every couple of seconds, logs where the newest line's ends sit against the depth the phone
+    /// reads there now: a growing gap means the marks are drifting, a gap from the start means
+    /// they were placed wrong.
+    private func logMarkCheck(_ frame: ARFrame) {
+        guard frame.timestamp - lastMarkCheck > 2, let mark = measurements.last, let depth = Measurer.depth(of: frame) else { return }
+        lastMarkCheck = frame.timestamp
+        let shift = root.childNodes.first { $0.name == "mark:\(mark.id.uuidString)" }?.simdTransform ?? matrix_identity_float4x4
+        let inverse = frame.camera.transform.inverse
+        let k = frame.camera.intrinsics
+        let size = frame.camera.imageResolution
+        var parts: [String] = []
+        for (label, p) in [("A", mark.start), ("B", mark.end)] {
+            let world = shift * SIMD4(p.x, p.y, p.z, 1)
+            let local = inverse * world
+            let z = -local.z
+            guard z > 0.05 else { parts.append("\(label) behind the camera"); continue }
+            let nx = (k[0][0] * local.x / z + k[2][0]) / Float(size.width)
+            let ny = (-k[1][1] * local.y / z + k[2][1]) / Float(size.height)
+            guard (0...1).contains(nx), (0...1).contains(ny),
+                  let surface = DepthMap.sample(depth.values, width: depth.width, height: depth.height, x: Int(nx * Float(depth.width)), y: Int(ny * Float(depth.height))) else {
+                parts.append("\(label) off screen or no depth")
+                continue
+            }
+            parts.append(String(format: "%@ z %.2f m, depth there now %.2f m (%+.0f cm)", label, z, surface, (z - surface) * 100))
+        }
+        let anchoredNow = anchored[mark.id] != nil
+        Diagnostics.log("Mark check: \(parts.joined(separator: "; ")), \(anchoredNow ? "anchored" : "not anchored"), age \(Int(Date().timeIntervalSince(mark.created))) s")
     }
 
     /// While measuring, a tap on a line, its length or a note picks it; a tap elsewhere lets go.
@@ -557,6 +648,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         }
         trackingNote = nil
         loggedNote = nil
+        logMarkCheck(frame)
         if let point = Measurer.depthPoint(frame) {
             cursor = point
             fromLiDAR = true
@@ -774,7 +866,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     private func rebuild() {
         root.childNodes.forEach { $0.removeFromParentNode() }
+        anchorPoints = [:]
         for measurement in measurements {
+            anchorPoints[measurement.id] = (measurement.start + measurement.end) / 2
             let picked = measurement.id == selected
             let line = node(
                 for: measurement.start, measurement.end, axes: showAxes && !picked,
@@ -785,6 +879,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             root.addChildNode(line)
         }
         for note in notes {
+            anchorPoints[note.id] = note.spot
             let pin = SCNNode()
             pin.name = "mark:\(note.id.uuidString)"
             let picked = note.id == selected
@@ -794,6 +889,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             root.addChildNode(pin)
         }
         ModelDimensions.onTop(root)
+        followAnchors()
     }
 
     /// A measured line with its length; with axes, its level part and upright part beside it.
