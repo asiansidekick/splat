@@ -1,4 +1,5 @@
 import ARKit
+import CoreImage
 import SceneKit
 import SwiftUI
 import simd
@@ -59,8 +60,13 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         var start: CGPoint
     }
     @Published private(set) var pointer: Pointer?
-    /// The aim point sits this far above the finger, so the finger never hides it.
-    static let aimOffset: CGFloat = 70
+    /// The line is marked right under the finger (Phil, 2026-10-31); what the finger hides shows in the loupe.
+    static let aimOffset: CGFloat = 0
+    /// A magnified picture of what is under the finger while a line is dragged.
+    @Published private(set) var loupe: UIImage?
+    static let loupeSize: CGFloat = 112
+    static let loupeZoom: CGFloat = 3
+    private static let ciContext = CIContext()
     /// The crosshair is nearer than the LiDAR can read.
     @Published private(set) var tooClose = false
     private var drawStart: CGPoint = .zero
@@ -299,6 +305,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     private func endDrag() {
         pointer = nil
+        loupe = nil
         drag = nil
         dragLocation = nil
         dragView = nil
@@ -329,9 +336,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             dragSamples = []
             drag = nil
             pointer = nil
+            loupe = nil
             updatePreview()
             return
         }
+        loupe = Measurer.loupeImage(frame: frame, at: dragFinger, view: view)
         pointer = Pointer(
             finger: dragFinger, aim: location,
             landed: Measurer.screenPoint(of: b.normalized, frame: frame, view: view),
@@ -744,6 +753,32 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         return (point, moved, n)
     }
 
+    /// The camera picture round a place on the screen, magnified, turned the way the screen shows it.
+    static func loupeImage(frame: ARFrame, at finger: CGPoint, view: UIView) -> UIImage? {
+        let size = view.bounds.size
+        guard size.width > 0, size.height > 0 else { return nil }
+        let orientation: CGImagePropertyOrientation
+        switch Screen.orientation {
+        case .portrait: orientation = .right
+        case .portraitUpsideDown: orientation = .left
+        case .landscapeLeft: orientation = .down
+        default: orientation = .up
+        }
+        let shown = CIImage(cvPixelBuffer: frame.capturedImage).oriented(orientation)
+        let w = shown.extent.width, h = shown.extent.height
+        guard w > 0, h > 0 else { return nil }
+        // The picture fills the screen, the overflow cut off equally at both sides.
+        let scale = max(size.width / w, size.height / h)
+        let px = (finger.x + (w * scale - size.width) / 2) / scale
+        let py = (finger.y + (h * scale - size.height) / 2) / scale
+        let side = loupeSize / loupeZoom / scale
+        let rect = CGRect(x: px - side / 2, y: h - py - side / 2, width: side, height: side).intersection(shown.extent)
+        guard rect.width > 4, rect.height > 4 else { return nil }
+        let crop = shown.cropped(to: rect)
+        guard let cg = ciContext.createCGImage(crop, from: crop.extent) else { return nil }
+        return UIImage(cgImage: cg)
+    }
+
     /// The aim point for a finger: straight above it, kept on the screen.
     static func aim(for finger: CGPoint, in view: UIView) -> CGPoint {
         CGPoint(x: finger.x, y: max(finger.y - aimOffset, 8))
@@ -1091,19 +1126,14 @@ struct MeasurePointer: View {
     @ObservedObject var measurer: Measurer
 
     var body: some View {
-        GeometryReader { _ in
+        GeometryReader { geometry in
             if let pointer = measurer.pointer {
                 ZStack {
-                    Path { path in
-                        path.move(to: pointer.finger)
-                        path.addLine(to: pointer.aim)
-                    }
-                    .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
                     ring(at: pointer.start, colour: .white)
-                    ring(at: pointer.aim, colour: .white)
                     if hypot(pointer.landed.x - pointer.aim.x, pointer.landed.y - pointer.aim.y) > 3 {
                         ring(at: pointer.landed, colour: .yellow)
                     }
+                    loupe(pointer, in: geometry.size)
                 }
                 .shadow(color: .black.opacity(0.7), radius: 2)
             }
@@ -1111,6 +1141,35 @@ struct MeasurePointer: View {
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .hiddenInScreenshots()
+    }
+
+    /// A magnified window up and to the left of the finger (below it near the top of the screen),
+    /// with a dot where the finger really is and a yellow ring where the corner snap moved the point.
+    @ViewBuilder
+    private func loupe(_ pointer: Measurer.Pointer, in size: CGSize) -> some View {
+        let d = Measurer.loupeSize
+        let half = d / 2 + 6
+        let above = pointer.finger.y > d + 80
+        let centre = CGPoint(
+            x: min(max(pointer.finger.x - 70, half), max(size.width - half, half)),
+            y: min(max(above ? pointer.finger.y - 90 : pointer.finger.y + 100, half), max(size.height - half, half)))
+        let snap = CGSize(width: (pointer.landed.x - pointer.aim.x) * Measurer.loupeZoom, height: (pointer.landed.y - pointer.aim.y) * Measurer.loupeZoom)
+        ZStack {
+            if let image = measurer.loupe {
+                Image(uiImage: image).resizable().scaledToFill().frame(width: d, height: d)
+            } else {
+                Color.black.opacity(0.4)
+            }
+            if hypot(snap.width, snap.height) > 6 {
+                Circle().stroke(Color.yellow, lineWidth: 2).frame(width: 16, height: 16).offset(snap)
+            }
+            Circle().fill(Color.red).frame(width: 7, height: 7)
+                .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+        }
+        .frame(width: d, height: d)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Color.white, lineWidth: 3))
+        .position(centre)
     }
 
     private func ring(at point: CGPoint, colour: Color) -> some View {

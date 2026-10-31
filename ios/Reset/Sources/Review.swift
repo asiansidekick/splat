@@ -310,7 +310,7 @@ struct FramePage: View {
         .frame(width: size.width, height: size.height, alignment: .topLeading)
     }
 
-    /// While a finger is down: the points that will be marked sit above it, joined by a line.
+    /// While a finger is down: the points that will be marked, joined by a line, with a loupe beside the finger.
     @ViewBuilder
     private func pointer(_ size: CGSize) -> some View {
         if let touch, hypot(touch.current.x - touch.start.x, touch.current.y - touch.start.y) >= 10 {
@@ -323,14 +323,46 @@ struct FramePage: View {
                 .stroke(Color(Measurer.lineColour), style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 ring(a)
                 ring(b)
-                Path { p in
-                    p.move(to: b)
-                    p.addLine(to: touch.current)
-                }
-                .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                loupe(at: touch.current, size: size)
             }
             .frame(width: size.width, height: size.height, alignment: .topLeading)
         }
+    }
+
+    /// A magnified window beside the finger, with a dot where it really is.
+    private func loupe(at finger: CGPoint, size: CGSize) -> some View {
+        let d = Measurer.loupeSize
+        let half = d / 2 + 6
+        let above = finger.y > d + 40
+        let centre = CGPoint(
+            x: min(max(finger.x - 70, half), max(size.width - half, half)),
+            y: min(max(above ? finger.y - 90 : finger.y + 100, half), max(size.height - half, half)))
+        return ZStack {
+            if let image = loupeImage(at: finger, size: size) {
+                Image(uiImage: image).resizable().scaledToFill().frame(width: d, height: d)
+            } else {
+                Color.black.opacity(0.4)
+            }
+            Circle().fill(Color.red).frame(width: 7, height: 7)
+                .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+        }
+        .frame(width: d, height: d)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Color.white, lineWidth: 3))
+        .position(centre)
+    }
+
+    private func loupeImage(at location: CGPoint, size: CGSize) -> UIImage? {
+        guard let loaded, size.width > 0, let n = sensorPoint(location, size: size) else { return nil }
+        let cg = loaded.cg
+        let uprightWidth = frame.turn.swapsSides ? cg.height : cg.width
+        let side = Int(Measurer.loupeSize / Measurer.loupeZoom * CGFloat(uprightWidth) / size.width)
+        guard side > 8 else { return nil }
+        let cx = Int(n.x * Float(cg.width)), cy = Int(n.y * Float(cg.height))
+        let rect = CGRect(x: cx - side / 2, y: cy - side / 2, width: side, height: side)
+            .intersection(CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+        guard rect.width > 4, rect.height > 4, let crop = cg.cropping(to: rect) else { return nil }
+        return UIImage(cgImage: crop, scale: 1, orientation: frame.uprightOrientation)
     }
 
     private func ring(_ p: CGPoint) -> some View {
@@ -341,7 +373,7 @@ struct FramePage: View {
     }
 
     private static func aim(_ finger: CGPoint) -> CGPoint {
-        CGPoint(x: finger.x, y: max(finger.y - Measurer.aimOffset, 8))
+        CGPoint(x: finger.x, y: max(finger.y - Measurer.aimOffset, 0))
     }
 
     // MARK: Touch
