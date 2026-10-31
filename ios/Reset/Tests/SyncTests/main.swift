@@ -370,7 +370,39 @@ func runSyncTests() throws {
     expect(!i.library.keep(fakeMap, itemID: "../..", name: "frame_0000.jpg"), "and anything outside a reference folder")
 }
 
+/// Frame maths for reviewing a reference away from the set.
+func runFrameTests() {
+    let turns: [FrameTurn] = [.asShot, .half, .clockwise, .counterclockwise]
+    for turn in turns {
+        let p = SIMD2<Float>(0.2, 0.7)
+        let back = turn.sensor(fromUpright: turn.upright(fromSensor: p))
+        expect(simd_distance(back, p) < 1e-5, "\(turn) turns a place there and back")
+    }
+    expect(simd_distance(FrameTurn.clockwise.upright(fromSensor: SIMD2(0, 0)), SIMD2(1, 0)) < 1e-5, "a clockwise turn puts the sensor's top left at the top right")
+    expect(FrameTurn(cameraToWorld: matrix_identity_float4x4) == .asShot, "an upright camera needs no turn")
+    var sideways = matrix_identity_float4x4
+    sideways.columns.0 = SIMD4(0, -1, 0, 0)
+    sideways.columns.1 = SIMD4(1, 0, 0, 0)
+    expect(FrameTurn(cameraToWorld: sideways) == .clockwise, "a camera with its right side down is turned back clockwise")
+    sideways.columns.0 = SIMD4(0, 1, 0, 0)
+    sideways.columns.1 = SIMD4(-1, 0, 0, 0)
+    expect(FrameTurn(cameraToWorld: sideways) == .counterclockwise, "and the other way up counterclockwise")
+
+    let frame = Keyframe(imageFile: "a.jpg", depthFile: nil, transform: flatten(matrix_identity_float4x4),
+                         intrinsics: [1000, 0, 0, 0, 1000, 0, 960, 720, 1], imageWidth: 1920, imageHeight: 1440, depthWidth: 256, depthHeight: 192)
+    let world = SIMD3<Float>(0.3, -0.2, -2)
+    if let n = frame.project(world), let back = frame.point(atSensor: n, metres: 2) {
+        expect(simd_distance(back, world) < 1e-4, "a point projects into a frame and comes back")
+        expect(abs(n.x - (960 + 150) / 1920) < 1e-4 && abs(n.y - (720 + 100) / 1440) < 1e-4, "it lands where the camera model says")
+    } else {
+        expect(false, "a point in front of the camera projects")
+    }
+    expect(frame.project(SIMD3(0, 0, 1)) == nil, "a point behind the camera does not")
+    expect(abs(frame.uprightAspect - 4.0 / 3.0) < 1e-5, "an upright landscape frame keeps its shape")
+}
+
 try MainActor.assumeIsolated { try runSyncTests() }
+runFrameTests()
 
 print(failures == 0 ? "All sync tests passed" : "\(failures) sync test(s) failed")
 exit(failures == 0 ? 0 : 1)

@@ -75,12 +75,13 @@ struct CameraHome: View {
     @AppStorage("saveToPhotos") private var saveToPhotos = true
 
     enum Panel: Identifiable {
-        case takeLog(UUID), compare(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery, sharePhoto, sync, sketch
+        case takeLog(UUID), compare(UUID), review(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery, sharePhoto, sync, sketch
 
         var id: String {
             switch self {
             case .takeLog(let id): return "log-\(id)"
             case .compare(let id): return "compare-\(id)"
+            case .review(let id): return "review-\(id)"
             case .slate(let id): return "slate-\(id)"
             case .pdf(let id): return "pdf-\(id)"
             case .nextSlate: return "next"
@@ -291,6 +292,13 @@ struct CameraHome: View {
             if let reference = binding(for: id) { TakeLogView(reference: reference) }
         case .compare(let id):
             if let reference = references.first(where: { $0.id == id }) { CompareView(reference: reference) }
+        case .review(let id):
+            if let reference = references.first(where: { $0.id == id }) {
+                FrameReview(reference: reference) { updated in
+                    if let saved = binding(for: id) { saved.wrappedValue = updated }
+                    try? ReferenceStore.save(updated)
+                }
+            }
         case .slate(let id):
             if let reference = references.first(where: { $0.id == id }) {
                 SlateEditor(reference: reference) { updated in
@@ -320,6 +328,7 @@ struct CameraHome: View {
                     switch action {
                     case .takeLog: self.panel = .takeLog(reference.id)
                     case .compare: self.panel = .compare(reference.id)
+                    case .review: self.panel = .review(reference.id)
                     case .slate: self.panel = .slate(reference.id)
                     case .pdf: self.panel = .pdf(reference.id)
                     case .delete: deleting = reference
@@ -723,7 +732,7 @@ struct ReferenceThumbnail: View {
 /// older ones, tap Load (or double-tap the photo) to bring up its ghost. The grid button shows them
 /// all by scene. Press and hold a photo for its take log, compare, report, slate or delete.
 struct Gallery: View {
-    enum Action { case takeLog, compare, slate, pdf, delete, photos, sketch }
+    enum Action { case takeLog, compare, review, slate, pdf, delete, photos, sketch }
 
     @Environment(\.dismiss) private var dismiss
     /// Oldest first, so the newest is the last page, as in Photos.
@@ -906,6 +915,7 @@ struct Gallery: View {
     @ViewBuilder
     private func menuItems(for reference: Reference) -> some View {
         Button { dismiss(); action(.takeLog, reference) } label: { Label("Take log", systemImage: "list.number") }
+        Button { dismiss(); action(.review, reference) } label: { Label("Review all frames", systemImage: "rectangle.stack") }
         Button { dismiss(); action(.compare, reference) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
         Button { dismiss(); action(.pdf, reference) } label: { Label("Share PDF report", systemImage: "square.and.arrow.up") }
         Button { dismiss(); action(.photos, reference) } label: { Label("Save photos to Photos", systemImage: "photo.on.rectangle.angled") }
@@ -1429,6 +1439,7 @@ struct ResetStage: View {
                 Button { open(.gallery) } label: { Label("References", systemImage: "photo.on.rectangle") }
                 Button { importingModel = true } label: { Label("Add 3D models (USDZ)", systemImage: "cube") }
                     .disabled(restorer.status != .ready)
+                Button { open(.review(reference.id)) } label: { Label("Review all frames", systemImage: "rectangle.stack") }
                 Button { open(.compare(reference.id)) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
                 Button { open(.takeLog(reference.id)) } label: { Label("Take log", systemImage: "list.number") }
                 Button { open(.pdf(reference.id)) } label: { Label("Share PDF report", systemImage: "square.and.arrow.up") }

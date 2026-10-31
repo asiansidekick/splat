@@ -357,6 +357,44 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         changed()
     }
 
+    // MARK: Reviewing saved frames away from the set
+
+    /// Adds a line between two places worked out from a saved frame's depth.
+    @discardableResult
+    func addLine(from a: SIMD3<Float>, to b: SIMD3<Float>) -> UUID? {
+        guard simd_distance(a, b) > 0.005 else { return nil }
+        let line = RoomMeasurement(a: array(a), b: array(b), created: Date())
+        measurements.append(line)
+        Haptics.success()
+        Diagnostics.log("Measured in a saved frame: \(Measurer.text(line.measured))")
+        changed()
+        return line.id
+    }
+
+    /// Opens the note window for a note that will go at `spot` in the room.
+    func askNote(at spot: SIMD3<Float>) {
+        noteSpot = spot
+        Haptics.tap()
+        entry = .note(nil)
+    }
+
+    /// Picks a line or note and opens its window, as tapping it in the room does.
+    func open(_ id: UUID) {
+        guard measurements.contains(where: { $0.id == id }) || notes.contains(where: { $0.id == id }) else { return }
+        Haptics.tap()
+        selected = id
+        entry = measurements.contains { $0.id == id } ? .length(id) : .note(id)
+    }
+
+    func deselect() { selected = nil }
+
+    /// Makes the text on lines and notes bigger or smaller (and remembers it).
+    func scaleText(by factor: Float) {
+        textScale = min(max(textScale * factor, 0.4), 5)
+        UserDefaults.standard.set(textScale, forKey: "measureTextScale")
+        rebuild()
+    }
+
     /// What a note currently says, for editing it.
     func noteText(_ id: UUID) -> String? { notes.first { $0.id == id }?.text }
 
