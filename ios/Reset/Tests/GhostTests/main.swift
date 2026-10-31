@@ -202,6 +202,29 @@ func testPlaneDepth() {
     expect(DepthMap.planeDepth(tilted, width: width, height: height, x: 0, y: 0, radius: 1) == nil, "too few readings, no depth")
 }
 
+func testRegionPlane() {
+    print("Region plane")
+    let width = 60, height = 50
+    // A tilted floor with noisy readings: each end read alone is out by centimetres, the plane is not.
+    var floor = [Float](repeating: 0, count: width * height)
+    var seed: UInt32 = 3
+    for y in 0..<height { for x in 0..<width {
+        seed = seed &* 1664525 &+ 1013904223
+        let noise = (Float(seed >> 24) / 255 - 0.5) * 0.006
+        floor[y * width + x] = 1 / (1.0 + 0.004 * Float(x) + 0.012 * Float(y) + noise)
+    } }
+    let plane = DepthMap.regionPlane(floor, width: width, height: height, from: (10, 8), to: (45, 40))
+    let want: (Float, Float) = (1 / (1.0 + 0.004 * 10 + 0.012 * 8), 1 / (1.0 + 0.004 * 45 + 0.012 * 40))
+    let got: (Float, Float) = (plane?.depth(x: 10.5 - 0.5, y: 8) ?? 0, plane?.depth(x: 45, y: 40) ?? 0)
+    expect(abs(got.0 - want.0) < 0.01 && abs(got.1 - want.1) < 0.01, "both ends read on the floor plane (\(got) vs \(want))")
+    expect((plane?.inliers ?? 0) > 0.8, "most readings are on it")
+    // A line crossing a table edge: half the readings on the table, half on the floor, no single plane over 80%.
+    var step = [Float](repeating: 1.5, count: width * height)
+    for y in 0..<height { for x in 0..<30 { step[y * width + x] = 0.8 } }
+    let two = DepthMap.regionPlane(step, width: width, height: height, from: (10, 20), to: (50, 25))
+    expect((two?.inliers ?? 0) < 0.8, "a step is not mistaken for one flat plane (\(String(describing: two?.inliers)))")
+}
+
 func testCornerSnap() {
     print("Corner snap")
     let width = 140, height = 140
@@ -978,6 +1001,7 @@ func testFeatureTrack() {
 testDepthBuffers()
 testMiddleDepth()
 testPlaneDepth()
+testRegionPlane()
 testCornerSnap()
 testFeatureTrack()
 testPaperPose()

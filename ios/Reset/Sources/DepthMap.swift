@@ -152,6 +152,57 @@ enum DepthMap {
         return range.contains(metres) ? metres : nil
     }
 
+    /// One plane fitted to all the depth over the box holding two places (and a margin), for a line
+    /// drawn across a flat floor or wall: both ends then lie on the same plane, so the length cannot
+    /// pick up the few-cm noise each end's own reading has (Phil's A4 test, 2026-10-31: 14-17 cm
+    /// of 'rise' on a flat floor, lines 8-45% too long). `inliers` is the share of readings on it.
+    struct RegionPlane {
+        let a: Double, b: Double, c: Double
+        let originX: Float, originY: Float
+        let inliers: Double
+        /// Metres at a place (depth pixels).
+        func depth(x: Float, y: Float) -> Float? {
+            let inverse = a * Double(x - originX) + b * Double(y - originY) + c
+            return inverse > 0.05 ? Float(1 / inverse) : nil
+        }
+    }
+
+    static func regionPlane(_ depth: [Float], width: Int, height: Int, from p: (x: Float, y: Float), to q: (x: Float, y: Float),
+                            margin: Float = 8, range: ClosedRange<Float> = 0.05...6) -> RegionPlane? {
+        guard width > 0, height > 0, depth.count == width * height else { return nil }
+        let x0 = max(0, Int((min(p.x, q.x) - margin).rounded(.down))), x1 = min(width - 1, Int((max(p.x, q.x) + margin).rounded(.up)))
+        let y0 = max(0, Int((min(p.y, q.y) - margin).rounded(.down))), y1 = min(height - 1, Int((max(p.y, q.y) + margin).rounded(.up)))
+        guard x1 > x0, y1 > y0 else { return nil }
+        let ox = (p.x + q.x) / 2, oy = (p.y + q.y) / 2
+        var points: [(dx: Double, dy: Double, inverse: Double)] = []
+        for y in y0...y1 {
+            for x in x0...x1 {
+                let value = depth[y * width + x]
+                guard value.isFinite, range.contains(value) else { continue }
+                points.append((Double(Float(x) + 0.5 - ox), Double(Float(y) + 0.5 - oy), 1 / Double(value)))
+            }
+        }
+        guard points.count >= 30 else { return nil }
+        let limit = 0.012
+        let step = max(1, points.count / 24)
+        let sample = stride(from: 0, to: points.count, by: step).map { points[$0] }
+        var best: [(dx: Double, dy: Double, inverse: Double)] = []
+        for i in 0..<sample.count {
+            for j in (i + 1)..<sample.count {
+                for k in (j + 1)..<sample.count {
+                    guard let plane = fitPlane([sample[i], sample[j], sample[k]]) else { continue }
+                    let agree = points.filter { abs(plane.a * $0.dx + plane.b * $0.dy + plane.c - $0.inverse) <= limit }
+                    if agree.count > best.count { best = agree }
+                }
+            }
+        }
+        guard best.count >= 20, var fit = fitPlane(best) else { return nil }
+        // Once more over the readings that agree with the refined plane.
+        let again = points.filter { abs(fit.a * $0.dx + fit.b * $0.dy + fit.c - $0.inverse) <= limit }
+        if again.count >= 20, let refined = fitPlane(again) { fit = refined }
+        return RegionPlane(a: fit.a, b: fit.b, c: fit.c, originX: ox, originY: oy, inliers: Double(again.count) / Double(points.count))
+    }
+
     /// Least squares for inverse = a * dx + b * dy + c.
     private static func fitPlane(_ points: [(dx: Double, dy: Double, inverse: Double)]) -> (a: Double, b: Double, c: Double)? {
         var sxx = 0.0, sxy = 0.0, sx = 0.0, syy = 0.0, sy = 0.0, n = 0.0

@@ -51,6 +51,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var dragFinger: CGPoint = .zero
     private var dragSamples: [DragLine] = []
     private var dragSampleTime: TimeInterval = 0
+    private var planeNote = ""
     private var dragTooClose = false
     /// Where the finger is, the point it is aiming at above it, and where the corner snap put
     /// that point, all in screen points, so the aim can be drawn where it can be seen.
@@ -593,7 +594,23 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             finger: dragFinger, aim: location,
             landed: Measurer.screenPoint(of: b.normalized, frame: frame, view: view),
             start: Measurer.screenPoint(of: a.normalized, frame: frame, view: view))
-        dragSamples.append(DragLine(a: a.point, b: b.point))
+        var pa = a.point, pb = b.point
+        // One plane through the depth under the whole line, when it is mostly flat: both ends then agree.
+        let px = Float(depth.width), py = Float(depth.height)
+        if let plane = DepthMap.regionPlane(depth.values, width: depth.width, height: depth.height,
+                                            from: (Float(a.normalized.x) * px, Float(a.normalized.y) * py),
+                                            to: (Float(b.normalized.x) * px, Float(b.normalized.y) * py)),
+           plane.inliers >= 0.5,
+           let da = plane.depth(x: Float(a.normalized.x) * px, y: Float(a.normalized.y) * py),
+           let db = plane.depth(x: Float(b.normalized.x) * px, y: Float(b.normalized.y) * py),
+           (0.1...6).contains(da), (0.1...6).contains(db) {
+            pa = Measurer.world(in: frame, normalized: a.normalized, metres: da * Measurer.depthScale)
+            pb = Measurer.world(in: frame, normalized: b.normalized, metres: db * Measurer.depthScale)
+            planeNote = String(format: ", flat plane %.0f%% of depth, ends %.3f/%.3f m", plane.inliers * 100, da, db)
+        } else {
+            planeNote = ", no flat plane (own depth at each end)"
+        }
+        dragSamples.append(DragLine(a: pa, b: pb))
         if dragSamples.count > 8 { dragSamples.removeFirst() }
         let line = DragLine(a: Measurer.median(dragSamples.map(\.a)), b: Measurer.median(dragSamples.map(\.b)))
         drag = line
@@ -601,7 +618,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let eye = SIMD3(camera.x, camera.y, camera.z)
         dragTooClose = min(simd_distance(line.a, eye), simd_distance(line.b, eye)) < Measurer.minimumRange
         dragDetail = Measurer.detail(frame: frame, session: session, depth: depth, view: view, from: drawStart, to: location, a: line.a, b: line.b)
-            + String(format: ", snapped %@/%@, averaged over %ld frames", a.snapped ? "yes" : "no", b.snapped ? "yes" : "no", dragSamples.count)
+            + planeNote + String(format: ", snapped %@/%@, averaged over %ld frames", a.snapped ? "yes" : "no", b.snapped ? "yes" : "no", dragSamples.count)
         updatePreview()
     }
 
@@ -1192,6 +1209,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             ?? DepthMap.sample(depth.values, width: depth.width, height: depth.height,
                                x: Int(n.x * CGFloat(depth.width)), y: Int(n.y * CGFloat(depth.height)))
         guard let metres = metres.map({ $0 * depthScale }) else { return nil }
+        return world(in: frame, normalized: n, metres: metres)
+    }
+
+    /// The room point `metres` straight out (along the camera's viewing direction) at a place in the picture.
+    static func world(in frame: ARFrame, normalized n: CGPoint, metres: Float) -> SIMD3<Float> {
         let k = frame.camera.intrinsics
         let size = frame.camera.imageResolution
         // ARKit's camera looks down -z with y up; the picture counts y down.
