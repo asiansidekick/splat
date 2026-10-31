@@ -233,7 +233,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let camera = frame.camera.transform.columns.3
         let eye = SIMD3(camera.x, camera.y, camera.z)
         dragTooClose = min(simd_distance(line.a, eye), simd_distance(line.b, eye)) < Measurer.minimumRange
-        dragDetail = Measurer.detail(frame: frame, depth: depth, view: view, from: drawStart, to: location, a: line.a, b: line.b)
+        dragDetail = Measurer.detail(frame: frame, session: session, depth: depth, view: view, from: drawStart, to: location, a: line.a, b: line.b)
             + String(format: ", snapped %@/%@, averaged over %ld frames", a.snapped ? "yes" : "no", b.snapped ? "yes" : "no", dragSamples.count)
         updatePreview()
     }
@@ -617,7 +617,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// A line of numbers for the log: where each end fell in the picture, the depth there, the
     /// phone's tilt, the height difference, and what the length would be if the depth were the
     /// distance along the ray instead of straight ahead.
-    static func detail(frame: ARFrame, depth: Depth, view: UIView, from p: CGPoint, to q: CGPoint, a: SIMD3<Float>, b: SIMD3<Float>) -> String {
+    static func detail(frame: ARFrame, session: ARSession, depth: Depth, view: UIView, from p: CGPoint, to q: CGPoint, a: SIMD3<Float>, b: SIMD3<Float>) -> String {
         let size = view.bounds.size
         let toImage = frame.displayTransform(for: Screen.orientation, viewportSize: size).inverted()
         func norm(_ l: CGPoint) -> CGPoint { CGPoint(x: l.x / size.width, y: l.y / size.height).applying(toImage) }
@@ -637,14 +637,24 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let w = frame.camera.transform * SIMD4(v.x, v.y, v.z, 1)
             return SIMD3(w.x, w.y, w.z)
         }
+        // ARKit's own idea of how far the same places are, from its estimated surfaces, to tell
+        // whether the LiDAR depth or the phone's tracking is the one that is out.
+        let inverse = frame.camera.transform.inverse
+        func tracked(_ n: CGPoint) -> String {
+            let query = frame.raycastQuery(from: n, allowing: .estimatedPlane, alignment: .any)
+            guard let hit = session.raycast(query).first else { return "none" }
+            let p = inverse * hit.worldTransform.columns.3
+            return String(format: "%.3f", -p.z)
+        }
+        let raycast = "\(tracked(na))/\(tracked(nb))"
         let rangeLength = simd_distance(world(simd_normalize(ray(na)) * ma), world(simd_normalize(ray(nb)) * mb))
         let t = frame.camera.transform
         let forward = -SIMD3(t.columns.2.x, t.columns.2.y, t.columns.2.z)
         let pitch = asin(max(-1, min(1, forward.y))) * 180 / .pi
-        return String(format: "view %@→%@ image (%.3f,%.3f)→(%.3f,%.3f) depth %.3f/%.3f m, pitch %.0f°, rise %.1f cm, along-ray length %.1f cm, f %.0f/%.0f c %.0f,%.0f res %.0fx%.0f depth %ldx%ld %@",
+        return String(format: "view %@→%@ image (%.3f,%.3f)→(%.3f,%.3f) depth %.3f/%.3f m, pitch %.0f°, rise %.1f cm, along-ray length %.1f cm, f %.0f/%.0f c %.0f,%.0f res %.0fx%.0f depth %ldx%ld %@, ARKit surface depth %@",
                       "\(Int(p.x)),\(Int(p.y))", "\(Int(q.x)),\(Int(q.y))", na.x, na.y, nb.x, nb.y, ma, mb, pitch,
                       abs(a.y - b.y) * 100, rangeLength * 100, k[0][0], k[1][1], k[2][0], k[2][1], res.width, res.height,
-                      depth.width, depth.height, "\(Screen.orientation.rawValue) view \(Int(size.width))x\(Int(size.height))")
+                      depth.width, depth.height, "\(Screen.orientation.rawValue) view \(Int(size.width))x\(Int(size.height))", raycast)
     }
 
     /// `normalized`: where in the camera picture, 0 to 1 across and down in the sensor's layout.
@@ -705,7 +715,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let picked = note.id == selected
             let height = labelHeight(at: note.spot)
             pin.addChildNode(Measurer.dot(at: note.spot, radius: max(height * 0.12, 0.003), colour: picked ? Measurer.pickedColour : Measurer.noteColour))
-            pin.addChildNode(ModelDimensions.bubble(note.text, picked: picked, height: height * 1.2, at: note.spot + SIMD3(0, height * 0.2, 0)))
+            pin.addChildNode(ModelDimensions.bubble(note.text, picked: picked, height: height * 0.8, at: note.spot + SIMD3(0, height * 0.2, 0)))
             root.addChildNode(pin)
         }
         ModelDimensions.onTop(root)
@@ -792,13 +802,13 @@ struct MeasureReticle: View {
                 Circle().stroke(found ? Color.yellow : Color.white.opacity(0.6), lineWidth: 2).frame(width: 34, height: 34)
                 Circle().fill(found ? Color.yellow : Color.white.opacity(0.6)).frame(width: 6, height: 6)
                 Text(measurer.readout)
-                    .font(.subheadline.bold().monospacedDigit())
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.55), in: Capsule())
-                    .foregroundStyle(.white)
+                    .font(.caption.bold().monospacedDigit())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.25), in: Capsule())
+                    .foregroundStyle(.white.opacity(0.9))
                     .fixedSize()
-                    .offset(y: 40)
+                    .offset(y: 34)
             }
             .shadow(color: .black.opacity(0.5), radius: 2)
             .allowsHitTesting(false)
@@ -810,10 +820,14 @@ struct MeasureReticle: View {
 struct MeasureBar: View {
     @ObservedObject var measurer: Measurer
     @State private var confirmingClear = false
+    /// iPhone on its side: the buttons stand in a column at the left edge instead of a row over the picture.
+    @Environment(\.verticalSizeClass) private var verticalSize
 
     var body: some View {
         if measurer.active {
-            HStack(spacing: 18) {
+            let sideways = verticalSize == .compact
+            let layout = sideways ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 16))
+            layout {
                 if measurer.selected != nil && measurer.moving == nil {
                     if let line = measurer.selectedMeasurement {
                         small("pencil", "Size", tint: .yellow) { measurer.askLength(line.id) }
@@ -830,9 +844,9 @@ struct MeasureBar: View {
                 }
                 Button { measurer.addPoint() } label: {
                     Image(systemName: measurer.start == nil && measurer.moving == nil ? "plus" : "checkmark")
-                        .font(.title.bold())
-                        .frame(width: 62, height: 62)
-                        .background(Color.yellow, in: Circle())
+                        .font(.title3.bold())
+                        .frame(width: 46, height: 46)
+                        .background(Color.yellow.opacity(0.9), in: Circle())
                         .foregroundStyle(.black)
                 }
                 .accessibilityLabel(measurer.moving != nil ? "Put the note down here" : measurer.start == nil ? "Start a line here" : "End the line here")
@@ -846,9 +860,10 @@ struct MeasureBar: View {
                     }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.black.opacity(0.45), in: Capsule())
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .frame(maxWidth: sideways ? .infinity : nil, alignment: .leading)
+            .shadow(color: .black.opacity(0.7), radius: 2)
             .confirmationDialog("Delete every dimension and note?", isPresented: $confirmingClear, titleVisibility: .visible) {
                 Button("Delete all", role: .destructive) { measurer.clear() }
             }
@@ -857,51 +872,14 @@ struct MeasureBar: View {
 
     private func small(_ symbol: String, _ title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 2) {
-                Image(systemName: symbol).font(.title3)
-                Text(title).font(.system(size: 10, weight: .semibold))
+            VStack(spacing: 1) {
+                Image(systemName: symbol).font(.body)
+                Text(title).font(.system(size: 9, weight: .semibold))
             }
-            .frame(minWidth: 40)
-            .foregroundStyle(tint)
+            .frame(minWidth: 36)
+            .foregroundStyle(tint.opacity(0.95))
         }
         .accessibilityLabel(title)
-    }
-}
-
-/// While a line is being drawn: the aim point above the finger with a ring on it, a thin line down
-/// to the finger, and a yellow ring where the corner snap put the point.
-struct MeasurePointer: View {
-    @ObservedObject var measurer: Measurer
-
-    var body: some View {
-        GeometryReader { _ in
-            if let pointer = measurer.pointer {
-                ZStack {
-                    Path { path in
-                        path.move(to: pointer.finger)
-                        path.addLine(to: pointer.aim)
-                    }
-                    .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
-                    ring(at: pointer.start, colour: .white)
-                    ring(at: pointer.aim, colour: .white)
-                    if hypot(pointer.landed.x - pointer.aim.x, pointer.landed.y - pointer.aim.y) > 3 {
-                        ring(at: pointer.landed, colour: .yellow)
-                    }
-                }
-                .shadow(color: .black.opacity(0.7), radius: 2)
-            }
-        }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-        .hiddenInScreenshots()
-    }
-
-    private func ring(at point: CGPoint, colour: Color) -> some View {
-        ZStack {
-            Circle().stroke(colour, lineWidth: 2).frame(width: 28, height: 28)
-            Circle().fill(colour).frame(width: 4, height: 4)
-        }
-        .position(point)
     }
 }
 
@@ -918,9 +896,9 @@ struct MeasureEntry: View {
     private func comic(_ size: CGFloat) -> Font { .custom("MarkerFelt-Wide", size: size) }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             if let entry = measurer.entry {
-                Color.black.opacity(0.6).ignoresSafeArea()
+                Color.black.opacity(0.35).ignoresSafeArea()
                 Group {
                     switch entry {
                     case .length(let id): lengthCard(id)
@@ -953,44 +931,20 @@ struct MeasureEntry: View {
 
     private var factor: Float { Self.units.first { $0.name == unit }?.metres ?? 0.01 }
 
+    /// Small and at the top, so the keyboard never covers the buttons, even on its side.
     private func lengthCard(_ id: UUID) -> some View {
         let guess = measurer.measurements.first { $0.id == id }?.measured
-        return VStack(spacing: 16) {
-            Text("Real size")
-                .font(.headline)
-                .foregroundStyle(.white.opacity(0.7))
-            TextField("0", text: $text)
-                .keyboardType(.decimalPad)
-                .focused($focused)
-                .font(.system(size: 64, weight: .bold, design: .rounded).monospacedDigit())
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.white)
-                .padding(.vertical, 6)
-                .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+        return VStack(spacing: 10) {
             HStack(spacing: 8) {
-                ForEach(Self.units, id: \.name) { item in
-                    Button { unit = item.name } label: {
-                        Text(item.name).font(.headline)
-                            .frame(maxWidth: .infinity, minHeight: 40)
-                            .background(unit == item.name ? Color.yellow : Color.white.opacity(0.12), in: Capsule())
-                            .foregroundStyle(unit == item.name ? Color.black : Color.white)
-                    }
-                }
-            }
-            if let guess {
-                Button {
-                    text = String(format: "%.4g", Double(guess / factor))
-                } label: {
-                    Text("Phone's guess ~\(Measurer.text(guess)). Tap to use it.")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.7))
-                }
-            }
-            HStack(spacing: 10) {
                 plainButton("Delete", fill: Color.red.opacity(0.85), text: .white) { measurer.deleteMark(id) }
                 plainButton("Cancel", fill: Color.white.opacity(0.15), text: .white) { measurer.dismissEntry() }
                 plainButton("Set", fill: .yellow, text: .black) {
                     var typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Nothing typed keeps the phone's guess.
+                    if typed.isEmpty {
+                        measurer.dismissEntry()
+                        return
+                    }
                     if let last = typed.last, last.isNumber || last == "." { typed += unit }
                     guard let metres = LengthText.parse(typed) else {
                         Haptics.warning()
@@ -1000,73 +954,83 @@ struct MeasureEntry: View {
                     measurer.dismissEntry()
                 }
             }
+            TextField(guess.map { String(format: "%.4g", Double($0 / factor)) } ?? "0", text: $text)
+                .keyboardType(.decimalPad)
+                .focused($focused)
+                .font(.system(size: 40, weight: .bold, design: .rounded).monospacedDigit())
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
+                .padding(.vertical, 2)
+                .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            HStack(spacing: 6) {
+                ForEach(Self.units, id: \.name) { item in
+                    Button { unit = item.name } label: {
+                        Text(item.name).font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                            .background(unit == item.name ? Color.yellow : Color.white.opacity(0.12), in: Capsule())
+                            .foregroundStyle(unit == item.name ? Color.black : Color.white)
+                    }
+                }
+            }
         }
-        .padding(20)
-        .background(Color(white: 0.1).opacity(0.96), in: RoundedRectangle(cornerRadius: 26))
-        .overlay(RoundedRectangle(cornerRadius: 26).stroke(Color.white.opacity(0.18), lineWidth: 1))
-        .padding(.horizontal, 20)
+        .padding(12)
+        .frame(maxWidth: 460)
+        .background(Color(white: 0.1).opacity(0.94), in: RoundedRectangle(cornerRadius: 20))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
 
     private func plainButton(_ title: String, fill: Color, text color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).font(.headline)
-                .frame(maxWidth: .infinity, minHeight: 48)
-                .background(fill, in: RoundedRectangle(cornerRadius: 14))
+            Text(title).font(.subheadline.weight(.bold))
+                .frame(maxWidth: .infinity, minHeight: 38)
+                .background(fill, in: RoundedRectangle(cornerRadius: 12))
                 .foregroundStyle(color)
         }
     }
 
     private func noteCard(_ id: UUID?) -> some View {
-        VStack(spacing: 22) {
-            ZStack {
-                SpeechBubble().fill(Color.black).offset(x: 7, y: 7)
-                SpeechBubble().fill(Color.white)
-                SpeechBubble().stroke(Color.black, style: StrokeStyle(lineWidth: 6, lineJoin: .round))
-                TextField("WRITE SOMETHING!", text: $text, axis: .vertical)
-                    .lineLimit(2...6)
-                    .focused($focused)
-                    .textInputAutocapitalization(.characters)
-                    .font(comic(30))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 30)
-                    .padding(.top, 26)
-                    .padding(.bottom, 62)
-                    .onChange(of: text) { _, value in
-                        if value.count > 120 { text = String(value.prefix(120)) }
-                    }
-            }
-            .frame(minHeight: 230)
-            .overlay(alignment: .topLeading) {
-                Text(id == nil ? "NOTE!" : "EDIT!")
-                    .font(comic(26))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 16)
-                    .background(Starburst().fill(Color.yellow))
-                    .background(Starburst().stroke(Color.black, lineWidth: 4))
-                    .rotationEffect(.degrees(-8))
-                    .offset(x: -8, y: -26)
-            }
-            HStack(spacing: 12) {
+        VStack(spacing: 14) {
+            HStack(spacing: 10) {
                 if let id {
                     comicButton("DELETE", fill: Color(red: 1, green: 0.4, blue: 0.4)) { measurer.deleteMark(id) }
                 }
                 comicButton("CANCEL", fill: .white) { measurer.dismissEntry() }
                 comicButton(id == nil ? "PLACE IT!" : "SAVE IT!", fill: .yellow) { measurer.saveNote(text, editing: id) }
             }
+            ZStack {
+                SpeechBubble().fill(Color.black).offset(x: 4, y: 4)
+                SpeechBubble().fill(Color.white)
+                SpeechBubble().stroke(Color.black, style: StrokeStyle(lineWidth: 4, lineJoin: .round))
+                TextField("WRITE SOMETHING!", text: $text, axis: .vertical)
+                    .lineLimit(1...3)
+                    .focused($focused)
+                    .textInputAutocapitalization(.characters)
+                    .font(comic(22))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 22)
+                    .padding(.top, 10)
+                    .padding(.bottom, 40)
+                    .onChange(of: text) { _, value in
+                        if value.count > 120 { text = String(value.prefix(120)) }
+                    }
+            }
+            .frame(maxWidth: 420, minHeight: 92)
         }
-        .padding(.horizontal, 22)
+        .frame(maxWidth: 460)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
 
     private func comicButton(_ title: String, fill: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).font(comic(22))
-                .frame(maxWidth: .infinity, minHeight: 56)
-                .background(fill, in: RoundedRectangle(cornerRadius: 16))
+            Text(title).font(comic(17))
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .background(fill, in: RoundedRectangle(cornerRadius: 12))
                 .foregroundStyle(Color.black)
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black, lineWidth: 4))
-                .background(RoundedRectangle(cornerRadius: 16).fill(Color.black).offset(x: 4, y: 4))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.black, lineWidth: 3))
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.black).offset(x: 3, y: 3))
         }
     }
 }
@@ -1074,18 +1038,18 @@ struct MeasureEntry: View {
 /// A rounded speech bubble with a tail at the bottom left.
 struct SpeechBubble: Shape {
     func path(in rect: CGRect) -> Path {
-        let tail: CGFloat = 38
+        let tail: CGFloat = 24
         let body = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height - tail)
-        let c: CGFloat = 34
+        let c: CGFloat = 22
         var p = Path()
         p.move(to: CGPoint(x: body.minX + c, y: body.minY))
         p.addLine(to: CGPoint(x: body.maxX - c, y: body.minY))
         p.addQuadCurve(to: CGPoint(x: body.maxX, y: body.minY + c), control: CGPoint(x: body.maxX, y: body.minY))
         p.addLine(to: CGPoint(x: body.maxX, y: body.maxY - c))
         p.addQuadCurve(to: CGPoint(x: body.maxX - c, y: body.maxY), control: CGPoint(x: body.maxX, y: body.maxY))
-        p.addLine(to: CGPoint(x: body.minX + 110, y: body.maxY))
-        p.addLine(to: CGPoint(x: body.minX + 46, y: rect.maxY))
-        p.addLine(to: CGPoint(x: body.minX + 62, y: body.maxY))
+        p.addLine(to: CGPoint(x: body.minX + 80, y: body.maxY))
+        p.addLine(to: CGPoint(x: body.minX + 38, y: rect.maxY))
+        p.addLine(to: CGPoint(x: body.minX + 48, y: body.maxY))
         p.addLine(to: CGPoint(x: body.minX + c, y: body.maxY))
         p.addQuadCurve(to: CGPoint(x: body.minX, y: body.maxY - c), control: CGPoint(x: body.minX, y: body.maxY))
         p.addLine(to: CGPoint(x: body.minX, y: body.minY + c))

@@ -471,7 +471,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
     /// clear on the picture side, darkest at the screen edge.
     private func shade(_ from: UnitPoint, _ to: UnitPoint) -> LinearGradient {
         LinearGradient(
-            colors: bars ? [.black.opacity(0), .black.opacity(0.3), .black.opacity(0.55)] : [.clear],
+            colors: bars ? [.black.opacity(0), .black.opacity(0.1), .black.opacity(0.25)] : [.clear],
             startPoint: from, endPoint: to)
     }
 }
@@ -629,19 +629,32 @@ enum Haptics {
 struct Banner: View {
     let text: String
     var tint: Color = .black
+    /// Hints fade away a few seconds after they change; what the person must act on stays.
+    var fadesAfter: Double? = nil
+    @State private var shown = true
 
     var body: some View {
         Text(text)
-            .font(.subheadline.bold())
+            .font(.footnote.weight(.semibold))
             .multilineTextAlignment(.center)
             .lineLimit(2)
             .minimumScaleFactor(0.8)
             .dynamicTypeSize(...DynamicTypeSize.large)
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .frame(maxWidth: 480)
-            .background(tint.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+            .padding(.vertical, 4)
+            .frame(maxWidth: 440)
+            .background(tint.opacity(0.28), in: RoundedRectangle(cornerRadius: 8))
             .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.7), radius: 2)
+            .opacity(shown ? 1 : 0)
+            .animation(.easeOut(duration: 0.4), value: shown)
+            .task(id: text) {
+                shown = true
+                guard let fadesAfter else { return }
+                try? await Task.sleep(for: .seconds(fadesAfter))
+                if !Task.isCancelled { shown = false }
+            }
+            .allowsHitTesting(false)
     }
 }
 
@@ -1064,7 +1077,8 @@ struct CaptureStage: View {
                         .transition(.opacity)
                 }
                 VStack {
-                    Banner(text: status, tint: recorder.capturing ? .red : .black)
+                    Banner(text: status, tint: recorder.capturing ? .red : .black,
+                           fadesAfter: recorder.capturing || recorder.pendingSave || recorder.saving ? nil : 5)
                         .onAppear { timeBearingsHint(recorder.trackingNormal) }
                         .onChange(of: recorder.trackingNormal) { _, normal in timeBearingsHint(normal) }
                     Spacer()
