@@ -929,7 +929,7 @@ func testPaperPose() {
     let ry = simd_float3x3(SIMD3(cos(ay), 0, -sin(ay)), SIMD3(0, 1, 0), SIMD3(sin(ay), 0, cos(ay)))
     let r = rx * ry
     let t = SIMD3<Float>(0.05, -0.02, 0.8)
-    func project(_ x: Float, _ y: Float) -> SIMD2<Float> {
+    func project(_ x: Float, _ y: Float, at t: SIMD3<Float> = t) -> SIMD2<Float> {
         let p = r * SIMD3(x, y, 0) + t
         return SIMD2(fx * p.x / p.z + cx, fy * p.y / p.z + cy)
     }
@@ -940,8 +940,9 @@ func testPaperPose() {
     let turned = [long[1], long[2], long[3], long[0]]
     let other = PaperPose.solve(corners: turned, longSide: w, shortSide: h, fx: fx, fy: fy, cx: cx, cy: cy)
     expect(abs((other?.distance ?? 0) - 0.8) < 0.002, "and with the corners going round from another one (\(String(describing: other?.distance)))")
-    // Twice the distance, the sheet looks half the size.
-    let far = long.map { SIMD2(($0.x - cx) / 2 + cx, ($0.y - cy) / 2 + cy) }
+    // Twice the distance, the same sheet looks about half the size.
+    let farT = SIMD3<Float>(0.1, -0.04, 1.6)
+    let far = [project(-w / 2, -h / 2, at: farT), project(w / 2, -h / 2, at: farT), project(w / 2, h / 2, at: farT), project(-w / 2, h / 2, at: farT)]
     let faraway = PaperPose.solve(corners: far, longSide: w, shortSide: h, fx: fx, fy: fy, cx: cx, cy: cy)
     expect(abs((faraway?.distance ?? 0) - 1.6) < 0.01, "half as big in the picture is twice as far (\(String(describing: faraway?.distance)))")
 }
