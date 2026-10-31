@@ -566,7 +566,9 @@ struct ShutterButton: View {
                 Circle().stroke(ring, lineWidth: 4).frame(width: 74, height: 74)
                 switch style {
                 case .photo: Circle().fill(Color.white).frame(width: 60, height: 60)
-                case .record: Circle().fill(Color.red).frame(width: 60, height: 60)
+                case .record:
+                    Circle().fill(Color.red).frame(width: 60, height: 60)
+                    Image(systemName: "video.fill").font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
                 case .stop: RoundedRectangle(cornerRadius: 6).fill(Color.red).frame(width: 30, height: 30)
                 }
                 if busy { ProgressView().tint(style == .photo ? .black : .white) }

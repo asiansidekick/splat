@@ -123,11 +123,10 @@ struct ScreenshotButton: View {
             }
         } label: {
             Image(systemName: "camera.viewfinder")
-                .font(.system(size: size * 0.4))
+                .font(.system(size: size * 0.62))
                 .foregroundStyle(.white)
                 .frame(width: size, height: size)
-                .background(Color.white.opacity(0.2), in: Circle())
-                .shadow(color: .black.opacity(0.6), radius: 3)
+                .shadow(color: .black.opacity(0.7), radius: 3)
         }
         .hiddenInScreenshots()
         .accessibilityLabel("Screenshot to Photos")
