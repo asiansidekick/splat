@@ -104,6 +104,24 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var anchorPoints: [UUID: SIMD3<Float>] = [:]
     private var followTimer: Timer?
     private var lastMarkCheck: TimeInterval = 0
+    /// What is remembered of the picture at each end of a line drawn this session, to find it again.
+    private struct EndTrack {
+        var patch: [Float]
+        var origin: SIMD3<Float>
+        var direction: SIMD3<Float>
+        var depth: Float
+        var first: Float = 0
+        var matches = 0
+        var misses = 0
+        var reported = false
+    }
+    private var tracks: [String: EndTrack] = [:]
+    private var lastRefine: TimeInterval = 0
+    private var refinedAt: Date?
+    private static let patchHalf = 12
+    private static let searchRadius = 10
+    /// Marks only ride on ARKit anchors when this is on; they were seen not to move, so it is off.
+    private static let anchoring = false
     private var lastCameraPosition: (time: TimeInterval, position: SIMD3<Float>)?
     private let root = SCNNode()
     private let preview = SCNNode()
@@ -131,6 +149,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// Keeps each mark on its anchor: made once the phone is tracking normally, followed as ARKit
     /// refines its map, and dropped back to plain room coordinates if the session was reset.
     private func followAnchors() {
+        refineTracks()
+        guard Measurer.anchoring else { return }
         let frame = session.currentFrame
         var live: [UUID: ARAnchor] = [:]
         for anchor in frame?.anchors ?? [] where anchor.name?.hasPrefix("mark:") == true { live[anchor.identifier] = anchor }
@@ -175,6 +195,132 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         // Anchors saved with an old room map come back; they are not ours any more.
         let ours = Set(anchored.values.map { $0.anchor.identifier })
         for (identifier, anchor) in live where !ours.contains(identifier) { session.remove(anchor: anchor) }
+    }
+
+    // MARK: Keeping the ends on the picture
+
+    /// Where a point of the room shows in the camera picture (pixels, sensor layout), if it does.
+    private static func pixel(of world: SIMD3<Float>, in frame: ARFrame) -> SIMD2<Float>? {
+        let local = frame.camera.transform.inverse * SIMD4(world.x, world.y, world.z, 1)
+        let z = -local.z
+        guard z > 0.05 else { return nil }
+        let k = frame.camera.intrinsics
+        let size = frame.camera.imageResolution
+        let p = SIMD2(k[0][0] * local.x / z + k[2][0], -k[1][1] * local.y / z + k[2][1])
+        let margin: Float = 60
+        guard p.x > margin, p.y > margin, p.x < Float(size.width) - margin, p.y < Float(size.height) - margin else { return nil }
+        return p
+    }
+
+    /// The ray out of the camera through a pixel: where it starts and its direction (a unit vector).
+    private static func ray(through p: SIMD2<Float>, in frame: ARFrame) -> (origin: SIMD3<Float>, direction: SIMD3<Float>) {
+        let k = frame.camera.intrinsics
+        let t = frame.camera.transform
+        let local = SIMD4((p.x - k[2][0]) / k[0][0], -(p.y - k[2][1]) / k[1][1], -1, 0)
+        let world = t * local
+        return (SIMD3(t.columns.3.x, t.columns.3.y, t.columns.3.z), simd_normalize(SIMD3(world.x, world.y, world.z)))
+    }
+
+    /// Half-size brightness values (each 2 x 2 camera pixels averaged) in a square of `2 * half + 1`
+    /// round half-size pixel `centre`.
+    private static func lumaGrid(_ frame: ARFrame, centre: SIMD2<Int>, half: Int) -> [Float]? {
+        let buffer = frame.capturedImage
+        guard CVPixelBufferGetPlaneCount(buffer) >= 1 else { return nil }
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return nil }
+        let width = CVPixelBufferGetWidthOfPlane(buffer, 0), height = CVPixelBufferGetHeightOfPlane(buffer, 0)
+        let rowBytes = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+        let bytes = base.assumingMemoryBound(to: UInt8.self)
+        let side = 2 * half + 1
+        var out = [Float](repeating: 0, count: side * side)
+        for j in 0..<side {
+            let y = 2 * (centre.y - half + j)
+            guard y >= 0, y + 1 < height else { return nil }
+            for i in 0..<side {
+                let x = 2 * (centre.x - half + i)
+                guard x >= 0, x + 1 < width else { return nil }
+                let a = Float(bytes[y * rowBytes + x]) + Float(bytes[y * rowBytes + x + 1])
+                let b = Float(bytes[(y + 1) * rowBytes + x]) + Float(bytes[(y + 1) * rowBytes + x + 1])
+                out[j * side + i] = (a + b) / 4
+            }
+        }
+        return out
+    }
+
+    /// Remembers the picture round both ends of a line just drawn, so they can be found again.
+    private func startTracking(_ line: RoomMeasurement) {
+        guard let frame = session.currentFrame, case .normal = frame.camera.trackingState else { return }
+        for (end, point) in [line.start, line.end].enumerated() {
+            guard let p = Measurer.pixel(of: point, in: frame) else { continue }
+            let centre = SIMD2(Int(p.x / 2), Int(p.y / 2))
+            guard let patch = Measurer.lumaGrid(frame, centre: centre, half: Measurer.patchHalf) else { continue }
+            let mean = patch.reduce(0, +) / Float(patch.count)
+            let spread = (patch.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Float(patch.count)).squareRoot()
+            // Plain sand or a flat wall has nothing to hold on to.
+            guard spread > 6 else { continue }
+            let through = Measurer.ray(through: SIMD2(Float(centre.x * 2) + 1, Float(centre.y * 2) + 1), in: frame)
+            let depth = simd_dot(point - through.origin, through.direction)
+            guard depth > 0.1 else { continue }
+            tracks["\(line.id.uuidString):\(end)"] = EndTrack(patch: patch, origin: through.origin, direction: through.direction, depth: depth, first: depth)
+        }
+    }
+
+    /// About ten times a second: finds each remembered patch in the newest picture and, once the
+    /// phone has moved enough for the two views to tell, moves the line's end along its first ray to
+    /// where both views agree it is. The line then stays on the thing it was drawn on, and its
+    /// length comes from the phone's own movement rather than the depth map alone.
+    private func refineTracks() {
+        if let at = refinedAt, Date().timeIntervalSince(at) > 1.5 {
+            refinedAt = nil
+            revision += 1  // saves the refined line
+        }
+        guard !tracks.isEmpty, let frame = session.currentFrame, frame.timestamp - lastRefine > 0.1,
+              case .normal = frame.camera.trackingState else { return }
+        lastRefine = frame.timestamp
+        var changedAny = false
+        let side = 2 * Measurer.patchHalf + 1
+        let grid = side + 2 * Measurer.searchRadius
+        for (key, var track) in tracks {
+            let parts = key.split(separator: ":")
+            guard parts.count == 2, let id = UUID(uuidString: String(parts[0])), let end = Int(parts[1]),
+                  let index = measurements.firstIndex(where: { $0.id == id }) else {
+                tracks[key] = nil
+                continue
+            }
+            let point = track.origin + track.direction * track.depth
+            guard let p = Measurer.pixel(of: point, in: frame) else { continue }
+            let centre = SIMD2(Int(p.x / 2), Int(p.y / 2))
+            guard let window = Measurer.lumaGrid(frame, centre: centre, half: grid / 2),
+                  let hit = FeatureTrack.find(patch: track.patch, patchSize: side, in: window, gridSize: grid, radius: Measurer.searchRadius),
+                  hit.score > 0.8 else {
+                track.misses += 1
+                tracks[key] = track
+                continue
+            }
+            track.matches += 1
+            let matched = SIMD2(Float((centre.x + hit.dx) * 2) + 1, Float((centre.y + hit.dy) * 2) + 1)
+            let second = Measurer.ray(through: matched, in: frame)
+            if let along = FeatureTrack.depthAlong(o1: track.origin, d1: track.direction, o2: second.origin, d2: second.direction,
+                                                   minAngle: 0.05, maxGap: 0.05),
+               along > track.depth * 0.25, along < track.depth * 4 {
+                track.depth = track.depth * 0.8 + along * 0.2
+                if !track.reported, abs(track.depth - track.first) > track.first * 0.15 {
+                    track.reported = true
+                    Diagnostics.log(String(format: "Line end %d refined from two views: %.2f m (depth map) to %.2f m, %d matches, %d misses",
+                                           end, track.first, track.depth, track.matches, track.misses))
+                }
+                let moved = track.origin + track.direction * track.depth
+                if end == 0 { measurements[index].a = array(moved) } else { measurements[index].b = array(moved) }
+                changedAny = true
+            }
+            tracks[key] = track
+        }
+        if changedAny {
+            refinedAt = Date()
+            rebuild()
+            updatePreview()
+        }
     }
 
     /// Every couple of seconds, logs where the newest line's ends sit against the depth the phone
@@ -366,6 +512,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (drawn on the screen)")
         Diagnostics.log("Drag detail: \(dragDetail)")
         changed()
+        startTracking(line)
         if tapeMode {
             tapeMode = false
             tapeLine = line.id
@@ -479,6 +626,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let away = camera.map { simd_distance(cursor, SIMD3($0.x, $0.y, $0.z)) }
         Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (\(fromLiDAR ? "LiDAR" : "estimated surfaces")), end \(away.map { String(format: "%.2f m", $0) } ?? "?") from the camera")
         changed()
+        startTracking(line)
     }
 
     // MARK: Reviewing saved frames away from the set

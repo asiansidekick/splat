@@ -919,10 +919,39 @@ func testDots() {
     save("12-scan-dots", ghost: scan, background: scene.capture(big).rgba, width: big.width, height: big.height)
 }
 
+/// Following a patch of the picture, and fixing its distance from two views.
+func testFeatureTrack() {
+    // A textured grid, with a 9 x 9 patch cut out and then looked for 3 pixels right and 2 up.
+    let g = 45, n = 9
+    var grid = [Float](repeating: 0, count: g * g)
+    var seed: UInt32 = 7
+    for i in 0..<grid.count {
+        seed = seed &* 1664525 &+ 1013904223
+        grid[i] = Float(seed >> 24)
+    }
+    var patch = [Float](repeating: 0, count: n * n)
+    let middle = (g - n) / 2
+    for j in 0..<n { for i in 0..<n { patch[j * n + i] = grid[(middle + 2 + j) * g + middle + 3 + i] } }
+    let hit = FeatureTrack.find(patch: patch, patchSize: n, in: grid, gridSize: g, radius: 10)
+    expect(hit?.dx == 3 && hit?.dy == 2 && (hit?.score ?? 0) > 0.99, "a patch is found where it moved to (\(String(describing: hit)))")
+    expect(FeatureTrack.find(patch: [Float](repeating: 5, count: n * n), patchSize: n, in: grid, gridSize: g, radius: 10) == nil, "a flat patch is not tracked")
+
+    // Looked at from the origin and again from 20 cm to the side, a point 1.0 m ahead is 1.0 m away.
+    let point = SIMD3<Float>(0.1, 0, -1)
+    let o1 = SIMD3<Float>(0, 0, 0), o2 = SIMD3<Float>(0.2, 0, 0)
+    let d1 = simd_normalize(point - o1), d2 = simd_normalize(point - o2)
+    let depth = FeatureTrack.depthAlong(o1: o1, d1: d1, o2: o2, d2: d2, minAngle: 0.05, maxGap: 0.05) ?? 0
+    expect(abs(depth - simd_length(point)) < 1e-4, "two views fix the distance (\(depth) m)")
+    expect(FeatureTrack.depthAlong(o1: o1, d1: d1, o2: SIMD3(0.005, 0, 0), d2: simd_normalize(point - SIMD3(0.005, 0, 0)), minAngle: 0.05, maxGap: 0.05) == nil, "views too alike say nothing")
+    let skew = simd_normalize(SIMD3<Float>(0.5, 0.3, -1) - o2)
+    expect(FeatureTrack.depthAlong(o1: o1, d1: d1, o2: o2, d2: skew, minAngle: 0.05, maxGap: 0.01) == nil, "rays that miss each other are refused")
+}
+
 testDepthBuffers()
 testMiddleDepth()
 testPlaneDepth()
 testCornerSnap()
+testFeatureTrack()
 testGhost()
 testNoisyGhost()
 testHardCases()
