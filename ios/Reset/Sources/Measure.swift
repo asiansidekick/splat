@@ -883,6 +883,43 @@ struct MeasureBar: View {
     }
 }
 
+/// While a line is being drawn: the aim point above the finger with a ring on it, a thin line down
+/// to the finger, and a yellow ring where the corner snap put the point.
+struct MeasurePointer: View {
+    @ObservedObject var measurer: Measurer
+
+    var body: some View {
+        GeometryReader { _ in
+            if let pointer = measurer.pointer {
+                ZStack {
+                    Path { path in
+                        path.move(to: pointer.finger)
+                        path.addLine(to: pointer.aim)
+                    }
+                    .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                    ring(at: pointer.start, colour: .white)
+                    ring(at: pointer.aim, colour: .white)
+                    if hypot(pointer.landed.x - pointer.aim.x, pointer.landed.y - pointer.aim.y) > 3 {
+                        ring(at: pointer.landed, colour: .yellow)
+                    }
+                }
+                .shadow(color: .black.opacity(0.7), radius: 2)
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .hiddenInScreenshots()
+    }
+
+    private func ring(at point: CGPoint, colour: Color) -> some View {
+        ZStack {
+            Circle().stroke(colour, lineWidth: 2).frame(width: 28, height: 28)
+            Circle().fill(colour).frame(width: 4, height: 4)
+        }
+        .position(point)
+    }
+}
+
 /// The large pop-outs over the camera: one for typing a line's real length, one for writing a
 /// note in a comic-book speech bubble. They zoom in from the middle of the screen.
 struct MeasureEntry: View {
