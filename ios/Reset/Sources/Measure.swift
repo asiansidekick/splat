@@ -98,6 +98,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var anchorPoints: [UUID: SIMD3<Float>] = [:]
     private var followTimer: Timer?
     private var lastMarkCheck: TimeInterval = 0
+    private var lastCameraPosition: (time: TimeInterval, position: SIMD3<Float>)?
     private let root = SCNNode()
     private let preview = SCNNode()
     private var timer: Timer?
@@ -196,7 +197,16 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             parts.append(String(format: "%@ z %.2f m, depth there now %.2f m (%+.0f cm)", label, z, surface, (z - surface) * 100))
         }
         let anchoredNow = anchored[mark.id] != nil
-        Diagnostics.log("Mark check: \(parts.joined(separator: "; ")), \(anchoredNow ? "anchored" : "not anchored"), age \(Int(Date().timeIntervalSince(mark.created))) s")
+        // How far ARKit has moved the anchor since it was made, how the phone is tracking, and how fast it moves
+        // (depth lags a moving phone, so readings taken while it moves mean little).
+        let moved = simd_length(SIMD3(shift.columns.3.x, shift.columns.3.y, shift.columns.3.z)) * 100
+        let position = frame.camera.transform.columns.3
+        var speed: Float = 0
+        if let last = lastCameraPosition, frame.timestamp > last.time {
+            speed = simd_distance(SIMD3(position.x, position.y, position.z), last.position) / Float(frame.timestamp - last.time) * 100
+        }
+        lastCameraPosition = (frame.timestamp, SIMD3(position.x, position.y, position.z))
+        Diagnostics.log("Mark check: \(parts.joined(separator: "; ")), \(anchoredNow ? "anchored" : "not anchored") (moved \(String(format: "%.1f", moved)) cm), tracking \(Measurer.reason(frame.camera.trackingState).isEmpty ? "normal" : Measurer.reason(frame.camera.trackingState)), phone \(String(format: "%.0f", speed)) cm/s, age \(Int(Date().timeIntervalSince(mark.created))) s")
     }
 
     /// While measuring, a tap on a line, its length or a note picks it; a tap elsewhere lets go.
