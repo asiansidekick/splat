@@ -72,6 +72,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     @Published private(set) var start: SIMD3<Float>?
     /// Bumped when the person adds or deletes something, so the reference is saved.
     @Published private(set) var revision = 0
+    /// Tape mode: the next line dragged lies along a tape measure, and asks how long it is.
+    @Published var tapeMode = false
+    /// The line that was drawn along a tape, so its window asks for the tape's length.
+    @Published private(set) var tapeLine: UUID?
     /// How much the phone's depth readings are stretched to agree with a real length typed in
     /// against a tape measure (Phil, 2026-10-31). 1 = as read.
     @Published private(set) var calibration = Measurer.depthScale
@@ -160,6 +164,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     func dismissEntry() {
         entry = nil
+        tapeLine = nil
         noteSpot = nil
     }
 
@@ -251,6 +256,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (drawn on the screen)")
         Diagnostics.log("Drag detail: \(dragDetail)")
         changed()
+        if tapeMode {
+            tapeMode = false
+            tapeLine = line.id
+            entry = .length(line.id)
+        }
     }
 
     /// The nearest the LiDAR reads reliably.
@@ -517,6 +527,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         drag = nil
         moving = nil
         entry = nil
+        tapeMode = false
+        tapeLine = nil
         noteSpot = nil
         updatePreview()
         guard active else { return }
@@ -901,6 +913,9 @@ struct MeasureBar: View {
                 } else if measurer.moving == nil {
                     small("arrow.uturn.backward", "Undo") { measurer.undo() }
                         .disabled(measurer.start == nil && measurer.isEmpty)
+                    small("ruler.fill", measurer.tapeMode ? "Drag on tape" : "Tape", tint: measurer.tapeMode ? .green : .white) {
+                        measurer.tapeMode.toggle()
+                    }
                     if measurer.calibration != 1 {
                         small("scalemass", String(format: "×%.2f", measurer.calibration)) { measurer.resetCalibration() }
                     }
@@ -1034,7 +1049,12 @@ struct MeasureEntry: View {
     /// Small and at the top, so the keyboard never covers the buttons, even on its side.
     private func lengthCard(_ id: UUID) -> some View {
         let guess = measurer.measurements.first { $0.id == id }?.measured
+        let tape = measurer.tapeLine == id
         return VStack(spacing: 10) {
+            if tape {
+                Text("How long is the tape between those points?")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.green)
+            }
             HStack(spacing: 8) {
                 plainButton("Delete", fill: Color.red.opacity(0.85), text: .white) { measurer.deleteMark(id) }
                 plainButton("Cancel", fill: Color.white.opacity(0.15), text: .white) { measurer.dismissEntry() }

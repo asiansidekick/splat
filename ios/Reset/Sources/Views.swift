@@ -1271,6 +1271,8 @@ struct ResetStage: View {
     @State private var swipingStrength = false
     /// While swiping, how far towards now the view is, for the THEN and NOW tags; nil hides them.
     @State private var tagsValue: Double?
+    /// The little swipe demonstration shown when a reference loads.
+    @State private var showSwipeHint = true
     @State private var tagsTask: Task<Void, Never>?
     /// While paused: 0 shows the reference, 1 the frozen live picture.
     @State private var toNow = 1.0
@@ -1524,6 +1526,10 @@ struct ResetStage: View {
                         Banner(text: headline)
                     }
                     Spacer()
+                    if showSwipeHint, !restorer.paused, reference.models.isEmpty, !measuring, ghostShown {
+                        SwipeHint()
+                            .transition(.opacity)
+                    }
                     if restorer.paused {
                         ScrubCursor(value: toNow, start: "THEN", end: "NOW")
                     } else {
@@ -1561,8 +1567,18 @@ struct ResetStage: View {
             .onAppear {
                 restorer.viewport = geometry.size
                 restorer.orientation = Screen.orientation
+                // Every reference loads half ghost, half live.
+                ghostOpacity = 0.5
                 restorer.setGhostOpacity(ghostOpacity)
                 restorer.start()
+                showSwipeHint = true
+                Task {
+                    try? await Task.sleep(for: .seconds(6))
+                    withAnimation(.easeOut(duration: 0.5)) { showSwipeHint = false }
+                }
+            }
+            .onChange(of: swipingStrength) { _, swiping in
+                if swiping { withAnimation { showSwipeHint = false } }
             }
             .onChange(of: geometry.size) { _, size in
                 restorer.viewport = size

@@ -385,3 +385,30 @@ struct CaptureButtonAction: ViewModifier {
         }
     }
 }
+
+/// A hand sliding between THEN and NOW, shown briefly when a reference loads to say how to fade the ghost.
+struct SwipeHint: View {
+    @State private var slid = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("THEN").font(.caption2.weight(.heavy))
+            Image(systemName: "chevron.left").font(.caption.weight(.bold))
+            Image(systemName: "hand.point.up.fill")
+                .font(.title2)
+                .offset(x: slid ? 28 : -28)
+            Image(systemName: "chevron.right").font(.caption.weight(.bold))
+            Text("NOW").font(.caption2.weight(.heavy))
+        }
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.8), radius: 3)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .hiddenInScreenshots()
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { slid = true }
+        }
+    }
+}
