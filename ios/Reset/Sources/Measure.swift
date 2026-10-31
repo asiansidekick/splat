@@ -280,7 +280,12 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// phone has moved enough for the two views to tell, moves the line's end along its first ray to
     /// where both views agree it is. The line then stays on the thing it was drawn on, and its
     /// length comes from the phone's own movement rather than the depth map alone.
+    /// Off since build 119: Phil's A4 test (2026-10-31) showed the LiDAR right (0.856 m against 0.861 m
+    /// by the sheet's size) and the two-view refinement wrong (it shrank the sheet to 24 x 15 cm).
+    static let refineDepthFromViews = false
+
     private func refineTracks() {
+        guard Measurer.refineDepthFromViews else { return }
         if let at = refinedAt, Date().timeIntervalSince(at) > 1.5 {
             refinedAt = nil
             revision += 1  // saves the refined line
