@@ -65,7 +65,7 @@ struct CameraHome: View {
     @State private var loaded = false
     // The slate the next reference gets, carried on from the existing references.
     @State private var nextScene = "1"
-    @State private var nextSetup = "A"
+    @State private var nextSetup = "1"
     @State private var nextName = ""
     /// The last shutter photo, offered for sending straight away.
     @State private var lastPhoto: UIImage?
@@ -1021,7 +1021,7 @@ struct CaptureStage: View {
     @State private var bearingsHintDone = false
     @State private var bearingsTask: Task<Void, Never>?
 
-    private var slate: String { scene + setup }
+    private var slate: String { Reference.label(scene: scene, setup: setup) }
 
     var body: some View {
         CameraLayout {

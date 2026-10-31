@@ -10,10 +10,11 @@ enum Slate {
         references.max { $0.created < $1.created }?.scene ?? "1"
     }
 
-    /// The first setup letter not yet used in this scene.
+    /// The next take number in this scene: Take 1, Take 2, and on, one after the highest used.
+    /// (Setups slated with letters in older references are left as they were.)
     static func nextSetup(scene: String, in references: [Reference]) -> String {
-        let used = Set(references.filter { $0.scene == scene }.map(\.setup))
-        return letters.first { !used.contains($0) } ?? ""
+        let numbers = references.filter { $0.scene == scene }.compactMap { Int($0.setup) }
+        return String((numbers.max() ?? 0) + 1)
     }
 
     /// Orders scenes the way they read: 2 before 10, 12 before 12A.
@@ -165,8 +166,8 @@ struct SlateFields: View {
                 .keyboardType(.numbersAndPunctuation)
                 .multilineTextAlignment(.trailing)
         }
-        LabeledContent("Setup") {
-            TextField("A", text: $setup)
+        LabeledContent("Take") {
+            TextField("1", text: $setup)
                 .textInputAutocapitalization(.characters)
                 .multilineTextAlignment(.trailing)
         }

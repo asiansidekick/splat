@@ -75,6 +75,8 @@ theirs.name = "kitchen"; theirs.slateEdited = base.addingTimeInterval(20)
 let everything: (String) -> Bool = { _ in true }
 let ab = ReferenceSyncLibrary.merged(local: mine, incoming: theirs, has: everything)!
 let ba = ReferenceSyncLibrary.merged(local: theirs, incoming: mine, has: everything)!
+expect(Reference.label(scene: "1", setup: "3") == "Sc 1 · Take 3" && Reference.label(scene: "12", setup: "B") == "12B" && Reference.label(scene: "", setup: "2") == "Take 2",
+    "numbered takes read Sc 1 · Take 3, old letters still read 12B")
 expect(ab.slate == ba.slate && ab.name == "kitchen" && ab.setup == "A", "the newest slate edit wins on both phones")
 var tie1 = one, tie2 = one
 tie1.name = "aaa"; tie2.name = "zzz"

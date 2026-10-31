@@ -50,7 +50,14 @@ struct Reference: Codable, Identifiable, Equatable {
     var torch: Float?
 
     var hasDepth: Bool { keyframes.contains { $0.depthFile != nil } }
-    var slate: String { scene + setup }
+    var slate: String { Reference.label(scene: scene, setup: setup) }
+
+    /// How a scene and setup read: "Sc 1 · Take 3" for numbered takes, "12B" the way old setup
+    /// letters were slated.
+    static func label(scene: String, setup: String) -> String {
+        guard Int(setup) != nil else { return scene + setup }
+        return scene.isEmpty ? "Take \(setup)" : "Sc \(scene) · Take \(setup)"
+    }
     var title: String {
         if slate.isEmpty { return name }
         return name.isEmpty ? slate : "\(slate) · \(name)"
