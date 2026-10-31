@@ -1,0 +1,126 @@
+Depth buffers
+PASS  Float32 ('fdep' 256x192 row 1024): read back within 0.0 m
+PASS  Float16 ('hdep' 256x192 row 512): read back within 0.0013020039 m
+PASS  Disparity32 ('fdis' 256x192 row 1024): read back within 1.1920929e-07 m
+PASS  confidence: low dropped, medium and high kept ([0.0, 2.0, 3.0, 4.0])
+PASS  confidence all low: ignored, depth kept ([1.0, 2.0, 3.0, 4.0])
+      3/4 usable, 2.00-4.00 m, confidence low 4 medium 0 high 0
+Middle of a depth map
+PASS  a flat map reads 2 m in the middle
+PASS  one odd reading in the middle is ignored (median)
+PASS  no readings, no depth
+PASS  five readings are enough
+PASS  four are not
+PASS  a map of the wrong size is refused
+PASS  a corner has too few neighbours
+PASS  an inner point reads its median
+PASS  a single outlier is ignored
+Plane depth
+PASS  a tilted plane reads true between pixels
+PASS  at the edge of a sheet it reads the sheet (1.0 m), not the floor behind
+PASS  odd readings are dropped
+PASS  too few readings, no depth
+Corner snap
+PASS  the corner of a bright sheet is found (Optional(SIMD2<Float>(31.0, 41.0)))
+PASS  a straight edge is not a corner
+PASS  a flat area has none
+PASS  a corner outside the reach is left alone
+PASS  a patch is found where it moved to (Optional((dx: 3, dy: 2, score: 1.0000001)))
+PASS  a flat patch is not tracked
+PASS  two views fix the distance (1.0049884 m)
+PASS  views too alike say nothing
+PASS  rays that miss each other are refused
+3D ghost
+PASS  built 34176 points from 48910 readings
+PASS  found 9743 edge points
+PASS  points sit on the scene's surfaces (worst 7.1525574e-07 m)
+PASS  edge points off the real edges: 17 of 9743
+PASS  front view: 3366 line pixels
+PASS  front view: 0 line pixels away from real edges
+PASS  front view: 1917 line pixels round the box
+PASS  front view: lines only, 5602 pixels drawn
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/1-front-unchecked.png
+PASS  side view: 2117 line pixels round the box
+PASS  side view: 0 line pixels away from real edges
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/2-side-unchecked.png
+PASS  unchanged set: 0 points gone
+PASS  unchanged set: 22894 of 34176 points matched
+PASS  unchanged set: 0 blue pixels
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/3-side-nothing-moved.png
+PASS  box moved: 1000 of 1212 old box points gone
+PASS  box moved: only 0 gone points away from the box
+PASS  box moved: 604 blue line pixels where it was
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/4-side-box-moved.png
+PASS  300,000 points and 60,000 edge points drawn in 0.156 s on the test Mac
+PASS  edges of 10 depth views with photos found in 0.39 s
+3D ghost with real-world depth (noise, gaps, drift)
+PASS  noisy: built 138287 points, 39627 edge points
+PASS  noisy: edge points off the real edges: 1048 of 39627
+PASS  noisy: lines sit 22.1 mm from the real edges with the photo, 23.0 mm with LiDAR alone
+PASS  noisy front: 5782 line pixels on the props' edges
+PASS  noisy front: 0 line pixels away from real edges (clutter)
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/5-noisy-front.png
+PASS  noisy front, nothing moved: 0 blue pixels
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/6-noisy-front-nothing-moved.png
+PASS  noisy front, box taken away: 1260 blue line pixels where it stood
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/7-noisy-box-gone.png
+PASS  noisy close: 4860 line pixels on the props' edges
+PASS  noisy close: 27 line pixels away from real edges (clutter)
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/5-noisy-close.png
+PASS  noisy close, nothing moved: 0 blue pixels
+3D ghost, hard cases
+PASS  3 cm drift: 3998 line pixels drawn (2064 edge points)
+PASS  3 cm drift: 9 line pixels away from real edges
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/8-drift-3cm.png
+PASS  one view: 5782 line pixels drawn (2019 edge points)
+PASS  one view: 0 line pixels away from real edges
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/9-one-view.png
+PASS  6 cm box: 1160 line pixels round it
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/10-small-box.png
+Picture match
+PASS  same place: corner error 0.000 of the width, lined up
+PASS  1 cm to the side: corner error 0.005 of the width, lined up
+PASS  15 cm to the side: corner error 0.111 of the width, not lined up
+PASS  20 cm back: corner error 0.121 of the width, not lined up
+PASS  turned right and down: reference middle shows at 0.478, 0.485 (should be 0.478, 0.485)
+PASS  turned right and down: toLive puts the middle at 306, 233 px (should be 306, 233)
+PASS  turned left and up: reference middle shows at 0.518, 0.526 (should be 0.518, 0.526)
+PASS  turned left and up: toLive puts the middle at 331, 253 px (should be 331, 253)
+PASS  snapped ghost: average difference 0.9, unsnapped 9.1
+PASS  snap with noisy checks: moved 1 times in 30 checks (should settle)
+PASS  snap follows a real 60 px move: now at 55
+PASS  snap kept through two failed checks
+PASS  snap let go after three failed checks
+PASS  different sizes: corner error 0.000
+Dots (3D ghost and the scan)
+PASS  3D ghost dots cover 261488 of 307200 pixels
+PASS  3D ghost dots leave the set showing between them
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/11-dots.png
+PASS  box gone: 10166 blue dot pixels
+PASS  scan dots: 14056 of 307200 pixels, the set shows between them
+      wrote /Users/runner/work/splat/splat/ios/Reset/test-pictures/12-scan-dots.png
+Edge guides
+PASS  lined up: all four seated (4 newly)
+PASS  lined up: left stroke in its slot
+PASS  lined up: right stroke in its slot
+PASS  lined up: top stroke in its slot
+PASS  lined up: bottom stroke in its slot
+PASS  10 pt low: sides out, top and bottom in ([false, false, true, true])
+PASS  hysteresis: still seated 9 pt off once seated
+PASS  hysteresis: let go 12 pt off
+PASS  hysteresis: not seated again at 9 pt until within 7
+PASS  turned 2°: none seated
+PASS  3% too big: none seated
+PASS  within tolerance: all seated
+PASS  no alignment: none seated
+PASS  turned clockwise: left stroke -8.8 pt, right 8.8 pt
+PASS  from points: turn 2.000° size 0.950
+PASS  correction: moved 20.0 pt
+PASS  correction: one wild check ignored (21.0, 0.0)
+PASS  correction: unused until three checks
+PASS  step: in when small, back when big
+PASS  step: 2% off shows only if already showing
+PASS  from position: middle +60 pt, size 0.83
+PASS  filter: 0.3 per 1/30 s
+PASS  filter: same at any frame rate (226.50, 226.50)
+All passed
