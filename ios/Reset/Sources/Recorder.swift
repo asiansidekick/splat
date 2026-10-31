@@ -81,7 +81,10 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
 
     /// Starts the camera and mapping the room, before any reference exists, so the map is
     /// usually ready by the time the shutter is tapped.
+    private var lastUseLiDAR = false
+
     func prepare(useLiDAR: Bool) {
+        lastUseLiDAR = useLiDAR
         // A new session has new coordinates, so models placed in the old one are cleared.
         placer.removeAll()
         measurer.load(measurements: [], notes: [], removed: [])
@@ -235,6 +238,14 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
 
     nonisolated func sessionInterruptionEnded(_ session: ARSession) {
         Diagnostics.log("Record interruption ended")
+        // After the app was away, ARKit tries to find its way back into the old coordinates and,
+        // somewhere new, never does: the camera shows "Finding the room again" and measuring is
+        // dead. With no reference being recorded there is nothing to get back to, so start fresh.
+        Task { @MainActor in
+            guard !self.capturing, !self.pendingSave, !self.saving else { return }
+            Diagnostics.log("Record: starting the camera afresh after the interruption")
+            self.prepare(useLiDAR: self.lastUseLiDAR)
+        }
     }
 
     /// Without this, ARKit starts a new coordinate system after an interruption (a call, the app
