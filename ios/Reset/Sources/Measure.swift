@@ -104,6 +104,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var anchorPoints: [UUID: SIMD3<Float>] = [:]
     private var followTimer: Timer?
     private var lastMarkCheck: TimeInterval = 0
+    /// The end of a line picked up by holding a finger on it, while the finger carries it.
+    private var grab: (id: UUID, end: Int)?
+    private var grabMoved = false
+    /// The drag that follows the hold belongs to the carried end, not to a new line.
+    private var panSuppressed = false
     /// What is remembered of the picture at each end of a line drawn this session, to find it again.
     private struct EndTrack {
         var patch: [Float]
@@ -389,23 +394,105 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         if gesture.state == .ended { UserDefaults.standard.set(textScale, forKey: "measureTextScale") }
     }
 
-    /// Holding a finger down puts a note right there: on the surface under the finger, or in mid-air.
+    /// Holding a finger down on an end of a line picks that end up: drag it to where it belongs and
+    /// let go. Holding anywhere else puts a note right there, on the surface under the finger or in mid-air.
     @objc private func handleHold(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began, active, moving == nil, entry == nil, let view = gesture.view as? ARSCNView else { return }
+        guard let view = gesture.view as? ARSCNView else { return }
         let location = gesture.location(in: view)
-        var spot: SIMD3<Float>?
-        if let frame = session.currentFrame, case .normal = frame.camera.trackingState, let depth = Measurer.depth(of: frame) {
-            spot = Measurer.point(in: frame, depth: depth, at: location, view: view)
+        switch gesture.state {
+        case .began:
+            guard active, moving == nil, entry == nil else { return }
+            if let picked = lineEnd(near: location, in: view) {
+                grab = picked
+                grabMoved = false
+                selected = picked.id
+                tracks["\(picked.id.uuidString):\(picked.end)"] = nil
+                Haptics.tap()
+                carry(to: location, in: view)
+                return
+            }
+            var spot: SIMD3<Float>?
+            if let frame = session.currentFrame, case .normal = frame.camera.trackingState, let depth = Measurer.depth(of: frame) {
+                spot = Measurer.point(in: frame, depth: depth, at: location, view: view)
+            }
+            if spot == nil {
+                let near = view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 0))
+                let far = view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 1))
+                let direction = simd_normalize(SIMD3(far.x - near.x, far.y - near.y, far.z - near.z))
+                spot = SIMD3(near.x, near.y, near.z) + direction * airDistance
+            }
+            noteSpot = spot
+            Haptics.tap()
+            entry = .note(nil)
+        case .changed:
+            if grab != nil { carry(to: location, in: view) }
+        case .ended, .cancelled, .failed:
+            dropEnd()
+        default:
+            break
         }
-        if spot == nil {
-            let near = view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 0))
-            let far = view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 1))
-            let direction = simd_normalize(SIMD3(far.x - near.x, far.y - near.y, far.z - near.z))
-            spot = SIMD3(near.x, near.y, near.z) + direction * airDistance
+    }
+
+    /// The end of a line nearest a place on the screen, if one is within reach of a finger.
+    private func lineEnd(near p: CGPoint, in view: ARSCNView) -> (id: UUID, end: Int)? {
+        var best: (id: UUID, end: Int, distance: CGFloat)?
+        for line in measurements {
+            for (end, point) in [line.start, line.end].enumerated() {
+                let shown = view.projectPoint(SCNVector3(point.x, point.y, point.z))
+                guard shown.z > 0, shown.z < 1 else { continue }
+                let d = hypot(CGFloat(shown.x) - p.x, CGFloat(shown.y) - p.y)
+                if d < 48, d < (best?.distance ?? .infinity) { best = (line.id, end, d) }
+            }
         }
-        noteSpot = spot
-        Haptics.tap()
-        entry = .note(nil)
+        return best.map { ($0.id, $0.end) }
+    }
+
+    /// Moves the carried end to the surface under the finger (and its sharp corner, if one is near).
+    private func carry(to location: CGPoint, in view: ARSCNView) {
+        guard let g = grab, let index = measurements.firstIndex(where: { $0.id == g.id }),
+              let frame = session.currentFrame, case .normal = frame.camera.trackingState,
+              let depth = Measurer.depth(of: frame),
+              let hit = Measurer.locate(in: frame, depth: depth, at: location, view: view, snap: true) else { return }
+        if g.end == 0 { measurements[index].a = array(hit.point) } else { measurements[index].b = array(hit.point) }
+        measurements[index].typed = nil
+        grabMoved = true
+        let other = g.end == 0 ? measurements[index].end : measurements[index].start
+        let shown = view.projectPoint(SCNVector3(other.x, other.y, other.z))
+        loupe = Measurer.loupeImage(frame: frame, at: location, view: view)
+        pointer = Pointer(
+            finger: location, aim: location,
+            landed: Measurer.screenPoint(of: hit.normalized, frame: frame, view: view),
+            start: shown.z > 0 && shown.z < 1 ? CGPoint(x: CGFloat(shown.x), y: CGFloat(shown.y)) : location)
+        rebuild()
+    }
+
+    /// Lets go of the carried end: the line is saved where it was put, and its length is the phone's
+    /// own reading again until a real length is typed.
+    private func dropEnd() {
+        guard let g = grab else { return }
+        grab = nil
+        pointer = nil
+        loupe = nil
+        selected = nil
+        if grabMoved, let index = measurements.firstIndex(where: { $0.id == g.id }) {
+            measurements[index].edited = Date()
+            Haptics.success()
+            Diagnostics.log("Line end \(g.end) moved by hand: now \(Measurer.text(measurements[index].measured))")
+            changed()
+            startTracking(measurements[index])
+        } else {
+            rebuild()
+        }
+    }
+
+    /// Moves one end of a line to a place worked out elsewhere (a saved frame, in the review screen).
+    func moveEnd(_ id: UUID, end: Int, to point: SIMD3<Float>) {
+        guard let index = measurements.firstIndex(where: { $0.id == id }) else { return }
+        if end == 0 { measurements[index].a = array(point) } else { measurements[index].b = array(point) }
+        measurements[index].typed = nil
+        measurements[index].edited = Date()
+        Haptics.success()
+        changed()
     }
 
     func askLength(_ id: UUID) { entry = .length(id) }
@@ -430,6 +517,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// is the LiDAR's own, whatever the phone's tracking is doing. Hold the phone still.
     @objc private func handleDraw(_ gesture: UIPanGestureRecognizer) {
         guard active, let view = gesture.view as? ARSCNView else { return }
+        if gesture.state == .began { panSuppressed = grab != nil }
+        if panSuppressed {
+            if gesture.state == .ended || gesture.state == .cancelled || gesture.state == .failed { panSuppressed = false }
+            return
+        }
         let location = gesture.location(in: view)
         switch gesture.state {
         case .began:
@@ -787,6 +879,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         entry = nil
         tapeMode = false
         tapeLine = nil
+        grab = nil
         noteSpot = nil
         updatePreview()
         guard active else { return }

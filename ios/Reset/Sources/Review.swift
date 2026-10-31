@@ -197,6 +197,8 @@ struct FramePage: View {
         var start: CGPoint
         var current: CGPoint
         var began = Date()
+        /// When the finger first moved, so a hold on a line's end before moving can be told from drawing.
+        var movedAt: Date?
     }
 
     @State private var loaded: Loaded?
@@ -226,7 +228,7 @@ struct FramePage: View {
         if let message { return message }
         guard let loaded else { return nil }
         if loaded.depth == nil { return "No LiDAR depth in this frame: notes go in mid-air, and lines need a frame that has depth (marked in the strip)." }
-        return "Drag to measure. Hold to add a note. Tap a mark to edit."
+        return "Drag to measure. Hold to add a note. Hold a line's end, then drag it to move it. Tap a mark to edit."
     }
 
     private static func fit(aspect: CGFloat, in box: CGSize) -> CGSize {
@@ -276,12 +278,15 @@ struct FramePage: View {
                         touch = Touch(start: value.startLocation, current: value.location)
                     } else {
                         touch?.current = value.location
+                        if touch?.movedAt == nil, hypot(value.location.x - value.startLocation.x, value.location.y - value.startLocation.y) >= 10 {
+                            touch?.movedAt = Date()
+                        }
                     }
                 }
                 .onEnded { value in
-                    let began = touch?.began ?? Date()
+                    let last = touch
                     touch = nil
-                    finish(value, held: Date().timeIntervalSince(began), size: size)
+                    finish(value, held: Date().timeIntervalSince(last?.began ?? Date()), carrying: carriedEnd(last, size: size), size: size)
                 }
         )
     }
@@ -313,7 +318,13 @@ struct FramePage: View {
     /// While a finger is down: the points that will be marked, joined by a line, with a loupe beside the finger.
     @ViewBuilder
     private func pointer(_ size: CGSize) -> some View {
-        if let touch, hypot(touch.current.x - touch.start.x, touch.current.y - touch.start.y) >= 10 {
+        if let touch, hypot(touch.current.x - touch.start.x, touch.current.y - touch.start.y) >= 10, carriedEnd(touch, size: size) != nil {
+            ZStack {
+                ring(touch.current)
+                loupe(at: touch.current, size: size)
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+        } else if let touch, hypot(touch.current.x - touch.start.x, touch.current.y - touch.start.y) >= 10 {
             let a = Self.aim(touch.start), b = Self.aim(touch.current)
             ZStack {
                 Path { p in
@@ -378,9 +389,13 @@ struct FramePage: View {
 
     // MARK: Touch
 
-    private func finish(_ value: DragGesture.Value, held: TimeInterval, size: CGSize) {
+    private func finish(_ value: DragGesture.Value, held: TimeInterval, carrying: (id: UUID, end: Int)?, size: CGSize) {
         let moved = hypot(value.location.x - value.startLocation.x, value.location.y - value.startLocation.y)
         guard measurer.entry == nil else { return }
+        if let carrying {
+            moveEnd(carrying, to: value.location, size: size)
+            return
+        }
         if moved < 10 {
             if held >= 0.5 {
                 addNote(at: value.startLocation, size: size)
@@ -390,6 +405,40 @@ struct FramePage: View {
         } else {
             addLine(from: Self.aim(value.startLocation), to: Self.aim(value.location), size: size)
         }
+    }
+
+    /// The end of a line a touch picked up: it went down on that end and stayed there half a second
+    /// before the finger moved.
+    private func carriedEnd(_ touch: Touch?, size: CGSize) -> (id: UUID, end: Int)? {
+        guard let touch, let movedAt = touch.movedAt, movedAt.timeIntervalSince(touch.began) >= 0.5 else { return nil }
+        return lineEnd(near: touch.start, size: size)
+    }
+
+    private func lineEnd(near p: CGPoint, size: CGSize) -> (id: UUID, end: Int)? {
+        var best: (id: UUID, end: Int, distance: CGFloat)?
+        for line in measurer.measurements {
+            for (end, point) in [line.start, line.end].enumerated() {
+                guard let shown = place(point, size) else { continue }
+                let d = hypot(shown.x - p.x, shown.y - p.y)
+                if d < 40, d < (best?.distance ?? .infinity) { best = (line.id, end, d) }
+            }
+        }
+        return best.map { ($0.id, $0.end) }
+    }
+
+    private func moveEnd(_ picked: (id: UUID, end: Int), to location: CGPoint, size: CGSize) {
+        guard let loaded, loaded.depth != nil, var n = sensorPoint(location, size: size) else {
+            say("This frame has no LiDAR depth, so the end can't be moved here.")
+            Haptics.warning()
+            return
+        }
+        n = FrameImage.snapped(n, in: loaded.cg)
+        guard let metres = depth(at: n), let world = frame.point(atSensor: n, metres: metres) else {
+            say("No depth reading there. Try a spot on a surface.")
+            Haptics.warning()
+            return
+        }
+        measurer.moveEnd(picked.id, end: picked.end, to: world)
     }
 
     private func tap(_ location: CGPoint, size: CGSize) {
