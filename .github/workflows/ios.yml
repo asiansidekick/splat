@@ -44,6 +44,7 @@ jobs:
             Sources/Shared/SecurePack.swift Sources/Shared/SyncEngine.swift Tests/SyncTests/main.swift -o sync-tests > sync-compile.log 2>&1; then
             grep -E ": error: " sync-compile.log | sort -u | head -10 \
               | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Reset/\1,line=\3,col=\4::\5#'
+            grep -E "error:" sync-compile.log | sort -u | head -10 | sed -E 's#^#::error::#'
             tail -40 sync-compile.log
             exit 1
           fi
@@ -53,6 +54,7 @@ jobs:
           set -e
           cat sync-results.txt
           sed -nE 's/^FAIL  (.*)$/::error::\1/p' sync-results.txt
+          [ $status -eq 0 ] || tail -5 sync-results.txt | sed -E 's#^#::error::sync tests ended: #'
           exit $status
       - name: Publish test pictures
         if: always()
