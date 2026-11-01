@@ -52,6 +52,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var dragSamples: [DragLine] = []
     private var dragSampleTime: TimeInterval = 0
     private var planeNote = ""
+    /// How fast the phone is moving (cm/s, smoothed): the depth map lags a moving phone.
+    private var phoneSpeed: Float = 0
+    private var lastSpeedTime: TimeInterval = 0
+    private var lastSpeedPosition = SIMD3<Float>.zero
     private var dragPlane: (point: SIMD3<Float>, normal: SIMD3<Float>)?
     private var lastCarryLog = Date.distantPast
     private weak var gestureView: ARSCNView?
@@ -166,6 +170,16 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// Keeps each mark on its anchor: made once the phone is tracking normally, followed as ARKit
     /// refines its map, and dropped back to plain room coordinates if the session was reset.
     private func followAnchors() {
+        if let frame = session.currentFrame, frame.timestamp > lastSpeedTime {
+            let t = frame.camera.transform.columns.3
+            let position = SIMD3(t.x, t.y, t.z)
+            if lastSpeedTime > 0 {
+                let instant = simd_distance(position, lastSpeedPosition) / Float(max(frame.timestamp - lastSpeedTime, 0.001)) * 100
+                phoneSpeed = phoneSpeed * 0.6 + instant * 0.4
+            }
+            lastSpeedTime = frame.timestamp
+            lastSpeedPosition = position
+        }
         refineTracks()
         scaleLabels(root)
         scaleLabels(preview)
@@ -865,6 +879,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             say("A4: no LiDAR depth yet")
             return
         }
+        guard phoneSpeed < 5 else {
+            say("Hold the phone still, then tap A4")
+            return
+        }
         let buffer = frame.capturedImage
         let width = Float(CVPixelBufferGetWidth(buffer)), height = Float(CVPixelBufferGetHeight(buffer))
         let request = VNDetectRectanglesRequest()
@@ -907,20 +925,20 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let pinhole = best.result.distance
         // Build 123: the first A4 test read 0.861 m against the LiDAR's 0.856 m, the second 0.579 m against 0.890 m
         // (the sheet was really about 0.9 m: Vision had picked a bigger rectangle). Big disagreements are not trusted.
-        guard pinhole / lidar > 0.8, pinhole / lidar < 1.25 else {
-            Diagnostics.log(String(format: "A4 check ignored: pinhole %.3f m, LiDAR %.3f m (raw), ratio %.3f, shape mismatch %.3f",
-                                   pinhole, lidar, pinhole / lidar, best.result.mismatch))
-            say(String(format: "A4 size says %.0f cm, LiDAR %.0f cm: too different to trust, not changed", pinhole * 100, lidar * 100))
+        guard pinhole / lidar > 0.5, pinhole / lidar < 2 else {
+            Diagnostics.log(String(format: "A4 check (phone %.1f cm/s) ignored: pinhole %.3f m, LiDAR %.3f m (raw), ratio %.3f, shape mismatch %.3f",
+                                   phoneSpeed, pinhole, lidar, pinhole / lidar, best.result.mismatch))
+            say(String(format: "A4 %.0f cm, LiDAR %.0f cm: too far apart, not used", pinhole * 100, lidar * 100))
             return
         }
         let scale = min(max(pinhole / lidar, 0.3), 3)
-        Diagnostics.log(String(format: "A4 check: pinhole %.3f m, LiDAR %.3f m (raw), ratio %.3f, shape mismatch %.3f, previous scale %.3f",
-                               pinhole, lidar, pinhole / lidar, best.result.mismatch, Measurer.depthScale))
+        Diagnostics.log(String(format: "A4 check (phone %.1f cm/s): pinhole %.3f m, LiDAR %.3f m (raw), ratio %.3f, shape mismatch %.3f, previous scale %.3f",
+                               phoneSpeed, pinhole, lidar, pinhole / lidar, best.result.mismatch, Measurer.depthScale))
         Measurer.depthScale = scale
         calibration = scale
         UserDefaults.standard.set(scale, forKey: "measureDepthScale")
         Haptics.tap()
-        say(String(format: "A4 is %.0f cm away by its size; LiDAR read %.0f cm. Scale ×%.2f", pinhole * 100, lidar * 100, scale))
+        say(String(format: "A4 %.0f cm, LiDAR %.0f cm: ×%.2f", pinhole * 100, lidar * 100, scale))
     }
 
     /// A sheet of paper is brighter than what is round it: the middle of the quad against a ring just outside it.
@@ -1168,7 +1186,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     }
 
     static func depth(of frame: ARFrame) -> Depth? {
-        guard let map = (frame.smoothedSceneDepth ?? frame.sceneDepth)?.depthMap else { return nil }
+        guard let map = (frame.sceneDepth ?? frame.smoothedSceneDepth)?.depthMap else { return nil }
         return Depth(values: DepthMap.floats(DepthMap.copy(map)), width: CVPixelBufferGetWidth(map), height: CVPixelBufferGetHeight(map))
     }
 
@@ -1516,7 +1534,10 @@ struct MeasureReticle: View {
                     .padding(.vertical, 2)
                     .background(Color.black.opacity(0.25), in: Capsule())
                     .foregroundStyle(.white.opacity(0.9))
-                    .fixedSize()
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .frame(maxWidth: 300)
+                    .fixedSize(horizontal: false, vertical: true)
                     .offset(y: 34)
             }
             .shadow(color: .black.opacity(0.5), radius: 2)
