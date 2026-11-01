@@ -52,6 +52,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var dragSamples: [DragLine] = []
     private var dragSampleTime: TimeInterval = 0
     private var planeNote = ""
+    private var lastCarryLog = Date.distantPast
     private weak var gestureView: ARSCNView?
     /// The sheet the A4 check found, in screen points, shown for a few seconds so it can be seen to be the right one.
     @Published private(set) var paperQuad: [CGPoint] = []
@@ -417,6 +418,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         switch gesture.state {
         case .began:
             guard active, moving == nil, entry == nil else { return }
+            let nearest = nearestEndDistance(to: location, in: view)
+            Diagnostics.log(String(format: "Hold at %.0f,%.0f: nearest line end %@, tracking %@", location.x, location.y,
+                                   nearest.map { String(format: "%.0f pt away", $0) } ?? "none on screen",
+                                   session.currentFrame.map { "\($0.camera.trackingState)" } ?? "no frame"))
             if let picked = lineEnd(near: location, in: view) {
                 grab = picked
                 grabMoved = false
@@ -448,6 +453,20 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         }
     }
 
+    /// How far the nearest line end shows from a place on the screen (any distance), for the log.
+    private func nearestEndDistance(to p: CGPoint, in view: ARSCNView) -> CGFloat? {
+        var best: CGFloat?
+        for line in measurements {
+            for point in [line.start, line.end] {
+                let shown = view.projectPoint(SCNVector3(point.x, point.y, point.z))
+                guard shown.z > 0, shown.z < 1 else { continue }
+                let d = hypot(CGFloat(shown.x) - p.x, CGFloat(shown.y) - p.y)
+                best = min(best ?? d, d)
+            }
+        }
+        return best
+    }
+
     /// The end of a line nearest a place on the screen, if one is within reach of a finger.
     private func lineEnd(near p: CGPoint, in view: ARSCNView) -> (id: UUID, end: Int)? {
         var best: (id: UUID, end: Int, distance: CGFloat)?
@@ -464,10 +483,15 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     /// Moves the carried end to the surface under the finger (and its sharp corner, if one is near).
     private func carry(to location: CGPoint, in view: ARSCNView) {
-        guard let g = grab, let index = measurements.firstIndex(where: { $0.id == g.id }),
-              let frame = session.currentFrame, case .normal = frame.camera.trackingState,
-              let depth = Measurer.depth(of: frame),
-              let hit = Measurer.locate(in: frame, depth: depth, at: location, view: view, snap: true) else { return }
+        guard let g = grab, let index = measurements.firstIndex(where: { $0.id == g.id }) else { return }
+        guard let frame = session.currentFrame, let depth = Measurer.depth(of: frame),
+              let hit = Measurer.locate(in: frame, depth: depth, at: location, view: view, snap: true) else {
+            if Date().timeIntervalSince(lastCarryLog) > 1 {
+                lastCarryLog = Date()
+                Diagnostics.log("Carrying a line end: no depth or frame at the finger, end not moved")
+            }
+            return
+        }
         if g.end == 0 { measurements[index].a = array(hit.point) } else { measurements[index].b = array(hit.point) }
         measurements[index].typed = nil
         grabMoved = true
