@@ -52,6 +52,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var dragSamples: [DragLine] = []
     private var dragSampleTime: TimeInterval = 0
     private var planeNote = ""
+    private var dragPlane: (point: SIMD3<Float>, normal: SIMD3<Float>)?
     private var lastCarryLog = Date.distantPast
     private weak var gestureView: ARSCNView?
     /// The sheet the A4 check found, in screen points, shown for a few seconds so it can be seen to be the right one.
@@ -127,6 +128,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         var matches = 0
         var misses = 0
         var reported = false
+        /// The flat surface the line was drawn on (a point on it and its normal), when the depth under it was flat.
+        var plane: (point: SIMD3<Float>, normal: SIMD3<Float>)?
+        var shifted = false
     }
     private var tracks: [String: EndTrack] = [:]
     private var lastRefine: TimeInterval = 0
@@ -264,7 +268,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     }
 
     /// Remembers the picture round both ends of a line just drawn, so they can be found again.
-    private func startTracking(_ line: RoomMeasurement) {
+    private func startTracking(_ line: RoomMeasurement, plane: (point: SIMD3<Float>, normal: SIMD3<Float>)? = nil) {
         guard let frame = session.currentFrame, case .normal = frame.camera.trackingState else { return }
         for (end, point) in [line.start, line.end].enumerated() {
             guard let p = Measurer.pixel(of: point, in: frame) else { continue }
@@ -277,7 +281,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let through = Measurer.ray(through: SIMD2(Float(centre.x * 2) + 1, Float(centre.y * 2) + 1), in: frame)
             let depth = simd_dot(point - through.origin, through.direction)
             guard depth > 0.1 else { continue }
-            tracks["\(line.id.uuidString):\(end)"] = EndTrack(patch: patch, origin: through.origin, direction: through.direction, depth: depth, first: depth)
+            tracks["\(line.id.uuidString):\(end)"] = EndTrack(patch: patch, origin: through.origin, direction: through.direction, depth: depth, first: depth, plane: plane)
         }
     }
 
@@ -290,7 +294,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     static let refineDepthFromViews = false
 
     private func refineTracks() {
-        guard Measurer.refineDepthFromViews else { return }
+        guard Measurer.refineDepthFromViews || tracks.values.contains(where: { $0.plane != nil }) else { return }
         if let at = refinedAt, Date().timeIntervalSince(at) > 1.5 {
             refinedAt = nil
             revision += 1  // saves the refined line
@@ -308,7 +312,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
                 tracks[key] = nil
                 continue
             }
-            let point = track.origin + track.direction * track.depth
+            let current = end == 0 ? measurements[index].start : measurements[index].end
+            let point = track.plane != nil ? current : track.origin + track.direction * track.depth
             guard let p = Measurer.pixel(of: point, in: frame) else { continue }
             let centre = SIMD2(Int(p.x / 2), Int(p.y / 2))
             guard let window = Measurer.lumaGrid(frame, centre: centre, half: grid / 2),
@@ -321,6 +326,26 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             track.matches += 1
             let matched = SIMD2(Float((centre.x + hit.dx) * 2) + 1, Float((centre.y + hit.dy) * 2) + 1)
             let second = Measurer.ray(through: matched, in: frame)
+            if let plane = track.plane {
+                // Drawn on a flat surface: the end is where the ray through the matched spot meets that
+                // surface, so it stays on the thing it was put on without trusting a second depth.
+                let facing = simd_dot(second.direction, plane.normal)
+                guard abs(facing) > 0.17 else { continue }
+                let t = simd_dot(plane.point - second.origin, plane.normal) / facing
+                guard t > 0.1, t < 6 else { continue }
+                let moved = second.origin + second.direction * t
+                if simd_distance(moved, current) < 0.5 {
+                    if end == 0 { measurements[index].a = array(moved) } else { measurements[index].b = array(moved) }
+                    if !track.shifted, simd_distance(moved, current) > 0.03 {
+                        track.shifted = true
+                        Diagnostics.log(String(format: "Line end %d held on its surface: moved %.1f cm to follow the picture, %d matches, %d misses",
+                                               end, simd_distance(moved, current) * 100, track.matches, track.misses))
+                    }
+                    changedAny = true
+                }
+                tracks[key] = track
+                continue
+            }
             if let along = FeatureTrack.depthAlong(o1: track.origin, d1: track.direction, o2: second.origin, d2: second.direction,
                                                    minAngle: 0.05, maxGap: 0.05),
                along > track.depth * 0.25, along < track.depth * 4 {
@@ -635,8 +660,19 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             pa = Measurer.world(in: frame, normalized: a.normalized, metres: da * Measurer.depthScale)
             pb = Measurer.world(in: frame, normalized: b.normalized, metres: db * Measurer.depthScale)
             planeNote = String(format: ", flat plane %.0f%% of depth, ends %.3f/%.3f m", plane.inliers * 100, da, db)
+            // A third point beside the line, to know which way the surface faces.
+            let mid = SIMD2(Float(a.normalized.x + b.normalized.x) / 2, Float(a.normalized.y + b.normalized.y) / 2)
+            let along = SIMD2(Float(b.normalized.x - a.normalized.x), Float(b.normalized.y - a.normalized.y))
+            let side = SIMD2(-along.y, along.x) * (0.1 / max(0.05, simd_length(along)))
+            let third = CGPoint(x: Double(mid.x + side.x), y: Double(mid.y + side.y))
+            if plane.inliers >= 0.8, let d3 = plane.depth(x: Float(third.x) * px, y: Float(third.y) * py), (0.1...6).contains(d3) {
+                let pc = Measurer.world(in: frame, normalized: third, metres: d3 * Measurer.depthScale)
+                let n = simd_cross(pb - pa, pc - pa)
+                if simd_length(n) > 1e-6 { dragPlane = (pa, simd_normalize(n)) } else { dragPlane = nil }
+            } else { dragPlane = nil }
         } else {
             planeNote = ", no flat plane (own depth at each end)"
+            dragPlane = nil
         }
         dragSamples.append(DragLine(a: pa, b: pb))
         if dragSamples.count > 8 { dragSamples.removeFirst() }
@@ -659,7 +695,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (drawn on the screen)")
         Diagnostics.log("Drag detail: \(dragDetail)")
         changed()
-        startTracking(line)
+        startTracking(line, plane: dragPlane)
         if tapeMode {
             tapeMode = false
             tapeLine = line.id
