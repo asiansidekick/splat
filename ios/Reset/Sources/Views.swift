@@ -423,7 +423,8 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                     if !landscape {
                         VStack(spacing: 4) {
                             modes(false)
-                            if evenRow {
+                            Group {
+                              if evenRow {
                                 // Four equal cells: reference, the two buttons in `trailing`, then the shutter.
                                 HStack(spacing: 0) {
                                     leading().frame(maxWidth: .infinity)
@@ -439,6 +440,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                                         trailing().frame(minWidth: 84, alignment: .trailing)
                                     }
                                 }
+                              }
                             }
                             .padding(.horizontal, 16)
                         }
