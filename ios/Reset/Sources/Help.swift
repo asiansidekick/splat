@@ -9,6 +9,16 @@ struct HelpView: View {
     var body: some View {
         NavigationStack {
             List {
+                // Phil, 2026-11-01: feedback log at the TOP while testing. Move it back to the bottom when the app is shared with the team.
+                Section {
+                    ShareLink(item: Diagnostics.reportURL()) {
+                        Label("Send feedback log", systemImage: "ladybug")
+                    }
+                } header: {
+                    Text("Testing")
+                } footer: {
+                    Text("Sends a record of what the app did on this device (no photos), to help fix problems. Add screenshots in the same message.\n\n\(HelpView.buildLabel)")
+                }
                 Section("Recording a reference") {
                     step("camera.circle", "The app opens on the camera. In Quick Scan mode, point at the props and tap the shutter: that saves a reference for the setup shown at the top (tap it to change scene or setup).")
                     step("figure.walk", "For a fuller reference, swipe the modes to Walk around, tap record, walk slowly round the props and tap stop.")
@@ -45,15 +55,6 @@ struct HelpView: View {
                     step("lock", "Everything stays on this device (unless you sync with your team's phones) and works with no signal. References are also in the Files app, On My iPhone, Reset.")
                     step("square.and.arrow.up", "Press and hold a reference in the gallery for its take log and PDF report.")
                     step("arrow.triangle.2.circlepath", "Sync with your team's phones nearby, with no signal: open the gallery and tap the sync arrows (or ••• then Sync on the reset screen) on each phone, with the same team passcode. References, takes and notes go both ways. Turn off LiDAR and 3D models for a quicker sync.")
-                }
-                Section {
-                    ShareLink(item: Diagnostics.reportURL()) {
-                        Label("Send feedback log", systemImage: "ladybug")
-                    }
-                } header: {
-                    Text("Testing")
-                } footer: {
-                    Text("Sends a record of what the app did on this device (no photos), to help fix problems. Add screenshots in the same message.\n\n\(HelpView.buildLabel)")
                 }
             }
             .navigationTitle("How Reset works")
