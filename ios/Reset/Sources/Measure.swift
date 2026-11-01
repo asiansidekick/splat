@@ -42,7 +42,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// How far ahead a note hangs in mid-air when the crosshair is on nothing.
     private var airDistance: Float = 1
     /// How big dimension and note text is drawn; pinch while measuring to change it.
-    @Published private(set) var textScale = UserDefaults.standard.object(forKey: "measureTextScale") as? Float ?? 1
+    @Published private(set) var textScale = UserDefaults.standard.object(forKey: "measureTextScale") as? Float ?? 3
     /// What the last drag was made of, written to the log when the line is kept so a wrong length
     /// can be traced to the depth, the mapping or the pose.
     private var dragDetail = ""
