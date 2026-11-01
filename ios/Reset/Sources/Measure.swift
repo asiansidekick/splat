@@ -818,7 +818,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
                 .map { SIMD2<Float>(Float($0.x) * width, (1 - Float($0.y)) * height) }
             guard let result = PaperPose.solve(corners: corners, longSide: 0.297, shortSide: 0.210,
                                                fx: k[0][0], fy: k[1][1], cx: k[2][0], cy: k[2][1]),
-                  result.mismatch < 0.12, result.distance > 0.15, result.distance < 4 else { continue }
+                  result.mismatch < 0.12, result.distance > 0.15, result.distance < 4,
+                  Measurer.isBrighterThanSurround(corners, in: buffer) else { continue }
             let area = Float(observation.boundingBox.width * observation.boundingBox.height)
             if best == nil || area > best!.area {
                 best = (result, area, corners.reduce(SIMD2<Float>.zero, +) / 4)
@@ -835,6 +836,14 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             return
         }
         let pinhole = best.result.distance
+        // Build 123: the first A4 test read 0.861 m against the LiDAR's 0.856 m, the second 0.579 m against 0.890 m
+        // (the sheet was really about 0.9 m: Vision had picked a bigger rectangle). Big disagreements are not trusted.
+        guard pinhole / lidar > 0.8, pinhole / lidar < 1.25 else {
+            Diagnostics.log(String(format: "A4 check ignored: pinhole %.3f m, LiDAR %.3f m (raw), ratio %.3f, shape mismatch %.3f",
+                                   pinhole, lidar, pinhole / lidar, best.result.mismatch))
+            say(String(format: "A4 size says %.0f cm, LiDAR %.0f cm: too different to trust, not changed", pinhole * 100, lidar * 100))
+            return
+        }
         let scale = min(max(pinhole / lidar, 0.3), 3)
         Diagnostics.log(String(format: "A4 check: pinhole %.3f m, LiDAR %.3f m (raw), ratio %.3f, shape mismatch %.3f, previous scale %.3f",
                                pinhole, lidar, pinhole / lidar, best.result.mismatch, Measurer.depthScale))
@@ -843,6 +852,41 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         UserDefaults.standard.set(scale, forKey: "measureDepthScale")
         Haptics.tap()
         say(String(format: "A4 is %.0f cm away by its size; LiDAR read %.0f cm. Scale ×%.2f", pinhole * 100, lidar * 100, scale))
+    }
+
+    /// A sheet of paper is brighter than what is round it: the middle of the quad against a ring just outside it.
+    static func isBrighterThanSurround(_ c: [SIMD2<Float>], in buffer: CVPixelBuffer) -> Bool {
+        guard CVPixelBufferGetPlaneCount(buffer) >= 1 else { return true }
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return true }
+        let width = CVPixelBufferGetWidthOfPlane(buffer, 0), height = CVPixelBufferGetHeightOfPlane(buffer, 0)
+        let rowBytes = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+        let bytes = base.assumingMemoryBound(to: UInt8.self)
+        func luma(_ p: SIMD2<Float>) -> Float? {
+            let x = Int(p.x), y = Int(p.y)
+            guard x >= 0, y >= 0, x < width, y < height else { return nil }
+            return Float(bytes[y * rowBytes + x])
+        }
+        let centre = c.reduce(SIMD2<Float>.zero, +) / 4
+        var inside: [Float] = [], outside: [Float] = []
+        for i in 0..<5 {
+            for j in 0..<5 {
+                let u = Float(i) / 4, v = Float(j) / 4
+                let top = c[0] + (c[1] - c[0]) * u, bottom = c[3] + (c[2] - c[3]) * u
+                let p = top + (bottom - top) * v
+                if let l = luma(centre + (p - centre) * 0.6) { inside.append(l) }
+            }
+        }
+        for i in 0..<4 {
+            for t: Float in [0, 0.5] {
+                let edge = c[i] + (c[(i + 1) % 4] - c[i]) * t
+                if let l = luma(centre + (edge - centre) * 1.3) { outside.append(l) }
+            }
+        }
+        guard inside.count >= 15, outside.count >= 4 else { return true }
+        let a = inside.reduce(0, +) / Float(inside.count), b = outside.reduce(0, +) / Float(outside.count)
+        return a > b * 1.12
     }
 
     private func say(_ text: String) {
