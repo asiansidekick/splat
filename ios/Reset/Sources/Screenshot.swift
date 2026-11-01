@@ -87,14 +87,24 @@ struct WithScreenshot<Content: View>: View {
     let toast: (String) -> Void
     /// Diameter of the screenshot button (the capture screen makes it as big as the shutter).
     var size: CGFloat = 40
+    /// Phone upright: the 3D models button and this one each take an equal share of the bottom row
+    /// (Phil, 2026-11-01), so with the reference thumbnail and the shutter all four sit evenly spaced.
+    var evenCells = false
     @ViewBuilder let content: () -> Content
     @Environment(\.chromeVertical) private var vertical
 
     var body: some View {
-        let layout = vertical ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 6))
-        layout {
-            ScreenshotButton(camera: camera, toast: toast, size: size)
-            content()
+        if evenCells && !vertical {
+            Group {
+                content().frame(maxWidth: .infinity)
+                ScreenshotButton(camera: camera, toast: toast, size: size).frame(maxWidth: .infinity)
+            }
+        } else {
+            let layout = vertical ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 6))
+            layout {
+                ScreenshotButton(camera: camera, toast: toast, size: size)
+                content()
+            }
         }
     }
 }
@@ -123,7 +133,7 @@ struct ScreenshotButton: View {
             }
         } label: {
             Image(systemName: "camera.viewfinder")
-                .font(.system(size: size * 0.62))
+                .font(.system(size: size * 0.86))
                 .foregroundStyle(.white)
                 .frame(width: size, height: size)
                 .shadow(color: .black.opacity(0.7), radius: 3)

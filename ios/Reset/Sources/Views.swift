@@ -389,6 +389,8 @@ struct NextSlateSheet: View {
 struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutter: View, Trailing: View>: View {
     /// Dark bars behind the controls. Without them the controls float straight on the picture.
     var bars = true
+    /// Phone upright: reference, two buttons and the shutter in four equal cells (the capture screen).
+    var evenRow = false
     /// Left-handed: in landscape the control column runs down the left edge instead.
     @AppStorage("leftHanded") var leftHanded = false
     @ViewBuilder let top: () -> Top
@@ -421,12 +423,21 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                     if !landscape {
                         VStack(spacing: 4) {
                             modes(false)
-                            ZStack {
-                                shutter()
-                                HStack {
-                                    leading().frame(width: 84)
-                                    Spacer(minLength: 0)
-                                    trailing().frame(minWidth: 84, alignment: .trailing)
+                            if evenRow {
+                                // Four equal cells: reference, the two buttons in `trailing`, then the shutter.
+                                HStack(spacing: 0) {
+                                    leading().frame(maxWidth: .infinity)
+                                    trailing()
+                                    shutter().frame(maxWidth: .infinity)
+                                }
+                            } else {
+                                ZStack {
+                                    shutter()
+                                    HStack {
+                                        leading().frame(width: 84)
+                                        Spacer(minLength: 0)
+                                        trailing().frame(minWidth: 84, alignment: .trailing)
+                                    }
                                 }
                             }
                             .padding(.horizontal, 16)
@@ -1064,7 +1075,7 @@ struct CaptureStage: View {
     private var slate: String { Reference.label(scene: scene, setup: setup) }
 
     var body: some View {
-        CameraLayout {
+        CameraLayout(evenRow: true) {
             HStack(spacing: 8) {
                 TopPill(text: "Next: \(slate.isEmpty ? "no slate" : slate)", systemImage: "pencil") {
                     open(.nextSlate)
@@ -1147,7 +1158,7 @@ struct CaptureStage: View {
             .disabled(recorder.saving)
             .accessibilityLabel(shutterLabel)
         } trailing: {
-            WithScreenshot(camera: { holder.view }, toast: showToast, size: 74) {
+            WithScreenshot(camera: { holder.view }, toast: showToast, size: 74, evenCells: true) {
                 if recorder.capturing {
                     Text("\(recorder.keyframeCount)\n\(recorder.keyframeCount == 1 ? "view" : "views")")
                         .font(.caption.bold().monospacedDigit())
