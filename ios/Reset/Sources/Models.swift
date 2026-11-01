@@ -173,6 +173,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// table), the model stands on it; with none, it slides across the level plane at its own height,
     /// which works with no surface found, unlike a raycast. With Lift on, a drag moves it up and down.
     /// Picks up the model under the finger (or the only one) when none is selected.
+    static let snapsToSurface = false
+
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         guard !isSuspended(), let view = gesture.view as? ARSCNView else { return }
         let location = gesture.location(in: view)
@@ -202,7 +204,9 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             return
         }
         guard let point = floorPoint(location, in: view, height: node.simdWorldPosition.y) else { return }
-        let hit = surface(at: location, in: view)
+        // Sliding on a level plane at the model's own height felt right (build 78); snapping to the
+        // LiDAR surface under the finger (build 114) made it jumpy, so it is off. Floor does that on demand.
+        let hit: SIMD3<Float>? = Self.snapsToSurface ? surface(at: location, in: view) : nil
         switch gesture.state {
         case .began:
             let anchor = hit ?? point
