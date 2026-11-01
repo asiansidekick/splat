@@ -52,6 +52,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var dragSamples: [DragLine] = []
     private var dragSampleTime: TimeInterval = 0
     private var planeNote = ""
+    private weak var gestureView: ARSCNView?
+    /// The sheet the A4 check found, in screen points, shown for a few seconds so it can be seen to be the right one.
+    @Published private(set) var paperQuad: [CGPoint] = []
     private var dragTooClose = false
     /// Where the finger is, the point it is aiming at above it, and where the corner snap put
     /// that point, all in screen points, so the aim can be drawn where it can be seen.
@@ -379,6 +382,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     /// While measuring, a tap on a line, its length or a note picks it; a tap elsewhere lets go.
     func attachGestures(to view: ARSCNView) {
+        gestureView = view
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.delegate = self
         view.addGestureRecognizer(tap)
@@ -812,7 +816,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         request.maximumObservations = 6
         try? VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up, options: [:]).perform([request])
         let k = frame.camera.intrinsics
-        var best: (result: PaperPose.Result, area: Float, centre: SIMD2<Float>)?
+        var best: (result: PaperPose.Result, area: Float, centre: SIMD2<Float>, corners: [SIMD2<Float>])?
         for observation in request.results ?? [] {
             let corners = [observation.topLeft, observation.topRight, observation.bottomRight, observation.bottomLeft]
                 .map { SIMD2<Float>(Float($0.x) * width, (1 - Float($0.y)) * height) }
@@ -822,13 +826,18 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
                   Measurer.isBrighterThanSurround(corners, in: buffer) else { continue }
             let area = Float(observation.boundingBox.width * observation.boundingBox.height)
             if best == nil || area > best!.area {
-                best = (result, area, corners.reduce(SIMD2<Float>.zero, +) / 4)
+                best = (result, area, corners.reduce(SIMD2<Float>.zero, +) / 4, corners)
             }
         }
         guard let best else {
             say("No A4 sheet found: lay it flat, whole sheet in view")
             return
         }
+        if let view = gestureView {
+            paperQuad = best.corners.map { Measurer.screenPoint(of: CGPoint(x: Double($0.x / width), y: Double($0.y / height)), frame: frame, view: view) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.paperQuad = [] }
+        }
+        Diagnostics.log("A4 corners (picture px): " + best.corners.map { String(format: "%.0f,%.0f", $0.x, $0.y) }.joined(separator: " "))
         let px = best.centre.x / width * Float(depth.width), py = best.centre.y / height * Float(depth.height)
         guard let lidar = DepthMap.planeDepth(depth.values, width: depth.width, height: depth.height, x: px, y: py, radius: 10)
                 ?? DepthMap.sample(depth.values, width: depth.width, height: depth.height, x: Int(px), y: Int(py)) else {
@@ -1534,6 +1543,14 @@ struct MeasurePointer: View {
 
     var body: some View {
         GeometryReader { geometry in
+            if measurer.paperQuad.count == 4 {
+                Path { path in
+                    path.addLines(measurer.paperQuad)
+                    path.closeSubpath()
+                }
+                .stroke(Color.green, lineWidth: 3)
+                .shadow(color: .black.opacity(0.7), radius: 2)
+            }
             if let pointer = measurer.pointer {
                 ZStack {
                     ring(at: pointer.start, colour: .white)
