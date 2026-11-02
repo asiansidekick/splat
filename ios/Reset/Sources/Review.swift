@@ -17,6 +17,7 @@ struct FrameReview: View {
     /// 3D model mode: touches move the models instead of drawing marks.
     @State private var editingModels = false
     @State private var importingModel = false
+    @State private var exploring = false
     @State private var index = 0
     @Environment(\.dismiss) private var dismiss
 
@@ -61,6 +62,7 @@ struct FrameReview: View {
             let spot = placement(for: frames[index])
             placer.add(from: urls, at: spot.transform, right: spot.right)
         }
+        .fullScreenCover(isPresented: $exploring) { ExploreView(reference: reference) }
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled()
         .onAppear {
@@ -94,6 +96,8 @@ struct FrameReview: View {
             Button { move(1) } label: { Image(systemName: "chevron.right").frame(width: 36, height: 36) }
                 .disabled(index >= frames.count - 1)
             Spacer()
+            Button { exploring = true } label: { Image(systemName: "view.3d").frame(width: 30, height: 36) }
+                .accessibilityLabel("Fly through in 3D")
             Button {
                 editingModels.toggle()
                 if editingModels { measurer.deselect() } else { placer.selectedModel = nil }
