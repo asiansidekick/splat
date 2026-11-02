@@ -1528,20 +1528,32 @@ struct MeasureReticle: View {
             ZStack {
                 Circle().stroke(found ? Color.yellow : Color.white.opacity(0.6), lineWidth: 2).frame(width: 34, height: 34)
                 Circle().fill(found ? Color.yellow : Color.white.opacity(0.6)).frame(width: 6, height: 6)
-                Text(measurer.readout)
-                    .font(.caption.bold().monospacedDigit())
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(Color.black.opacity(0.25), in: Capsule())
-                    .foregroundStyle(.white.opacity(0.9))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .frame(maxWidth: 300)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .offset(y: 34)
             }
             .shadow(color: .black.opacity(0.5), radius: 2)
             .allowsHitTesting(false)
+        }
+    }
+}
+
+/// What the measuring readout says ("Drag a line, or hold to add a note", the size while dragging),
+/// at the bottom of the frame just above the measuring buttons (Phil, 2026-11-02), not over the picture's middle.
+struct MeasureHint: View {
+    @ObservedObject var measurer: Measurer
+
+    var body: some View {
+        if measurer.active {
+            Text(measurer.readout)
+                .font(.caption.bold().monospacedDigit())
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(Color.black.opacity(0.25), in: Capsule())
+                .foregroundStyle(.white.opacity(0.9))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .frame(maxWidth: 300)
+                .fixedSize(horizontal: false, vertical: true)
+                .shadow(color: .black.opacity(0.5), radius: 2)
+                .allowsHitTesting(false)
         }
     }
 }

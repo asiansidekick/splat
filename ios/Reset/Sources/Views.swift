@@ -1136,6 +1136,7 @@ struct CaptureStage: View {
                         .onChange(of: recorder.trackingNormal) { _, normal in timeBearingsHint(normal) }
                     Spacer()
                     TorchDial()
+                    MeasureHint(measurer: recorder.measurer)
                     MeasureBar(measurer: recorder.measurer)
                     ModelOverlay(placer: recorder.placer)
                     if let error = recorder.error {
@@ -1583,6 +1584,7 @@ struct ResetStage: View {
                         ScrubCursor(value: toNow, start: "THEN", end: "NOW")
                     } else {
                         TorchDial()
+                        MeasureHint(measurer: restorer.measurer)
                         MeasureBar(measurer: restorer.measurer)
                         ModelOverlay(placer: restorer.placer)
                         if swipingStrength {
