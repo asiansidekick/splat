@@ -1217,7 +1217,7 @@ struct CaptureStage: View {
 
     /// The camera view as it looks, with any 3D models in it.
     private func takePhoto() {
-        guard let image = holder.view?.snapshot() else { return }
+        guard let image = Screenshot.capture(camera: holder.view) else { return }
         onPhoto(image)
     }
 
@@ -1725,7 +1725,7 @@ struct ResetStage: View {
         guard let shot = restorer.takeSnapshot(label: count == 0 ? label : "\(label) (\(count + 1))") else { return }
         reference.snapshots.append(shot)
         save()
-        if let image = holder.view?.snapshot() { onPhoto(image) }
+        if let image = Screenshot.capture(camera: holder.view) { onPhoto(image) }
         showToast("Snapshot saved. Compare it from the ••• menu.")
     }
 
