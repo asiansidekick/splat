@@ -1053,6 +1053,7 @@ final class CameraViewHolder {
 /// Reference: each tap saves a reference. Walk around: tap to start, walk slowly round the props,
 /// tap to stop and save.
 struct CaptureStage: View {
+    @State private var scanningObject = false
     @StateObject private var recorder = Recorder()
     let scene: String
     let setup: String
@@ -1093,6 +1094,11 @@ struct CaptureStage: View {
                 TorchButton()
                 // Works while a scan or recording is going, too.
                 MeasureToggle(measurer: recorder.measurer)
+                if ObjectScanner.supported {
+                    Button { scanningObject = true } label: { Image(systemName: "cube.transparent").font(.title3) }
+                        .disabled(recorder.capturing)
+                        .accessibilityLabel("Scan an object")
+                }
                 Button { open(.help) } label: { Image(systemName: "questionmark.circle").font(.title3) }
                     .accessibilityLabel("Help")
             }
@@ -1181,6 +1187,9 @@ struct CaptureStage: View {
         .overlay { MeasureEntry(measurer: recorder.measurer).hiddenInScreenshots() }
         .fileImporter(isPresented: $importingModels, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { recorder.placer.add(from: urls) }
+        }
+        .fullScreenCover(isPresented: $scanningObject) {
+            ObjectScanView { recorder.placer.add(from: [$0]) }
         }
         .onAppear {
             recorder.onSaved = { reference in
