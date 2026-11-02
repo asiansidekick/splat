@@ -1,3 +1,4 @@
+import ARKit
 import ImageIO
 import SceneKit
 import SwiftUI
