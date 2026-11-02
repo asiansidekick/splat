@@ -1033,11 +1033,10 @@ final class Thumbnails: ObservableObject {
 // MARK: - Recording
 
 enum CaptureMode: String, CaseIterable {
-    case photo, snapshot, walk
+    case snapshot, walk
 
     var label: String {
         switch self {
-        case .photo: return "PHOTO"
         case .snapshot: return "QUICK SCAN"
         case .walk: return "WALK AROUND"
         }
@@ -1211,7 +1210,6 @@ struct CaptureStage: View {
 
     private var shutterLabel: String {
         switch mode {
-        case .photo: return "Take photo"
         case .snapshot: return "Save reference"
         case .walk: return recorder.capturing ? "Stop and save" : "Start recording"
         }
@@ -1225,15 +1223,13 @@ struct CaptureStage: View {
 
     private var shutterStyle: ShutterButton.Style {
         switch mode {
-        case .photo, .snapshot: return .photo
+        case .snapshot: return .photo
         case .walk: return recorder.capturing && !recorder.pendingSave ? .stop : .record
         }
     }
 
     private func shutterTapped() {
         switch mode {
-        case .photo:
-            takePhoto()
         case .snapshot:
             takePhoto()
             // Another tap while waiting for the map adds a second view to the same reference.
@@ -1279,10 +1275,6 @@ struct CaptureStage: View {
             return "\(start). Move the phone slowly so the camera can get its bearings"
         }
         switch mode {
-        case .photo:
-            return recorder.placer.models.isEmpty
-                ? "Tap for a photo. Add 3D models with the cube button to mock up the set."
-                : "Tap for a photo with the models in it"
         case .snapshot:
             return ready ? "Point at the props and tap to save \(slate)" : "Move the phone gently to map the room, then tap to save \(slate)"
         case .walk:
