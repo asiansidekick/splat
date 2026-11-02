@@ -402,6 +402,25 @@ func runFrameTests() {
     }
     expect(frame.project(SIMD3(0, 0, 1)) == nil, "a point behind the camera does not")
     expect(abs(frame.uprightAspect - 4.0 / 3.0) < 1e-5, "an upright landscape frame keeps its shape")
+
+    // The projection matrix lands a point where project + turn say, for every way of holding the phone.
+    for (index, camera) in [matrix_identity_float4x4, sideways].enumerated() {
+        var shot = frame
+        shot = Keyframe(imageFile: "b.jpg", depthFile: nil, transform: flatten(camera),
+                        intrinsics: frame.intrinsics, imageWidth: 1920, imageHeight: 1440, depthWidth: 256, depthHeight: 192)
+        let target = shot.cameraToWorld * SIMD4<Float>(0.3, -0.2, -2, 1)
+        let point = SIMD3<Float>(target.x, target.y, target.z)
+        if let n = shot.project(point), let matrix = shot.uprightProjection() {
+            let u = shot.turn.upright(fromSensor: n)
+            let local = shot.cameraToWorld.inverse * SIMD4(point.x, point.y, point.z, 1)
+            let clip = matrix * local
+            let ndc = SIMD2<Float>(clip.x / clip.w, clip.y / clip.w)
+            let wantX = 2 * u.x - 1, wantY = 1 - 2 * u.y
+            expect(abs(ndc.x - wantX) < 1e-4 && abs(ndc.y - wantY) < 1e-4, "the projection matrix agrees with project for pose \(index) (\(ndc) vs \(wantX), \(wantY))")
+        } else {
+            expect(false, "pose \(index) projects a point")
+        }
+    }
 }
 
 try MainActor.assumeIsolated { try runSyncTests() }

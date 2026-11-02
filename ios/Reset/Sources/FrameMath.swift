@@ -75,3 +75,29 @@ extension Keyframe {
         return SIMD3(world.x, world.y, world.z)
     }
 }
+
+extension Keyframe {
+    /// A projection matrix (column-vector convention, ARKit camera space looking down -z) that draws
+    /// the room over this frame's photo as it shows upright, from the saved intrinsics and the turn.
+    func uprightProjection(near: Float = 0.03, far: Float = 30) -> simd_float4x4? {
+        guard imageWidth > 0, imageHeight > 0, intrinsics.count >= 9, far > near else { return nil }
+        let k = cameraIntrinsics
+        let w = Float(imageWidth), h = Float(imageHeight)
+        // Clip x and y in the sensor's own layout, as coefficients of camera X, Y, Z.
+        let sx = SIMD3<Float>(2 * k[0][0] / w, 0, -(2 * k[2][0] / w - 1))
+        let sy = SIMD3<Float>(0, 2 * k[1][1] / h, -(1 - 2 * k[2][1] / h))
+        let x: SIMD3<Float>, y: SIMD3<Float>
+        switch turn {
+        case .asShot: (x, y) = (sx, sy)
+        case .half: (x, y) = (-sx, -sy)
+        case .clockwise: (x, y) = (sy, -sx)
+        case .counterclockwise: (x, y) = (-sy, sx)
+        }
+        let a = -(far + near) / (far - near), b = -2 * far * near / (far - near)
+        return simd_float4x4(rows: [
+            SIMD4(x.x, x.y, x.z, 0),
+            SIMD4(y.x, y.y, y.z, 0),
+            SIMD4(0, 0, a, b),
+            SIMD4(0, 0, -1, 0)])
+    }
+}

@@ -33,7 +33,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private var dragOffset: SIMD3<Float>?
     /// One-finger drags move the selected model up and down instead of across (Phil, 2026-10-31).
     @Published var lifting = false
-    private weak var cameraView: ARSCNView?
+    private weak var cameraView: SCNView?
     private var depthCache: (time: TimeInterval, depth: Measurer.Depth)?
     /// True while something else (measuring) uses one-finger drags on the camera view.
     var isSuspended: () -> Bool = { false }
@@ -55,10 +55,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             modelError = "Point the camera at the set first, then add the models."
             return
         }
-        let base = placementTransform(frame)
         var right = frame.camera.transform.columns.0.xyz
         right.y = 0
         right = simd_length(right) > 0.01 ? simd_normalize(right) : SIMD3(1, 0, 0)
+        add(from: sources, at: placementTransform(frame), right: right)
+    }
+
+    /// Places the models side by side from `base`, spread along `right` (also used with a saved frame, with no live camera).
+    func add(from sources: [URL], at base: simd_float4x4, right: SIMD3<Float>) {
         var added: UUID?
         var failed: [String] = []
         for (index, source) in sources.enumerated() {
@@ -146,7 +150,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     /// Tap a model to select it; drag moves it over surfaces, pinch scales, twist turns.
-    func attachGestures(to view: ARSCNView) {
+    func attachGestures(to view: SCNView) {
         cameraView = view
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
@@ -164,7 +168,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-        guard let view = gesture.view as? ARSCNView else { return }
+        guard let view = gesture.view as? SCNView else { return }
         let hits = view.hitTest(gesture.location(in: view), options: nil)
         selectedModel = hits.lazy.compactMap { self.modelID(of: $0.node) }.first
     }
@@ -176,7 +180,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     static let snapsToSurface = false
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        guard !isSuspended(), let view = gesture.view as? ARSCNView else { return }
+        guard !isSuspended(), let view = gesture.view as? SCNView else { return }
         let location = gesture.location(in: view)
         if gesture.state == .began {
             let touched = view.hitTest(location, options: nil).lazy.compactMap { self.modelID(of: $0.node) }.first
@@ -237,7 +241,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     /// The surface the LiDAR sees under a place on the screen, in the room's coordinates.
-    private func surface(at location: CGPoint, in view: ARSCNView) -> SIMD3<Float>? {
+    private func surface(at location: CGPoint, in view: SCNView) -> SIMD3<Float>? {
         guard let frame = session.currentFrame, case .normal = frame.camera.trackingState else { return nil }
         let depth: Measurer.Depth
         if let cache = depthCache, cache.time == frame.timestamp {
@@ -285,7 +289,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     /// Where the finger's ray meets the level plane at `height`, nil when it points above it
     /// or the meeting point is very far off.
-    private func floorPoint(_ location: CGPoint, in view: ARSCNView, height: Float) -> SIMD3<Float>? {
+    private func floorPoint(_ location: CGPoint, in view: SCNView, height: Float) -> SIMD3<Float>? {
         let near = SIMD3<Float>(view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 0)))
         let far = SIMD3<Float>(view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 1)))
         let direction = far - near
@@ -394,6 +398,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 /// Over the camera: the selected model's controls, and any error adding models.
 struct ModelOverlay: View {
     @ObservedObject var placer: ModelPlacer
+    /// Off in Review, where there is no live LiDAR to find the floor with.
+    var showsFloor = true
 
     var body: some View {
         Group {
@@ -415,7 +421,7 @@ struct ModelOverlay: View {
                         }
                         .tint(placer.lifting ? .yellow : nil)
                         .accessibilityLabel(placer.lifting ? "Drag moves it across again" : "Drag lifts it up and down")
-                        Button("Floor") { placer.dropToFloor() }
+                        if showsFloor { Button("Floor") { placer.dropToFloor() } }
                         Button("True size") { placer.resetSelectedModelSize() }
                         Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
                         Spacer()

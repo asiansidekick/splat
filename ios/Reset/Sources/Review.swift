@@ -12,12 +12,20 @@ struct FrameReview: View {
     let onSave: (Reference) -> Void
     @State private var reference: Reference
     @StateObject private var measurer = Measurer(session: ARSession(), parent: SCNNode())
+    @StateObject private var placer: ModelPlacer
+    @StateObject private var stage: ReviewStage
+    /// 3D model mode: touches move the models instead of drawing marks.
+    @State private var editingModels = false
+    @State private var importingModel = false
     @State private var index = 0
     @Environment(\.dismiss) private var dismiss
 
     init(reference: Reference, onSave: @escaping (Reference) -> Void) {
         _reference = State(initialValue: reference)
         self.onSave = onSave
+        let root = SCNNode()
+        _placer = StateObject(wrappedValue: ModelPlacer(session: ARSession(), root: root, folder: ReferenceStore.folder(for: reference.id)))
+        _stage = StateObject(wrappedValue: ReviewStage(modelRoot: root))
     }
 
     private var frames: [Keyframe] { reference.keyframes + reference.snapshots.map(\.frame) }
@@ -29,7 +37,8 @@ struct FrameReview: View {
             VStack(spacing: 0) {
                 topBar
                 if frames.indices.contains(index) {
-                    FramePage(frame: frames[index], folder: folder, measurer: measurer)
+                    FramePage(frame: frames[index], folder: folder, measurer: measurer,
+                              stage: stage, placer: placer, editingModels: editingModels)
                         .id(frames[index].id)
                 } else {
                     Spacer()
@@ -39,11 +48,29 @@ struct FrameReview: View {
                 strip
             }
             MeasureEntry(measurer: measurer)
+            VStack {
+                Spacer()
+                ModelOverlay(placer: placer, showsFloor: false)
+                    .padding(.bottom, 84)
+                    .padding(.horizontal, 12)
+            }
+            ModelSizeBadge(placer: placer)
+        }
+        .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result, frames.indices.contains(index) else { return }
+            let spot = placement(for: frames[index])
+            placer.add(from: urls, at: spot.transform, right: spot.right)
         }
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled()
         .onAppear {
             measurer.load(measurements: reference.measurements, notes: reference.notes, removed: reference.removedMarks)
+            placer.load(reference.models)
+        }
+        .onReceive(placer.$models.dropFirst()) { models in
+            guard models != reference.models else { return }
+            reference.models = models
+            onSave(reference)
         }
         .onReceive(measurer.$revision.dropFirst()) { _ in
             reference.measurements = measurer.measurements
@@ -67,12 +94,48 @@ struct FrameReview: View {
             Button { move(1) } label: { Image(systemName: "chevron.right").frame(width: 36, height: 36) }
                 .disabled(index >= frames.count - 1)
             Spacer()
+            Button {
+                editingModels.toggle()
+                if editingModels { measurer.deselect() } else { placer.selectedModel = nil }
+            } label: {
+                Image(systemName: editingModels ? "cube.fill" : "cube").frame(width: 30, height: 36)
+            }
+            .tint(editingModels ? .yellow : nil)
+            .accessibilityLabel(editingModels ? "Back to dimensions and notes" : "Place 3D models")
+            if editingModels {
+                Button { importingModel = true } label: { Image(systemName: "plus").frame(width: 30, height: 36) }
+                    .accessibilityLabel("Add a 3D model")
+            }
             Button { measurer.scaleText(by: 0.8) } label: { Text("A").font(.footnote.weight(.bold)).frame(width: 30, height: 36) }
             Button { measurer.scaleText(by: 1.25) } label: { Text("A").font(.title3.weight(.bold)).frame(width: 30, height: 36) }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .foregroundStyle(.white)
+    }
+
+    /// Where a new model goes in a frame: on the floor-ish surface low in the picture, from the saved
+    /// depth, or a metre and a bit straight ahead when the frame has none.
+    private func placement(for frame: Keyframe) -> (transform: simd_float4x4, right: SIMD3<Float>) {
+        let camera = frame.cameraToWorld
+        var right = camera.columns.0.xyz
+        right.y = 0
+        right = simd_length(right) > 0.01 ? simd_normalize(right) : SIMD3(1, 0, 0)
+        var spot: SIMD3<Float>?
+        if let file = frame.depthFile, frame.depthWidth > 0, frame.depthHeight > 0,
+           let data = try? Data(contentsOf: folder.appendingPathComponent(file)) {
+            let values = DepthMap.floats(data)
+            let n = frame.turn.sensor(fromUpright: SIMD2(0.5, 0.7))
+            let x = n.x * Float(frame.depthWidth), y = n.y * Float(frame.depthHeight)
+            if let metres = DepthMap.planeDepth(values, width: frame.depthWidth, height: frame.depthHeight, x: x, y: y, radius: 10)
+                ?? DepthMap.sample(values, width: frame.depthWidth, height: frame.depthHeight, x: Int(x), y: Int(y)) {
+                spot = frame.point(atSensor: n, metres: metres)
+            }
+        }
+        let place = spot ?? frame.point(atSensor: SIMD2(0.5, 0.5), metres: 1.3) ?? frame.position + frame.forward
+        var transform = matrix_identity_float4x4
+        transform.columns.3 = SIMD4(place.x, place.y, place.z, 1)
+        return (transform, right)
     }
 
     private func move(_ step: Int) {
@@ -186,6 +249,9 @@ struct FramePage: View {
     let frame: Keyframe
     let folder: URL
     @ObservedObject var measurer: Measurer
+    let stage: ReviewStage
+    let placer: ModelPlacer
+    let editingModels: Bool
 
     private struct Loaded: @unchecked Sendable {
         let image: UIImage
@@ -267,6 +333,9 @@ struct FramePage: View {
             } else {
                 ProgressView().tint(.white).frame(width: size.width, height: size.height)
             }
+            ReviewModelsView(stage: stage, placer: placer, frame: frame)
+                .frame(width: size.width, height: size.height)
+                .allowsHitTesting(editingModels)
             marks(size).allowsHitTesting(false)
             pointer(size).allowsHitTesting(false)
         }
@@ -287,7 +356,8 @@ struct FramePage: View {
                     let last = touch
                     touch = nil
                     finish(value, held: Date().timeIntervalSince(last?.began ?? Date()), carrying: carriedEnd(last, size: size), size: size)
-                }
+                },
+            including: editingModels ? .none : .all
         )
     }
 
