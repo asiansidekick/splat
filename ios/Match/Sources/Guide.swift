@@ -51,6 +51,14 @@ final class Guide: ObservableObject {
     private var referenceBody: ActorPose?
     /// The reference's LiDAR depth, saved with the photo, if it was taken with LiDAR.
     private var referenceDepth: DepthGrid?
+    /// The newest live LiDAR depth, for the change colours.
+    private var liveDepth: DepthGrid?
+    /// Red and blue where the set differs from the reference, once lined up (see DepthChange).
+    @Published private(set) var changes: CGImage?
+    /// Whether to work out the change colours at all (Changes in the ••• menu).
+    var showChanges = false {
+        didSet { if !showChanges { changes = nil } }
+    }
     private var prefersBody = false
     /// Where the followed actor was last, or where the screen was tapped.
     private var followPoint: CGPoint?
@@ -76,6 +84,7 @@ final class Guide: ObservableObject {
     func setReference(_ image: UIImage?, depth: DepthGrid? = nil, aspect: CGFloat?, whole: Bool = false, prefersBody: Bool = false,
                       fit: OverlayFit? = nil, needsFit: Bool = false) {
         generation += 1
+        changes = nil
         referenceDepth = image == nil ? nil : depth
         let referenceAspect = image.map { $0.size.width / max($0.size.height, 1) }
         self.aspect = aspect
@@ -125,6 +134,7 @@ final class Guide: ObservableObject {
     nonisolated func consider(_ frame: CIImage, depth: DepthGrid? = nil) {
         Task { @MainActor in
             guard !self.busy, let reference = self.reference else { return }
+            if depth != nil { self.liveDepth = depth }
             self.busy = true
             let generation = self.generation
             let visible = Registration.centred(frame, aspect: self.aspect)
@@ -284,6 +294,16 @@ final class Guide: ObservableObject {
             linedSince = nil
             matched = false
         }
+        refreshChanges()
+    }
+
+    /// Only when lined up on a reference that has depth, and the camera has depth now.
+    private func refreshChanges() {
+        guard showChanges, matched, liveBox == nil, let referenceDepth, let liveDepth else {
+            if changes != nil { changes = nil }
+            return
+        }
+        changes = DepthChange.mask(live: liveDepth, reference: referenceDepth, aspect: aspect)
     }
 
     /// Changes the instruction only once the current one is done or has shown for 1.5 s.

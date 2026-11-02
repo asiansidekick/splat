@@ -58,6 +58,7 @@ struct CaptureView: View {
     @State private var toast: String?
     @State private var picked: [PhotosPickerItem] = []
     @State private var previewSize: CGSize = .zero
+    @AppStorage("showChanges") private var showChanges = false
     @AppStorage("lightLevel") private var lightLevel = 0.6
     @State private var lightOn = false
     @State private var wheelShown = false
@@ -108,6 +109,7 @@ struct CaptureView: View {
         .statusBarHidden()
         .onAppear {
             camera.start()
+            guide.showChanges = showChanges
             connectGuide()
             if !seenHelp { showingHelp = true }
         }
@@ -124,6 +126,7 @@ struct CaptureView: View {
         .onChange(of: ghostFit) { _, _ in connectGuide() }
         .onChange(of: guide.fitted) { _, fit in keepFit(fit) }
         .onChange(of: useLiDAR) { _, _ in camera.reconfigure() }
+        .onChange(of: showChanges) { _, on in guide.showChanges = on }
         // Close-ups on the macro lens: the LiDAR camera can't focus that close.
         .onChange(of: angle) { _, value in camera.setCloseUp(value == "Close-up") }
         .onChange(of: visibleAspect) { _, _ in connectGuide() }
@@ -336,6 +339,9 @@ struct CaptureView: View {
             if camera.hasLiDAR {
                 Toggle(isOn: $useLiDAR) { Label(camera.isFront ? "Face ID camera distance" : "LiDAR distance", systemImage: "dot.radiowaves.forward") }
             }
+            if camera.hasLiDAR {
+                Toggle(isOn: $showChanges) { Label("Show changes (red nearer, blue gone)", systemImage: "square.2.layers.3d") }
+            }
             Toggle(isOn: $saveToPhotos) { Label("Also save photos to Photos", systemImage: "square.and.arrow.down") }
             Button { showingLibrary = true } label: { Label("Boards, notes and backup", systemImage: "square.grid.2x2") }
             Button { showingHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
@@ -371,6 +377,7 @@ struct CaptureView: View {
                         guide.follow(at: ScreenMap(size: geometry.size, quarterTurns: quarterTurns, mirrored: camera.isFront, inner: ghostBox)
                             .toPhoto(location))
                     }
+                if let changes = guide.changes, showChanges { changeLayer(changes, size: geometry.size) }
                 if guideOn, ghost != nil, !guide.fitting {
                     if guide.people.count > 1 {
                         PeopleRings(people: guide.people, followed: guide.followed,
@@ -382,6 +389,13 @@ struct CaptureView: View {
                 }
                 if ghost != nil {
                     strengthControl(wide: geometry.size.width > geometry.size.height)
+                        .clearOfControls()
+                }
+                if camera.zoomStops.count > 1, !camera.isFront {
+                    zoomBar
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                        .padding(.trailing, 8)
+                        .padding(.bottom, 12)
                         .clearOfControls()
                 }
                 if lightOn, camera.isFront, !showingLibrary { RingLight(level: lightLevel) }
@@ -417,28 +431,25 @@ struct CaptureView: View {
         }
     }
 
-    /// Overlay strength, tucked into the bottom left corner so the guide's arrows stay clear: upright
-    /// along the left edge when the phone is upright, along the bottom when it is on its side.
+    /// Overlay strength as THEN to NOW, like Reset: all the way left is the reference at full strength, all the
+    /// way right is the live camera alone. Tucked into the bottom left corner so the guide's arrows stay clear.
     private func strengthControl(wide: Bool) -> some View {
-        let length: CGFloat = 130
         let hide = Button { ghostID = nil } label: {
             Image(systemName: "eye.slash").font(.footnote).frame(width: 30, height: 30)
         }
         .accessibilityLabel("Hide overlay")
-        let slider = Slider(value: $opacity, in: 0...1)
-            .frame(width: length)
-            .accessibilityLabel("Overlay strength")
-        let layout = wide ? AnyLayout(HStackLayout(spacing: 6)) : AnyLayout(VStackLayout(spacing: 6))
-        return layout {
-            if wide {
-                hide
-                slider
-            } else {
-                slider.rotationEffect(.degrees(-90)).frame(width: 30, height: length)
-                hide
-            }
+        let slider = Slider(value: Binding(get: { 1 - opacity }, set: { opacity = 1 - $0 }), in: 0...1)
+            .frame(width: wide ? 150 : 120)
+            .accessibilityLabel("Then to now")
+            .accessibilityValue("\(Int(((1 - opacity) * 100).rounded())) percent now")
+        return HStack(spacing: 6) {
+            hide
+            Text("THEN").font(.caption2.bold())
+            slider
+            Text("NOW").font(.caption2.bold())
         }
-        .padding(6)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .background(Color.black.opacity(0.35), in: Capsule())
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
@@ -494,6 +505,50 @@ struct CaptureView: View {
                     .allowsHitTesting(false)
             }
         }
+    }
+
+    private static func zoomText(_ stop: Double) -> String {
+        stop == stop.rounded() ? String(Int(stop)) : ".5"
+    }
+
+    private static func zoomName(_ stop: Double) -> String {
+        stop < 1 ? "Ultra wide lens" : "Zoom \(zoomText(stop)) times"
+    }
+
+    /// The Camera app's lens buttons: 0.5, 1, 3… The chosen one is yellow.
+    private var zoomBar: some View {
+        HStack(spacing: 4) {
+            ForEach(camera.zoomStops, id: \.self) { stop in
+                Button {
+                    Haptics.tap()
+                    camera.setZoom(stop)
+                } label: {
+                    Text(Self.zoomText(stop))
+                        .font(.footnote.bold())
+                        .foregroundStyle(camera.zoom == stop ? Color.black : Color.white)
+                        .frame(width: 34, height: 34)
+                        .background(camera.zoom == stop ? Color.yellow : Color.black.opacity(0.35), in: Circle())
+                }
+                .accessibilityLabel(Self.zoomName(stop))
+            }
+        }
+    }
+
+    /// The LiDAR change colours, laid out like the camera picture (turned for the phone, mirrored on the front).
+    private func changeLayer(_ image: CGImage, size: CGSize) -> some View {
+        let turn = camera.photoToPreview
+        let sideways = abs(abs(turn) - 90) < 1
+        let box = sideways ? CGSize(width: size.height, height: size.width) : size
+        return Image(decorative: image, scale: 1)
+            .interpolation(.none)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(width: box.width, height: box.height)
+            .clipped()
+            .rotationEffect(.degrees(turn))
+            .frame(width: size.width, height: size.height)
+            .scaleEffect(x: camera.isFront ? -1 : 1, y: 1)
+            .allowsHitTesting(false)
     }
 
     /// A portrait reference checked with the phone on its side (or the other way round): shown
@@ -683,7 +738,8 @@ struct CaptureView: View {
                 return
             }
             Task {
-                if let shot = await store.addShot(data, to: target.id, angle: angle, source: .camera, crop: crop, depth: depth) {
+                if let shot = await store.addShot(data, to: target.id, angle: angle, source: .camera, crop: crop, depth: depth,
+                                                  zoom: camera.isFront ? nil : camera.zoom) {
                     lastShot = shot
                     // A new reference is shown straight away, so the next photo can be checked against it.
                     if shot.isReference, ghostID == nil { ghostID = shot.id }
@@ -718,6 +774,8 @@ struct CaptureView: View {
         ghost = loaded.0
         ghostEdges = loaded.1
         ghostDepth = loaded.2
+        // Back on the lens the reference was shot with, so the picture lines up.
+        if let zoom = shot.zoom, !camera.isFront, camera.zoomStops.contains(zoom) { camera.setZoom(zoom) }
         connectGuide()
     }
 }

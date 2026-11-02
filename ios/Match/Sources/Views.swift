@@ -11,6 +11,7 @@ struct MatchApp: App {
             CaptureView().environmentObject(store)
                 // A team pack AirDropped to this phone, or opened from Files.
                 .onOpenURL { TeamReceiver.receive($0, store: store) }
+                .onAppear { CastList.seed(from: store.boards) }
         }
     }
 }
@@ -183,6 +184,8 @@ struct BoardEditor: View {
     @State private var board: Board
     let isNew: Bool
     let onSave: (Board) -> Void
+    @AppStorage(CastList.key) private var castJSON = "[]"
+    @State private var showingCast = false
 
     init(board: Board, isNew: Bool, onSave: @escaping (Board) -> Void) {
         _board = State(initialValue: board)
@@ -199,8 +202,22 @@ struct BoardEditor: View {
                         .multilineTextAlignment(.trailing)
                 }
                 LabeledContent("Character") {
-                    TextField("Sarah", text: $board.subject)
-                        .multilineTextAlignment(.trailing)
+                    HStack {
+                        TextField("Sarah", text: $board.subject)
+                            .multilineTextAlignment(.trailing)
+                        // Everyone used before, one tap away, kept even if their boards are deleted.
+                        Menu {
+                            ForEach(CastList.decode(castJSON)) { member in
+                                Button(member.actor.isEmpty ? member.character : "\(member.character) (\(member.actor))") {
+                                    board.subject = member.character
+                                }
+                            }
+                            Button { showingCast = true } label: { Label("Edit cast list", systemImage: "list.bullet") }
+                        } label: {
+                            Image(systemName: "person.crop.circle.badge.chevron.down")
+                        }
+                        .accessibilityLabel("Choose from the cast list")
+                    }
                 }
                 LabeledContent("Change or look") {
                     TextField("Change 2", text: $board.look)
@@ -216,6 +233,9 @@ struct BoardEditor: View {
                         .lineLimit(3...10)
                 }
             }
+            .sheet(isPresented: $showingCast) {
+                CastListView { board.subject = $0 }
+            }
             .navigationTitle(isNew ? "New board" : "Edit board")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -225,6 +245,7 @@ struct BoardEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(isNew ? "Create" : "Save") {
                         board.scene = board.scene.trimmingCharacters(in: .whitespaces)
+                        CastList.remember(board.subject)
                         onSave(board)
                         dismiss()
                     }

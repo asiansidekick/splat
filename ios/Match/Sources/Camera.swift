@@ -51,6 +51,16 @@ final class Camera: NSObject, ObservableObject {
     @Published private(set) var usingLiDAR = false
     /// This side's camera has a light (the back camera's flash, used as a torch).
     @Published private(set) var hasTorch = false
+    /// The rear lens stops on offer (0.5, 1, 3…), as the Camera app shows them. Empty on the front.
+    @Published private(set) var zoomStops: [Double] = []
+    /// The zoom in use, in those same units.
+    @Published private(set) var zoom: Double = 1
+    private let zoomLock = NSLock()
+    private var zoomWanted = 1.0
+    private var zoomTarget: Double {
+        get { zoomLock.lock(); defer { zoomLock.unlock() }; return zoomWanted }
+        set { zoomLock.lock(); zoomWanted = newValue; zoomLock.unlock() }
+    }
     /// How bright the torch should be (0 = off, up to 1). Kept so it comes back after a camera switch.
     private var torchLevel: Float = 0
     private let queue = DispatchQueue(label: "camera.session")
@@ -129,6 +139,55 @@ final class Camera: NSObject, ObservableObject {
     }
 
     /// Close-ups use the ordinary camera (macro lens on Pro iPhones); other angles can use LiDAR.
+    /// Picks a lens or zoom (0.5 = ultra wide, 1 = main, 3 = telephoto where there is one). The
+    /// LiDAR camera is the main lens alone, so any other zoom uses the ordinary camera and depth
+    /// goes quiet until back at 1.
+    func setZoom(_ value: Double) {
+        guard !isFront, value != zoom else { return }
+        let wasPlain = zoom == 1
+        zoomTarget = value
+        zoom = value
+        if hasLiDAR, Self.lidarWanted, wasPlain != (value == 1) {
+            reconfigure()
+        } else {
+            queue.async { self.applyZoom() }
+        }
+    }
+
+    /// Whether a zoom stop is one the LiDAR camera can't serve.
+    private var zoomed: Bool { zoomTarget != 1 }
+
+    /// On the session queue.
+    private func applyZoom() {
+        guard let device = input?.device else { return }
+        let raw = min(max(zoomTarget * Self.zoomBase(device), device.minAvailableVideoZoomFactor), device.maxAvailableVideoZoomFactor)
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            device.videoZoomFactor = raw
+        } catch {
+            // Zoom stays where it was.
+        }
+    }
+
+    /// 2 on cameras that start at the ultra wide (zoom factor 1 is 0.5x), else 1.
+    private static func zoomBase(_ device: AVCaptureDevice) -> Double {
+        device.constituentDevices.first?.deviceType == .builtInUltraWideCamera ? 2 : 1
+    }
+
+    /// The rear stops: ultra wide if the phone has one, the main lens, then each telephoto, and a
+    /// 2x crop on phones with nothing longer.
+    private static func rearZoomStops() -> [Double] {
+        guard let rear = Self.device(front: false) else { return [] }
+        let device = rear
+        let base = zoomBase(device)
+        let switches = device.virtualDeviceSwitchOverVideoZoomFactors.map { Double(truncating: $0) / base }
+        var stops: [Double] = base == 2 ? [0.5, 1] : [1]
+        stops += base == 2 ? Array(switches.dropFirst()) : switches
+        if !stops.contains(where: { $0 >= 2 }), device.maxAvailableVideoZoomFactor >= 2 * base { stops.append(2) }
+        return Array(Set(stops.map { ($0 * 10).rounded() / 10 })).sorted()
+    }
+
     func setCloseUp(_ on: Bool) {
         guard on != closeUp else { return }
         closeUp = on
@@ -164,7 +223,7 @@ final class Camera: NSObject, ObservableObject {
 
     func flip() {
         let front = !isFront
-        let skipLiDAR = lidarFailed || closeUp
+        let skipLiDAR = lidarFailed || closeUp || (!front && zoomed)
         queue.async { self.configure(front: front, skipLiDAR: skipLiDAR) }
     }
 
@@ -204,7 +263,7 @@ final class Camera: NSObject, ObservableObject {
     /// Picks the LiDAR camera again (or not) after the setting changes.
     func reconfigure() {
         let front = isFront
-        let skipLiDAR = lidarFailed || closeUp
+        let skipLiDAR = lidarFailed || closeUp || (!front && zoomed)
         queue.async { self.configure(front: front, skipLiDAR: skipLiDAR) }
     }
 
@@ -279,10 +338,19 @@ final class Camera: NSObject, ObservableObject {
         guard let device else { return }
         // After commitConfiguration (deferred above), on this queue: the new camera's torch.
         let torch = device.hasTorch
-        queue.async { self.applyTorch() }
+        let stops = front ? [] : Self.rearZoomStops()
+        // Lenses change with the camera: the zoom asked for goes back on, or 1 if this side lacks it.
+        if front || !stops.contains(zoomTarget) { zoomTarget = 1 }
+        let zoomNow = zoomTarget
+        queue.async {
+            self.applyTorch()
+            self.applyZoom()
+        }
         // Runs after commitConfiguration (deferred above), once the preview connection exists.
         DispatchQueue.main.async {
             self.hasTorch = torch
+            self.zoomStops = stops
+            self.zoom = zoomNow
             self.isFront = front
             self.hasLiDAR = lidarExists
             self.usingLiDAR = depth

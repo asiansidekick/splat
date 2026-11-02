@@ -1,5 +1,5 @@
 // Tests for the actor lock and the guide's maths, run on a Mac by CI:
-//   swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/Depth.swift Tests/ActorTests/main.swift -o actor-tests
+//   swiftc -O Sources/GuideCore.swift Sources/ActorCore.swift Sources/Depth.swift Sources/Cast.swift Tests/ActorTests/main.swift -o actor-tests
 //   ./actor-tests
 // A head (eyes, nose tip, mouth) is photographed from different places with a simple pinhole
 // camera, and the guide must say the right thing: walk round, raise or lower, step in or back,
@@ -347,6 +347,57 @@ do {
     expect(mostlyBlack == CGRect(x: 0, y: 0, width: 800, height: 600), "bars: a mostly dark picture isn't cut to a sliver")
 }
 
+
+// MARK: LiDAR changes
+
+do {
+    func grid(_ value: (Int, Int) -> Float) -> DepthGrid {
+        var values = [Float]()
+        for y in 0..<40 { for x in 0..<60 { values.append(value(x, y)) } }
+        return DepthGrid(width: 60, height: 40, values: values)
+    }
+    let room = grid { _, _ in 2.0 }
+    let same = DepthChange.flags(live: room, reference: room)
+    expect(!same.flags.contains { $0 != 0 }, "changes: an unchanged room flags nothing")
+    // A box 20 cm nearer (added) in one block, a hole 30 cm farther (gone) in another.
+    let moved = grid { x, y in
+        if (10..<22).contains(x), (10..<22).contains(y) { return 1.8 }
+        if (35..<50).contains(x), (15..<30).contains(y) { return 2.3 }
+        return 2.0
+    }
+    let diff = DepthChange.flags(live: moved, reference: room)
+    expect(diff.flags[15 * 60 + 15] == 1, "changes: something now nearer is red (+1)")
+    expect(diff.flags[20 * 60 + 40] == -1, "changes: a surface now farther is blue (-1)")
+    expect(diff.flags[2 * 60 + 2] == 0, "changes: untouched areas stay clear")
+    // 3 cm of LiDAR noise is not a change.
+    let noisy = grid { x, y in 2.0 + ((x + y) % 2 == 0 ? 0.03 : -0.03) }
+    expect(!DepthChange.flags(live: noisy, reference: room).flags.contains { $0 != 0 }, "changes: 3 cm of noise is ignored")
+    // One stray pixel is not a solid area.
+    let speck = grid { x, y in x == 30 && y == 20 ? 1.0 : 2.0 }
+    expect(!DepthChange.flags(live: speck, reference: room).flags.contains { $0 != 0 }, "changes: a lone speck is dropped")
+    // Missing readings never flag.
+    let holes = grid { _, _ in 0 }
+    expect(!DepthChange.flags(live: holes, reference: room).flags.contains { $0 != 0 }, "changes: no reading, no change")
+    expect(DepthChange.mask(live: moved, reference: room, aspect: nil) != nil, "changes: a mask is drawn when something moved")
+    expect(DepthChange.mask(live: room, reference: room, aspect: nil) == nil, "changes: no mask when nothing moved")
+    // A reference at a different resolution still compares by place.
+    let coarse = DepthGrid(width: 30, height: 20, values: [Float](repeating: 2.0, count: 600))
+    expect(!DepthChange.flags(live: room, reference: coarse).flags.contains { $0 != 0 }, "changes: a coarser reference map still lines up")
+}
+
+// MARK: Cast list
+
+do {
+    let one = CastList.merged([], adding: ["Sarah", " Tom ", "", "sarah"])
+    expect(one.map(\.character) == ["Sarah", "Tom"], "cast: names are trimmed, blanks dropped, repeats (any case) merged")
+    let again = CastList.merged(one, adding: ["TOM", "Ana"])
+    expect(again.map(\.character) == ["Sarah", "Tom", "Ana"], "cast: new names are added after the ones kept")
+    let round = CastList.decode(CastList.encode(again))
+    expect(round == again, "cast: the list survives saving and loading")
+    expect(CastList.decode("not json").isEmpty, "cast: a damaged list loads as empty")
+    let old = CastList.decode("[{\"character\":\"Sam\"}]")
+    expect(old.count == 1 && old[0].actor.isEmpty, "cast: an entry without an actor still loads")
+}
 
 print(failures == 0 ? "All actor tests passed" : "\(failures) actor tests failed")
 exit(failures == 0 ? 0 : 1)

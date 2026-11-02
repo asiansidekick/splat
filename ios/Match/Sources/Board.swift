@@ -50,6 +50,8 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
     var source: Source = .camera
     /// An imported photo's size and place over the live camera, once worked out.
     var fit: OverlayFit?
+    /// The rear camera's zoom (0.5, 1, 3…) when the photo was taken, so the same lens can be picked again.
+    var zoom: Double?
 
     init(taken: Date, take: Int, angle: String = "", source: Source = .camera) {
         self.taken = taken
@@ -69,6 +71,7 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
         isReference = (try? c.decode(Bool.self, forKey: .isReference)) ?? false
         source = (try? c.decode(Source.self, forKey: .source)) ?? .camera
         fit = (try? c.decode(OverlayFit.self, forKey: .fit)).flatMap { $0.isSensible ? $0 : nil }
+        zoom = (try? c.decode(Double.self, forKey: .zoom)).flatMap { $0 > 0 && $0 < 20 ? $0 : nil }
     }
 
     var file: String { "\(id.uuidString).jpg" }

@@ -104,3 +104,71 @@ struct DepthGrid: Equatable {
         values = (0..<(w * h)).map { Float(bitPattern: word(12 + $0 * 4)) }
     }
 }
+
+/// Where the set has changed since the reference, read from the two LiDAR depth maps once the
+/// camera is lined up on the reference: red where something is now nearer than it was (added or
+/// moved in), blue where the reference's surface is now farther or missing. Same tolerance as
+/// Reset, so both apps agree on what counts as a change.
+enum DepthChange {
+    /// Changes smaller than this (plus 2 cm per metre of distance) are LiDAR noise.
+    static let threshold: Float = 0.06
+    static let perMetre: Float = 0.02
+    /// A flagged cell needs this many flagged neighbours (of 8) to count, so only solid areas show.
+    static let minNeighbours = 6
+    static let maxRange: Float = 5
+
+    /// +1 where the live scene is nearer, -1 where it is farther, 0 unchanged or unknown, on the
+    /// live map's grid. Both maps must show the same view (cropped to the same shape).
+    static func flags(live: DepthGrid, reference: DepthGrid) -> (width: Int, height: Int, flags: [Int8]) {
+        let w = live.width, h = live.height
+        var raw = [Int8](repeating: 0, count: w * h)
+        guard w > 0, h > 0, reference.width > 0, reference.height > 0, live.values.count == w * h,
+              reference.values.count == reference.width * reference.height else { return (w, h, raw) }
+        for y in 0..<h {
+            let ry = min(reference.height - 1, y * reference.height / h)
+            for x in 0..<w {
+                let rx = min(reference.width - 1, x * reference.width / w)
+                let now = live.values[y * w + x], then = reference.values[ry * reference.width + rx]
+                guard now.isFinite, then.isFinite, now > 0.1, then > 0.1, now < maxRange, then < maxRange else { continue }
+                let limit = threshold + perMetre * then
+                if then - now > limit { raw[y * w + x] = 1 } else if now - then > limit { raw[y * w + x] = -1 }
+            }
+        }
+        var kept = raw
+        for y in 0..<h {
+            for x in 0..<w where raw[y * w + x] != 0 {
+                var same = 0
+                for dy in -1...1 {
+                    for dx in -1...1 where dx != 0 || dy != 0 {
+                        let nx = x + dx, ny = y + dy
+                        if nx >= 0, nx < w, ny >= 0, ny < h, raw[ny * w + nx] == raw[y * w + x] { same += 1 }
+                    }
+                }
+                if same < minNeighbours { kept[y * w + x] = 0 }
+            }
+        }
+        return (w, h, kept)
+    }
+
+    /// A see-through red and blue picture of the changes, or nil when nothing changed.
+    static func mask(live: DepthGrid, reference: DepthGrid, aspect: CGFloat?) -> CGImage? {
+        let (w, h, flags) = Self.flags(live: live.cropped(aspect: aspect), reference: reference.cropped(aspect: aspect))
+        guard w > 0, h > 0, flags.contains(where: { $0 != 0 }) else { return nil }
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        for i in 0..<(w * h) where flags[i] != 0 {
+            // Premultiplied alpha, about 45% strong.
+            let alpha: UInt8 = 115
+            if flags[i] > 0 {
+                pixels[i * 4] = alpha
+            } else {
+                pixels[i * 4 + 2] = alpha
+            }
+            pixels[i * 4 + 3] = alpha
+        }
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+                       space: CGColorSpaceCreateDeviceRGB(),
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    }
+}

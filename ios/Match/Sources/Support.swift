@@ -64,7 +64,13 @@ struct HelpView: View {
                     Text("• Bottom left: the reference thumbnail, with the time it was taken. Tap it for the gallery: swipe like Photos, Use as overlay, Compare, Import from Photos, Save to Photos.")
                     Text("• Bottom right: Next take. Touch and hold to go back or to Prep. Every board in the scene follows it.")
                     Text("• Pinch or drag the overlay to line up a QTake screenshot; double tap resets it.")
+                    Text("• Then / Now slider (bottom left, with a reference showing): all the way left is the reference at full strength, all the way right is the live camera alone.")
+                    Text("• Lenses (bottom right): .5 ultra wide, 1 main, and the telephoto or a 2 crop where the phone has them. Picking a reference shot on another lens switches to that lens. LiDAR measures through the main lens only, so distance and the change colours pause on any other lens.")
                     Text("• Light: tap the torch to turn the light on or off. A dial shows under the top bar: scroll it sideways to set the brightness (left brighter, right dimmer), or drag sideways on the torch itself. Touch and hold the torch to show the dial again. On the front camera the screen glows round the edges like a ring light and goes to full brightness, then back when the light is off.")
+                }
+                Section("Characters and changes") {
+                    Text("• Cast list: the pick-a-character button beside Character in a board lists everyone you have used before, and Edit cast list adds, renames, reorders and notes the actor. It stays on this phone even if boards are deleted.")
+                    Text("• Show changes (••• menu, LiDAR phones): once the guide says lined up, red marks where something is now nearer than in the reference photo and blue where it has gone or moved away. Needs a reference taken with LiDAR; small shifts are ignored.")
                 }
                 Section("The guide") {
                     Text("With a reference showing, the guide stays at the edges and corners of the screen, so the face and hair stay clear.")

@@ -88,9 +88,10 @@ final class BoardStore: ObservableObject {
     @discardableResult
     /// `crop` (width over height, upright) trims a camera photo to what the screen showed.
     func addShot(_ data: Data, to boardID: UUID, angle: String, source: Shot.Source, crop: CGFloat? = nil,
-                 depth: DepthGrid? = nil) async -> Shot? {
+                 depth: DepthGrid? = nil, zoom: Double? = nil) async -> Shot? {
         guard let board = board(boardID) else { return nil }
         var shot = Shot(taken: .now, take: take(for: board.scene), angle: angle, source: source)
+        shot.zoom = zoom
         let folder = Self.folder(for: boardID)
         let file = shot.file
         let thumbnail = shot.thumbnailFile
