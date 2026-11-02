@@ -54,9 +54,9 @@ enum CastList {
     }
 
     /// Characters from boards made before the list existed.
-    static func seed(from boards: [Board]) {
+    static func seed(fromNames names: [String]) {
         let before = load()
-        let after = merged(before, adding: boards.sorted { $0.created < $1.created }.map(\.subject))
+        let after = merged(before, adding: names)
         if after != before { save(after) }
     }
 }

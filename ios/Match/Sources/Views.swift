@@ -11,7 +11,7 @@ struct MatchApp: App {
             CaptureView().environmentObject(store)
                 // A team pack AirDropped to this phone, or opened from Files.
                 .onOpenURL { TeamReceiver.receive($0, store: store) }
-                .onAppear { CastList.seed(from: store.boards) }
+                .onAppear { CastList.seed(fromNames: store.boards.sorted { $0.created < $1.created }.map(\.subject)) }
         }
     }
 }
