@@ -129,6 +129,18 @@ struct GuideReading: Equatable {
     /// The one thing most out of line. Nil when everything is within tolerance.
     var biggest: GuideCue? { cues.max { $0.size < $1.size }?.cue }
 
+    /// Pitch and roll from the motion sensors are drawn as level lines, not as an arrow.
+    func drawnAsLines(_ cue: GuideCue) -> Bool {
+        switch cue {
+        case .rotate: return rollError != nil
+        case .tilt(let side): return pitchError != nil && !actor && (side == .up || side == .down)
+        default: return false
+        }
+    }
+
+    /// The most out of line of the things shown as arrows.
+    var biggestArrow: GuideCue? { cues.filter { !drawnAsLines($0.cue) }.max { $0.size < $1.size }?.cue }
+
     /// Each correction still needed, with how many tolerances out it is.
     var cues: [(cue: GuideCue, size: Double)] {
         var list: [(cue: GuideCue, size: Double)] = []

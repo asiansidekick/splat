@@ -414,7 +414,14 @@ struct CaptureView: View {
                     if let notice = camera.notice { Banner(text: notice, tint: .orange) }
                     if let saveError { Banner(text: saveError, tint: .red) }
                     if guide.fitting, ghost != nil {
-                        Banner(text: "Sizing the imported photo to the camera. Point at the same view.", tint: .yellow)
+                        // A picture, not words: point at the same view as the photo until it's sized.
+                        Image(systemName: "viewfinder")
+                            .font(.system(size: 26, weight: .heavy))
+                            .foregroundStyle(Color.yellow)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color.black.opacity(0.4), in: Capsule())
+                            .accessibilityLabel("Sizing the imported photo to the camera. Point at the same view.")
                     }
                     if let toast {
                         Text(toast)

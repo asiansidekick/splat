@@ -460,6 +460,14 @@ do {
     var actorMove = reading(pitch: -9, actor: true)
     actorMove.move = CGVector(dx: 0, dy: 0.2)
     expect(actorMove.cues.filter { if case .tilt = $0.cue { true } else { false } }.count == 1, "attitude cues: an actor lock shows one tilt cue, not two")
+    // Pitch and roll are drawn as level lines, so they never become the arrow shown.
+    expect(reading(pitch: 8).biggestArrow == nil, "level lines: a pitch error is drawn as lines, not an arrow")
+    expect(reading(roll: -6).biggestArrow == nil, "level lines: a roll error is drawn as lines, not an arrow")
+    var slideAndTilt = reading(pitch: 8)
+    slideAndTilt.move = CGVector(dx: 0.2, dy: 0)
+    expect(slideAndTilt.biggestArrow == .move(.right), "level lines: a slide still gets its arrow while pitch is off")
+    expect(actorMove.biggestArrow == .tilt(.down), "level lines: an actor lock's aiming arrow is still drawn")
+    expect(reading(turnY: 0.3).biggestArrow == .tilt(.down), "level lines: without sensors the tilt arrow is drawn as before")
 }
 
 print(failures == 0 ? "All actor tests passed" : "\(failures) actor tests failed")

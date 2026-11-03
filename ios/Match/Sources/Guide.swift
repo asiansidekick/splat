@@ -322,7 +322,7 @@ final class Guide: ObservableObject {
             cue = nil
             return
         }
-        let wanted = reading.biggest
+        let wanted = reading.biggestArrow
         guard wanted != cue else { return }
         let currentStillNeeded = cue.map { current in reading.cues.contains { $0.cue == current } } ?? false
         if currentStillNeeded, Date.now.timeIntervalSince(cueSince) < 1.5 { return }
@@ -336,9 +336,11 @@ final class Guide: ObservableObject {
 
 /// The guide, kept to the edges and corners of the screen so the face, hair and costume stay clear.
 /// Two things: a frame (where the reference's corners are now, in yellow, against the screen's
-/// corners in white; when they meet, it's lined up), and one big instruction at a time in camera
-/// words: MOVE (slide the phone), PAN or TILT (aim it), ROTATE (twist it level), STEP IN or BACK
-/// (BRING PHONE CLOSER or HOLD PHONE FURTHER on the front camera).
+/// corners in white; when they meet, it's lined up), and one big arrow at a time, with no words so
+/// the eyes stay on the picture: slide the phone, aim it (a curved arrow), or step in or back
+/// (arrows closing in or opening out; on the front camera the phone moves instead). Pitch and
+/// roll are two level lines at the screen's sides: white is where the reference was, yellow where
+/// the phone is now, and they meet when the phone is held the same way.
 struct EdgeGuide: View {
     let reading: GuideReading?
     let cue: GuideCue?
@@ -367,21 +369,25 @@ struct EdgeGuide: View {
                         .stroke(Color.yellow.opacity(0.85), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
                         .shadow(color: .black.opacity(0.5), radius: 2)
                 }
+                if !matched, let reading, reading.pitchError != nil || reading.rollError != nil {
+                    LevelLines(pitchError: reading.pitchError, rollError: reading.rollError,
+                               quarterTurns: quarterTurns, mirrored: mirrored)
+                }
                 if matched {
-                    banner("LINED UP", systemImage: "checkmark.circle.fill", tint: .green)
-                        .position(x: size.width / 2, y: 70)
-                } else if let cue {
+                    badge("LINED UP", systemImage: "checkmark.circle.fill", tint: .green)
+                        .position(x: size.width - 52, y: 52)
+                } else if let cue, !(reading?.drawnAsLines(cue) ?? false) {
                     instruction(cue, in: size)
                         .id(cue.screenID(turns: quarterTurns, mirrored: mirrored))
                         .transition(.opacity)
                 } else if people > 1 {
-                    banner("TAP SOMEONE TO FOLLOW THEM", systemImage: "hand.tap", tint: .yellow)
+                    badge("Tap someone to follow them", systemImage: "hand.tap", tint: .yellow)
                         .opacity(0.8)
-                        .position(x: size.width / 2, y: 70)
+                        .position(x: 52, y: 52)
                 } else if searching {
-                    banner("POINT AT THE REFERENCE", systemImage: "viewfinder", tint: .yellow)
+                    badge("Point at the reference", systemImage: "viewfinder", tint: .yellow)
                         .opacity(0.8)
-                        .position(x: size.width / 2, y: 70)
+                        .position(x: 52, y: 52)
                 }
             }
             .frame(width: size.width, height: size.height)
@@ -420,7 +426,7 @@ struct EdgeGuide: View {
             }
         case .rotate(let clockwise):
             let turn = clockwise != mirrored
-            centre(word: "ROTATE" + Self.degrees(reading?.rollError), in: size) {
+            corner(word: "ROTATE" + Self.degrees(reading?.rollError), right: true, in: size) {
                 Image(systemName: turn ? "arrow.clockwise" : "arrow.counterclockwise")
                     .font(.system(size: 80, weight: .bold))
                     .phaseAnimator([0.0, turn ? 25.0 : -25.0]) { content, angle in
@@ -443,7 +449,7 @@ struct EdgeGuide: View {
             // Front camera: the phone is usually at arm's length facing the person, so it's the
             // phone that moves, not the photographer's feet.
             let words = mirrored ? (closer ? "BRING PHONE CLOSER" : "HOLD PHONE FURTHER") : (closer ? "STEP IN" : "STEP BACK")
-            centre(word: words + Self.metres(reading?.stepMetres), in: size) {
+            corner(word: words + Self.metres(reading?.stepMetres), right: false, in: size) {
                 Image(systemName: closer ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                     .font(.system(size: 72, weight: .bold))
                     .phaseAnimator([1.0, closer ? 0.8 : 1.2]) { content, scale in
@@ -465,15 +471,13 @@ struct EdgeGuide: View {
         case .down: position = CGPoint(x: size.width / 2, y: size.height - inset)
         }
         let angle = Self.edgeAngle(side)
-        return VStack(spacing: 6) {
-            glyph()
-                .phaseAnimator([CGFloat(0), 18]) { content, nudge in
-                    content.offset(x: nudge)
-                } animation: { _ in .easeInOut(duration: 0.9) }
-                .rotationEffect(.degrees(angle))
-            label(word)
-        }
-        .foregroundStyle(Color.yellow)
+        return glyph()
+            .phaseAnimator([CGFloat(0), 18]) { content, nudge in
+                content.offset(x: nudge)
+            } animation: { _ in .easeInOut(duration: 0.9) }
+            .rotationEffect(.degrees(angle))
+            .accessibilityLabel(word)
+            .foregroundStyle(Color.yellow)
         .shadow(color: .black.opacity(0.6), radius: 2)
         .opacity(0.8)
         .position(position)
@@ -503,33 +507,78 @@ struct EdgeGuide: View {
         }
     }
 
-    private func centre<Glyph: View>(word: String, in size: CGSize, @ViewBuilder glyph: () -> Glyph) -> some View {
-        VStack(spacing: 6) {
-            glyph()
-            label(word)
-        }
-        .foregroundStyle(Color.yellow)
+    /// In a top corner, out of the picture's way: step in or back on the left, twist on the right.
+    private func corner<Glyph: View>(word: String, right: Bool, in size: CGSize, @ViewBuilder glyph: () -> Glyph) -> some View {
+        glyph()
+            .accessibilityLabel(word)
+            .foregroundStyle(Color.yellow)
         .shadow(color: .black.opacity(0.6), radius: 2)
         .opacity(0.8)
-        .position(x: size.width / 2, y: 90)
+        .position(x: right ? size.width - 56 : 56, y: 56)
     }
 
-    private func label(_ word: String) -> some View {
-        Text(word)
-            .font(.system(size: 17, weight: .heavy))
-            .fixedSize()
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Color.black.opacity(0.35), in: Capsule())
-    }
-
-    private func banner(_ text: String, systemImage: String, tint: Color) -> some View {
-        Label(text, systemImage: systemImage)
-            .font(.system(size: 15, weight: .heavy))
+    /// A symbol alone, so the eyes stay on the picture; the words are for VoiceOver.
+    private func badge(_ text: String, systemImage: String, tint: Color) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 26, weight: .heavy))
             .foregroundStyle(tint)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
             .background(Color.black.opacity(0.4), in: Capsule())
+            .accessibilityLabel(text)
+    }
+}
+
+/// Pitch and roll as two level lines, short at each side so the middle of the picture stays clear.
+/// White is where the reference was held; yellow is the phone now. Twisting the phone turns the
+/// yellow line, aiming it up or down slides it, and they meet (turning green) when the phone is
+/// held the same way. Drawn in the photo's directions, then turned to the screen's.
+struct LevelLines: View {
+    let pitchError: Double?
+    let rollError: Double?
+    let quarterTurns: Int
+    let mirrored: Bool
+
+    /// Points the line moves for each degree of aim, about 50 degrees across the picture's height.
+    private static let degreeLength: (CGFloat) -> CGFloat = { $0 / 50 }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let size = geometry.size
+            let sideways = abs(quarterTurns) % 2 == 1
+            let photo = sideways ? CGSize(width: size.height, height: size.width) : size
+            let aim = max(-photo.height * 0.3, min(photo.height * 0.3, Self.degreeLength(photo.height) * CGFloat(pitchError ?? 0)))
+            let near = abs(pitchError ?? 0) < GuideReading.pitchTolerance && abs(rollError ?? 0) < GuideReading.tiltTolerance
+            ZStack {
+                Marks()
+                    .stroke(Color.white.opacity(0.6), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                Marks()
+                    .stroke(near ? Color.green : Color.yellow, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    .shadow(color: .black.opacity(0.5), radius: 2)
+                    .rotationEffect(.degrees(rollError ?? 0))
+                    .offset(y: -aim)
+            }
+            .frame(width: photo.width, height: photo.height)
+            .scaleEffect(x: mirrored ? -1 : 1, y: 1)
+            .rotationEffect(.degrees(Double(quarterTurns) * 90))
+            .frame(width: size.width, height: size.height)
+            .animation(.easeOut(duration: 0.15), value: pitchError)
+            .animation(.easeOut(duration: 0.15), value: rollError)
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// A horizontal line through the middle with the middle left out.
+    struct Marks: Shape {
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            let reach = min(rect.width * 0.2, 90)
+            path.move(to: CGPoint(x: rect.minX + 6, y: rect.midY))
+            path.addLine(to: CGPoint(x: rect.minX + 6 + reach, y: rect.midY))
+            path.move(to: CGPoint(x: rect.maxX - 6 - reach, y: rect.midY))
+            path.addLine(to: CGPoint(x: rect.maxX - 6, y: rect.midY))
+            return path
+        }
     }
 }
 
