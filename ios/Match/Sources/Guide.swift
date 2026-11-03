@@ -413,17 +413,11 @@ struct EdgeGuide: View {
         switch cue {
         case .move(let side):
             let s = screen(side)
-            arrow(at: s, in: size, word: "MOVE " + s.word) {
-                Image(systemName: "arrowshape.right.fill").font(.system(size: 88, weight: .regular))
-            }
+            arrow(at: s, in: size, word: "MOVE " + s.word) { SlideGlyph() }
         case .pan(let side), .tilt(let side):
             let s = screen(side)
             let amount = s.horizontal ? "" : Self.degrees(reading?.pitchError)
-            arrow(at: s, in: size, word: (s.horizontal ? "PAN " : "TILT ") + s.word + amount) {
-                TurnArrow()
-                    .stroke(Color.yellow, style: StrokeStyle(lineWidth: 11, lineCap: .round, lineJoin: .round))
-                    .frame(width: 84, height: 84)
-            }
+            arrow(at: s, in: size, word: (s.horizontal ? "PAN " : "TILT ") + s.word + amount, nudges: false) { AimGlyph() }
         case .rotate(let clockwise):
             let turn = clockwise != mirrored
             corner(word: "ROTATE" + Self.degrees(reading?.rollError), right: true, in: size) {
@@ -442,9 +436,7 @@ struct EdgeGuide: View {
                     .rotationEffect(.degrees(-Self.edgeAngle(s)))
             }
         case .height(let raise):
-            arrow(at: screen(raise ? .up : .down), in: size, word: raise ? "RAISE PHONE" : "LOWER PHONE") {
-                Image(systemName: "arrow.right.to.line").font(.system(size: 76, weight: .bold))
-            }
+            arrow(at: screen(raise ? .up : .down), in: size, word: raise ? "RAISE PHONE" : "LOWER PHONE") { SlideGlyph() }
         case .step(let closer):
             // Front camera: the phone is usually at arm's length facing the person, so it's the
             // phone that moves, not the photographer's feet.
@@ -460,7 +452,7 @@ struct EdgeGuide: View {
     }
 
     /// A big see-through arrow at one edge, drifting slowly the way to go, with its word.
-    private func arrow<Glyph: View>(at side: GuideCue.Side, in size: CGSize, word: String,
+    private func arrow<Glyph: View>(at side: GuideCue.Side, in size: CGSize, word: String, nudges: Bool = true,
                                     @ViewBuilder glyph: () -> Glyph) -> some View {
         let inset: CGFloat = 62
         let position: CGPoint
@@ -471,8 +463,9 @@ struct EdgeGuide: View {
         case .down: position = CGPoint(x: size.width / 2, y: size.height - inset)
         }
         let angle = Self.edgeAngle(side)
+        // Sliding glyphs drift the way to go; aiming glyphs pivot in place instead.
         return glyph()
-            .phaseAnimator([CGFloat(0), 18]) { content, nudge in
+            .phaseAnimator([CGFloat(0), nudges ? 18 : 0]) { content, nudge in
                 content.offset(x: nudge)
             } animation: { _ in .easeInOut(duration: 0.9) }
             .rotationEffect(.degrees(angle))
@@ -628,6 +621,47 @@ struct Brackets: Shape {
             }
         }
         return path
+    }
+}
+
+/// A phone, seen from behind: an outline with its camera dot.
+struct PhoneIcon: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .stroke(style: StrokeStyle(lineWidth: 4, lineCap: .round))
+            .overlay(alignment: .top) {
+                Circle().frame(width: 6, height: 6).padding(.top, 5)
+            }
+    }
+}
+
+/// Move the phone: it slides along a straight arrow, still facing the same way. Drawn pointing
+/// right; the guide turns it to the edge it sits on.
+struct SlideGlyph: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            PhoneIcon().frame(width: 24, height: 42)
+            Image(systemName: "arrow.right").font(.system(size: 46, weight: .heavy))
+        }
+    }
+}
+
+/// Aim the phone: it tips on the spot along a curved arrow, staying where it stands. Drawn tipping
+/// right; the guide turns it to the edge it sits on.
+struct AimGlyph: View {
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            TurnArrow()
+                .stroke(Color.yellow, style: StrokeStyle(lineWidth: 8, lineCap: .round, lineJoin: .round))
+                .frame(width: 84, height: 84)
+            PhoneIcon()
+                .frame(width: 22, height: 40)
+                .phaseAnimator([0.0, 24.0]) { content, angle in
+                    content.rotationEffect(.degrees(angle), anchor: .bottom)
+                } animation: { _ in .easeInOut(duration: 0.9) }
+                .offset(x: 3, y: -2)
+        }
+        .frame(width: 84, height: 84)
     }
 }
 
