@@ -188,6 +188,9 @@ final class Camera: NSObject, ObservableObject {
         return Array(Set(stops.map { ($0 * 10).rounded() / 10 })).sorted()
     }
 
+    /// How far the saved photos and frames are turned to sit upright (0, 90, 180 or 270).
+    var uprightAngle: Double { Double(captureAngle) }
+
     func setCloseUp(_ on: Bool) {
         guard on != closeUp else { return }
         closeUp = on

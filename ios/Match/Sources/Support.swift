@@ -73,6 +73,7 @@ struct HelpView: View {
                     Text("• Show changes (••• menu, LiDAR phones): once the guide says lined up, red marks where something is now nearer than in the reference photo and blue where it has gone or moved away. Needs a reference taken with LiDAR; small shifts are ignored.")
                 }
                 Section("The guide") {
+                    Text("• Pitch and roll: each photo remembers how the phone was held, from its motion sensors, so TILT UP 5° and ROTATE 3° mean the real angle needed to match the reference, anywhere, with no room map. Photos taken before this update, and imported ones, use the picture's own guess instead.")
                     Text("With a reference showing, the guide stays at the edges and corners of the screen, so the face and hair stay clear.")
                     Text("• Corners: white corners mark the screen. Yellow corners show where the reference's frame is now. Line the yellow corners up with the white ones.")
                     Text("• One instruction at a time, the biggest first: MOVE (slide the phone), PAN (aim left or right), TILT (aim up or down), ROTATE (twist it level), STEP IN or STEP BACK.")

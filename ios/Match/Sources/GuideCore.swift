@@ -31,6 +31,11 @@ struct GuideReading: Equatable {
     /// With both, stepping in or back goes by these rather than by how big things look.
     var liveDistance: Double?
     var referenceDistance: Double?
+    /// From the phone's motion sensors, when the reference was shot with them: degrees to tilt the
+    /// camera up (above zero) or down, and to twist the phone clockwise (above zero) or back, to
+    /// hold it the way the reference was held. They replace the picture's own guess at these.
+    var pitchError: Double?
+    var rollError: Double?
 
     /// Uses LiDAR distances for stepping in or back, when there are both.
     mutating func useDistances(live: Double?, reference: Double?) {
@@ -49,6 +54,7 @@ struct GuideReading: Equatable {
     static let moveTolerance: CGFloat = 0.035
     static let turnTolerance: CGFloat = 0.06
     static let tiltTolerance: Double = 3
+    static let pitchTolerance: Double = 2.5
     static let scaleTolerance: Double = 0.06
     static let orbitTolerance: CGFloat = 0.06
     static let heightTolerance: CGFloat = 0.06
@@ -109,7 +115,9 @@ struct GuideReading: Equatable {
             orbit: mix(orbit, new.orbit),
             height: mix(height, new.height),
             liveDistance: mixed(liveDistance, new.liveDistance, k),
-            referenceDistance: new.referenceDistance)
+            referenceDistance: new.referenceDistance,
+            pitchError: mixed(pitchError, new.pitchError, k),
+            rollError: mixed(rollError, new.rollError, k))
     }
 
     private func mixed(_ a: Double?, _ b: Double?, _ k: CGFloat) -> Double? {
@@ -146,9 +154,20 @@ struct GuideReading: Equatable {
         let ax = Double(abs(turn.dx) / Self.turnTolerance)
         let ay = Double(abs(turn.dy) / Self.turnTolerance)
         if ax >= 1 { list.append((cue: .pan(turn.dx > 0 ? .right : .left), size: ax)) }
-        if ay >= 1 { list.append((cue: .tilt(turn.dy > 0 ? .down : .up), size: ay)) }
+        // The motion sensors know the camera's angle and twist exactly; the picture only guesses.
+        if ay >= 1, pitchError == nil { list.append((cue: .tilt(turn.dy > 0 ? .down : .up), size: ay)) }
         let r = abs(tilt) / Self.tiltTolerance
-        if r >= 1 { list.append((cue: .rotate(clockwise: tilt > 0), size: r)) }
+        if r >= 1, rollError == nil { list.append((cue: .rotate(clockwise: tilt > 0), size: r)) }
+        if let pitchError {
+            let p = abs(pitchError) / Self.pitchTolerance
+            let tiltShown = list.contains { if case .tilt = $0.cue { true } else { false } }
+            if p >= 1, !(actor && tiltShown) { list.append((cue: .tilt(pitchError > 0 ? .up : .down), size: p)) }
+        }
+        if let rollError {
+            let q = abs(rollError) / Self.tiltTolerance
+            let rotateShown = list.contains { if case .rotate = $0.cue { true } else { false } }
+            if q >= 1, !(actor && rotateShown) { list.append((cue: .rotate(clockwise: rollError > 0), size: q)) }
+        }
         let d = abs(scale - 1) / Self.scaleTolerance
         if d >= 1 { list.append((cue: .step(closer: scale < 1), size: d)) }
         return list

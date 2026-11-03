@@ -109,6 +109,7 @@ struct CaptureView: View {
         .statusBarHidden()
         .onAppear {
             camera.start()
+            Motion.shared.start()
             guide.showChanges = showChanges
             connectGuide()
             if !seenHelp { showingHelp = true }
@@ -209,7 +210,10 @@ struct CaptureView: View {
         .onChange(of: camera.isFront) { _, _ in updateLight() }
         .onChange(of: camera.hasTorch) { _, _ in updateLight() }
         .onChange(of: scenePhase) { _, _ in updateLight() }
-        .onDisappear { restoreBrightness() }
+        .onDisappear {
+            restoreBrightness()
+            Motion.shared.stop()
+        }
     }
 
     // MARK: Light
@@ -644,8 +648,10 @@ struct CaptureView: View {
         } else {
             camera.onFrame = nil
         }
+        guide.liveAttitude = { [camera] in Motion.shared.attitude(uprightAngle: camera.uprightAngle, front: camera.isFront) }
         guide.setReference(wanted ? ghost : nil, depth: ghostDepth, aspect: visibleAspect, whole: ghostWhole,
-                           prefersBody: board?.department == .costume, fit: ghostFit, needsFit: needsFit)
+                           prefersBody: board?.department == .costume, fit: ghostFit, needsFit: needsFit,
+                           attitude: ghostShot?.attitude)
     }
 
     /// Keeps the size and place found for an imported photo with it, so it fits next time too.
@@ -732,6 +738,8 @@ struct CaptureView: View {
         let crop = visibleAspect
         // LiDAR depth at the moment of the shot, cropped like the photo, so it can be a reference.
         let depth = camera.currentDepth()?.cropped(aspect: crop)
+        // How the phone is held at the shutter, so a later check can match its pitch and roll.
+        let attitude = Motion.shared.attitude(uprightAngle: camera.uprightAngle, front: camera.isFront)
         camera.capture { data in
             guard let data else {
                 saveError = "The photo did not take. Try again."
@@ -739,7 +747,7 @@ struct CaptureView: View {
             }
             Task {
                 if let shot = await store.addShot(data, to: target.id, angle: angle, source: .camera, crop: crop, depth: depth,
-                                                  zoom: camera.isFront ? nil : camera.zoom) {
+                                                  zoom: camera.isFront ? nil : camera.zoom, attitude: attitude) {
                     lastShot = shot
                     // A new reference is shown straight away, so the next photo can be checked against it.
                     if shot.isReference, ghostID == nil { ghostID = shot.id }

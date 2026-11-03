@@ -399,5 +399,68 @@ do {
     expect(old.count == 1 && old[0].actor.isEmpty, "cast: an entry without an actor still loads")
 }
 
+// MARK: Pitch and roll
+
+do {
+    func rad(_ d: Double) -> Double { d * .pi / 180 }
+    func near(_ a: Double?, _ b: Double, _ t: Double = 0.01) -> Bool { a.map { abs($0 - b) < t } ?? false }
+    // Portrait (the photo turned 90), rear camera, phone upright: gravity is straight down the screen.
+    let level = Attitude.from(gravity: (0, -1, 0), uprightAngle: 90, front: false)
+    expect(near(level?.pitch, 0) && near(level?.roll, 0), "attitude: an upright phone is level")
+    // Camera aimed 20 degrees up: the back of the phone tips away, so gravity gains +z.
+    let up = Attitude.from(gravity: (0, -cos(rad(20)), sin(rad(20))), uprightAngle: 90, front: false)
+    expect(near(up?.pitch, 20), "attitude: aiming up 20 degrees reads +20 pitch")
+    let down = Attitude.from(gravity: (0, -cos(rad(15)), -sin(rad(15))), uprightAngle: 90, front: false)
+    expect(near(down?.pitch, -15), "attitude: aiming down 15 degrees reads -15 pitch")
+    // Phone twisted clockwise 10 degrees: gravity leans towards the phone's right edge.
+    let twisted = Attitude.from(gravity: (sin(rad(10)), -cos(rad(10)), 0), uprightAngle: 90, front: false)
+    expect(near(twisted?.roll, 10), "attitude: twisting clockwise reads positive roll")
+    // Landscape, the sensor's own way up (phone top to the left).
+    let sideways = Attitude.from(gravity: (1, 0, 0), uprightAngle: 0, front: false)
+    expect(near(sideways?.roll, 0) && near(sideways?.pitch, 0), "attitude: landscape held level reads level")
+    let sidewaysTwist = Attitude.from(gravity: (cos(rad(10)), sin(rad(10)), 0), uprightAngle: 0, front: false)
+    expect(near(sidewaysTwist?.roll, 10), "attitude: landscape twisted clockwise reads positive roll")
+    let otherSide = Attitude.from(gravity: (-1, 0, 0), uprightAngle: 180, front: false)
+    expect(near(otherSide?.roll, 0), "attitude: landscape the other way up is level too")
+    let upsideDown = Attitude.from(gravity: (0, 1, 0), uprightAngle: 270, front: false)
+    expect(near(upsideDown?.roll, 0), "attitude: upside down is level too")
+    // Front camera looks the other way: aiming it up needs gravity -z, and twists read the photo's way.
+    let front = Attitude.from(gravity: (0, -cos(rad(12)), -sin(rad(12))), uprightAngle: 90, front: true)
+    expect(near(front?.pitch, 12), "attitude: the front camera aims the other way round")
+    let frontTwist = Attitude.from(gravity: (sin(rad(10)), -cos(rad(10)), 0), uprightAngle: 90, front: true)
+    expect(near(frontTwist?.roll, -10), "attitude: the front camera's unmirrored photo twists the other way")
+    expect(Attitude.from(gravity: (0, 0, -1), uprightAngle: 90, front: false) == nil, "attitude: flat on a table has no roll")
+    expect(Attitude.from(gravity: (0, 0, 0), uprightAngle: 90, front: false) == nil, "attitude: no gravity, no reading")
+
+    // What to do to match the reference.
+    let reference = Attitude(pitch: 5, roll: 2)
+    let now = Attitude(pitch: -3, roll: 8)
+    let errors = now.errors(to: reference)
+    expect(near(errors.pitch, 8) && near(errors.roll, -6), "attitude: tilt up 8, twist back 6 to match")
+    let wrap = Attitude(pitch: 0, roll: 175).errors(to: Attitude(pitch: 0, roll: -175))
+    expect(near(wrap.roll, 10), "attitude: twisting takes the short way round")
+
+    // The guide's cues.
+    func reading(pitch: Double? = nil, roll: Double? = nil, actor: Bool = false, turnY: CGFloat = 0, tilt: Double = 0) -> GuideReading {
+        var r = GuideReading(move: .zero, turn: CGVector(dx: 0, dy: turnY), tilt: tilt, scale: 1)
+        r.actor = actor
+        r.pitchError = pitch
+        r.rollError = roll
+        return r
+    }
+    expect(reading(pitch: 8).biggest == .tilt(.up), "attitude cues: 8 degrees too low says tilt up")
+    expect(reading(pitch: -8).biggest == .tilt(.down), "attitude cues: too high says tilt down")
+    expect(reading(roll: -6).biggest == .rotate(clockwise: false), "attitude cues: twisted clockwise says rotate back")
+    expect(reading(roll: 6).biggest == .rotate(clockwise: true), "attitude cues: twisted back says rotate clockwise")
+    expect(reading(pitch: 1.5, roll: 2).lined, "attitude cues: inside the tolerances is lined up")
+    expect(reading(pitch: 1, turnY: 0.3).lined, "attitude cues: the picture's own tilt guess is ignored when sensors say level")
+    expect(reading(roll: 0, tilt: 12).lined, "attitude cues: the picture's own roll guess is ignored when sensors say level")
+    expect(reading(turnY: 0.3).biggest == .tilt(.down), "attitude cues: without sensors the picture's guess still works")
+    // An actor lock keeps its own aiming cue and doesn't add a second, possibly opposite, one.
+    var actorMove = reading(pitch: -9, actor: true)
+    actorMove.move = CGVector(dx: 0, dy: 0.2)
+    expect(actorMove.cues.filter { if case .tilt = $0.cue { true } else { false } }.count == 1, "attitude cues: an actor lock shows one tilt cue, not two")
+}
+
 print(failures == 0 ? "All actor tests passed" : "\(failures) actor tests failed")
 exit(failures == 0 ? 0 : 1)

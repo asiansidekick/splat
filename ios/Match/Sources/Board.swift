@@ -52,6 +52,8 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
     var fit: OverlayFit?
     /// The rear camera's zoom (0.5, 1, 3…) when the photo was taken, so the same lens can be picked again.
     var zoom: Double?
+    /// How the phone was held (pitch and roll from gravity), for the pitch and roll guides.
+    var attitude: Attitude?
 
     init(taken: Date, take: Int, angle: String = "", source: Source = .camera) {
         self.taken = taken
@@ -72,6 +74,9 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
         source = (try? c.decode(Source.self, forKey: .source)) ?? .camera
         fit = (try? c.decode(OverlayFit.self, forKey: .fit)).flatMap { $0.isSensible ? $0 : nil }
         zoom = (try? c.decode(Double.self, forKey: .zoom)).flatMap { $0 > 0 && $0 < 20 ? $0 : nil }
+        attitude = (try? c.decode(Attitude.self, forKey: .attitude)).flatMap {
+            $0.pitch.isFinite && $0.roll.isFinite && abs($0.pitch) <= 90 && abs($0.roll) <= 180 ? $0 : nil
+        }
     }
 
     var file: String { "\(id.uuidString).jpg" }

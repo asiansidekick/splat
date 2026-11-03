@@ -51,6 +51,9 @@ final class Guide: ObservableObject {
     private var referenceBody: ActorPose?
     /// The reference's LiDAR depth, saved with the photo, if it was taken with LiDAR.
     private var referenceDepth: DepthGrid?
+    /// How the reference was held (pitch and roll), and how the phone is held now.
+    private var referenceAttitude: Attitude?
+    var liveAttitude: (@MainActor () -> Attitude?)?
     /// The newest live LiDAR depth, for the change colours.
     private var liveDepth: DepthGrid?
     /// Red and blue where the set differs from the reference, once lined up (see DepthChange).
@@ -82,8 +85,9 @@ final class Guide: ObservableObject {
     /// `fit`: an imported photo's size and place on the live view, applied before reading.
     /// `needsFit`: an imported photo with no fit yet, so frames work one out instead of guiding.
     func setReference(_ image: UIImage?, depth: DepthGrid? = nil, aspect: CGFloat?, whole: Bool = false, prefersBody: Bool = false,
-                      fit: OverlayFit? = nil, needsFit: Bool = false) {
+                      fit: OverlayFit? = nil, needsFit: Bool = false, attitude: Attitude? = nil) {
         generation += 1
+        referenceAttitude = image == nil ? nil : attitude
         changes = nil
         referenceDepth = image == nil ? nil : depth
         let referenceAspect = image.map { $0.size.width / max($0.size.height, 1) }
@@ -254,7 +258,13 @@ final class Guide: ObservableObject {
 
     private func update(_ result: ActorResult?) {
         if let result {
-            let new = result.reading
+            var new = result.reading
+            // Pitch and roll from the motion sensors, when the reference was shot with them.
+            if let reference = referenceAttitude, let live = liveAttitude?() {
+                let errors = live.errors(to: reference)
+                new.pitchError = errors.pitch
+                new.rollError = errors.roll
+            }
             // Switching between actor and room starts afresh rather than easing between them.
             if let old = reading, old.actor == new.actor {
                 reading = old.blended(towards: new, by: 0.4)
@@ -402,14 +412,15 @@ struct EdgeGuide: View {
             }
         case .pan(let side), .tilt(let side):
             let s = screen(side)
-            arrow(at: s, in: size, word: (s.horizontal ? "PAN " : "TILT ") + s.word) {
+            let amount = s.horizontal ? "" : Self.degrees(reading?.pitchError)
+            arrow(at: s, in: size, word: (s.horizontal ? "PAN " : "TILT ") + s.word + amount) {
                 TurnArrow()
                     .stroke(Color.yellow, style: StrokeStyle(lineWidth: 11, lineCap: .round, lineJoin: .round))
                     .frame(width: 84, height: 84)
             }
         case .rotate(let clockwise):
             let turn = clockwise != mirrored
-            centre(word: "ROTATE", in: size) {
+            centre(word: "ROTATE" + Self.degrees(reading?.rollError), in: size) {
                 Image(systemName: turn ? "arrow.clockwise" : "arrow.counterclockwise")
                     .font(.system(size: 80, weight: .bold))
                     .phaseAnimator([0.0, turn ? 25.0 : -25.0]) { content, angle in
@@ -473,6 +484,13 @@ struct EdgeGuide: View {
         guard let value else { return "" }
         let cm = Int((abs(value) * 20).rounded()) * 5
         return cm >= 5 ? " \(cm) CM" : ""
+    }
+
+    /// " 6°" from the motion sensors, to the nearest degree; nothing without them.
+    static func degrees(_ value: Double?) -> String {
+        guard let value else { return "" }
+        let whole = Int(abs(value).rounded())
+        return whole >= 1 ? " \(whole)°" : ""
     }
 
     /// How far a right-pointing glyph turns to point at that edge.
