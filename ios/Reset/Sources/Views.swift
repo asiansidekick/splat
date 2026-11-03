@@ -1095,7 +1095,10 @@ struct CaptureStage: View {
                 // Works while a scan or recording is going, too.
                 MeasureToggle(measurer: recorder.measurer)
                 if ObjectScanner.supported {
-                    Button { scanningObject = true } label: { Image(systemName: "cube.transparent").font(.title3) }
+                    Button {
+                        recorder.beginObjectScan()
+                        scanningObject = true
+                    } label: { Image(systemName: "cube.transparent").font(.title3) }
                         .disabled(recorder.capturing)
                         .accessibilityLabel("Scan an object")
                 }
@@ -1188,7 +1191,7 @@ struct CaptureStage: View {
         .fileImporter(isPresented: $importingModels, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { recorder.placer.add(from: urls) }
         }
-        .fullScreenCover(isPresented: $scanningObject) {
+        .fullScreenCover(isPresented: $scanningObject, onDismiss: { recorder.endObjectScan() }) {
             ObjectScanView { recorder.placer.add(from: [$0]) }
         }
         .onAppear {

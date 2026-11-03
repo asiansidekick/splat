@@ -79,8 +79,14 @@ final class ObjectScanner: ObservableObject {
     /// Turns the pictures into a model on the phone.
     private func build() {
         guard let folder else { return }
-        phase = .building(0)
         let images = folder.appendingPathComponent("Images", isDirectory: true)
+        let taken = (try? FileManager.default.contentsOfDirectory(atPath: images.path).count) ?? 0
+        Diagnostics.log("Object scan: \(taken) pictures taken")
+        if taken < 10 {
+            phase = .failed("Only \(taken) pictures were taken. Walk slowly all the way round the object, then tap Finish.")
+            return
+        }
+        phase = .building(0)
         let output = Self.scansFolder.appendingPathComponent("\(folder.lastPathComponent).usdz")
         building = Task { [weak self] in
             do {
