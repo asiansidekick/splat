@@ -58,6 +58,7 @@ final class FreeScanner: NSObject, ObservableObject {
         shots = []
         lastShot = nil
         lastTime = 0
+        previous = nil
         triangles = 0
         pictures = 0
         phase = .scanning
@@ -83,7 +84,10 @@ final class FreeScanner: NSObject, ObservableObject {
             lastLog = frame.timestamp
             Diagnostics.log("Free scan: \(shots.count) pictures, \(triangles) triangles, tracking \(frame.camera.trackingState), depth \(frame.sceneDepth != nil)")
         }
-        guard case .normal = frame.camera.trackingState else { return }
+        // The LiDAR depth lags a moving phone and the picture blurs, so pictures are only kept when
+        // the phone is moving slowly.
+        let slow = isSlow(frame)
+        guard slow, case .normal = frame.camera.trackingState else { return }
         guard frame.timestamp - lastTime > 0.4, shots.count < Self.maxShots else { return }
         if let last = lastShot {
             let moved = simd_distance(last.columns.3, frame.camera.transform.columns.3)
@@ -97,6 +101,18 @@ final class FreeScanner: NSObject, ObservableObject {
         pictures = shots.count
         triangles += shot.indices.count / 3
         show(shot)
+    }
+
+    private var previous: (transform: simd_float4x4, time: TimeInterval)?
+
+    /// Under 20 cm/s and 40 degrees/s since the last frame.
+    private func isSlow(_ frame: ARFrame) -> Bool {
+        defer { previous = (frame.camera.transform, frame.timestamp) }
+        guard let previous, frame.timestamp > previous.time else { return false }
+        let dt = Float(frame.timestamp - previous.time)
+        let moved = simd_distance(previous.transform.columns.3, frame.camera.transform.columns.3) / dt
+        let turned = Self.angle(between: previous.transform, and: frame.camera.transform) / dt
+        return moved < 0.2 && turned < 0.7
     }
 
     private static func angle(between a: simd_float4x4, and b: simd_float4x4) -> Float {
