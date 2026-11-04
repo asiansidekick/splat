@@ -30,6 +30,7 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
     private var shots: [Shot] = []
     private var lastShot: simd_float4x4?
     private var lastTime: TimeInterval = 0
+    private var lastLog: TimeInterval = 0
     private let ciContext = CIContext()
     private static let maxShots = 80
     private static let shotWidth = 1280
@@ -52,28 +53,41 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
 
     nonisolated func renderer(_ renderer: SCNSceneRenderer, nodeFor anchor: ARAnchor) -> SCNNode? {
         guard let mesh = anchor as? ARMeshAnchor else { return nil }
-        let node = SCNNode(geometry: FreeScanner.liveGeometry(mesh))
+        let node = SCNNode()
+        FreeScanner.fill(node, with: mesh)
         return node
     }
 
     nonisolated func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
-        node.geometry = FreeScanner.liveGeometry(mesh)
+        FreeScanner.fill(node, with: mesh)
     }
 
-    private nonisolated static func liveGeometry(_ anchor: ARMeshAnchor) -> SCNGeometry {
+    /// A see-through blue skin with bright wire lines on it, so it shows on light and dark things.
+    private nonisolated static func fill(_ node: SCNNode, with anchor: ARMeshAnchor) {
         let mesh = read(anchor.geometry)
-        let geometry = SCNGeometry(
-            sources: [SCNGeometrySource(vertices: mesh.vertices.map { SCNVector3($0.x, $0.y, $0.z) })],
-            elements: [SCNGeometryElement(indices: mesh.indices, primitiveType: .triangles)])
-        let material = SCNMaterial()
-        material.diffuse.contents = UIColor.cyan.withAlphaComponent(0.35)
-        material.lightingModel = .constant
-        material.isDoubleSided = true
-        material.fillMode = .lines
-        material.writesToDepthBuffer = false
-        geometry.materials = [material]
-        return geometry
+        let source = SCNGeometrySource(vertices: mesh.vertices.map { SCNVector3($0.x, $0.y, $0.z) })
+        let element = SCNGeometryElement(indices: mesh.indices, primitiveType: .triangles)
+        let skin = SCNGeometry(sources: [source], elements: [element])
+        let skinMaterial = SCNMaterial()
+        skinMaterial.diffuse.contents = UIColor(red: 0.1, green: 0.5, blue: 1, alpha: 1)
+        skinMaterial.transparency = 0.35
+        skinMaterial.lightingModel = .constant
+        skinMaterial.isDoubleSided = true
+        skinMaterial.writesToDepthBuffer = false
+        skin.materials = [skinMaterial]
+        let wire = SCNGeometry(sources: [source], elements: [element])
+        let wireMaterial = SCNMaterial()
+        wireMaterial.diffuse.contents = UIColor.cyan
+        wireMaterial.transparency = 0.8
+        wireMaterial.lightingModel = .constant
+        wireMaterial.isDoubleSided = true
+        wireMaterial.fillMode = .lines
+        wireMaterial.writesToDepthBuffer = false
+        wire.materials = [wireMaterial]
+        node.childNodes.forEach { $0.removeFromParentNode() }
+        node.addChildNode(SCNNode(geometry: skin))
+        node.addChildNode(SCNNode(geometry: wire))
     }
 
     // MARK: Pictures for texture
@@ -88,10 +102,15 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
     }
 
     private func handle(_ frame: ARFrame) {
-        guard phase == .scanning, case .normal = frame.camera.trackingState else { return }
+        guard phase == .scanning else { return }
         let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
         let count = meshes.reduce(0) { $0 + $1.geometry.faces.count }
         if count != triangles { triangles = count }
+        if frame.timestamp - lastLog > 2 {
+            lastLog = frame.timestamp
+            Diagnostics.log("Free scan: \(meshes.count) mesh pieces, \(count) triangles, \(shots.count) pictures, tracking \(frame.camera.trackingState)")
+        }
+        guard case .normal = frame.camera.trackingState else { return }
         guard frame.timestamp - lastTime > 0.4, shots.count < Self.maxShots else { return }
         if let last = lastShot {
             let moved = simd_distance(last.columns.3, frame.camera.transform.columns.3)
