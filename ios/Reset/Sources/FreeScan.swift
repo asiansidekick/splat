@@ -7,7 +7,7 @@ import UIKit
 /// The LiDAR scene mesh builds up live on the camera picture; Finish textures it with pictures
 /// taken on the way and saves a USDZ (Files > Reset > Scans) that can be placed in the camera.
 @MainActor
-final class FreeScanner: NSObject, ObservableObject, ARSessionDelegate, ARSCNViewDelegate {
+final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
     enum Phase: Equatable {
         case scanning, building, done(URL), failed(String)
     }
@@ -36,7 +36,6 @@ final class FreeScanner: NSObject, ObservableObject, ARSessionDelegate, ARSCNVie
 
     func start() {
         view.delegate = self
-        view.session.delegate = self
         view.automaticallyUpdatesLighting = true
         let configuration = ARWorldTrackingConfiguration()
         configuration.sceneReconstruction = .mesh
@@ -79,9 +78,13 @@ final class FreeScanner: NSObject, ObservableObject, ARSessionDelegate, ARSCNVie
 
     // MARK: Pictures for texture
 
-    nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        guard Thread.isMainThread else { return }
-        MainActor.assumeIsolated { self.handle(frame) }
+    /// ARSCNView is its own session delegate (it makes the mesh nodes), so frames are read here.
+    nonisolated func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                if let frame = self.view.session.currentFrame { self.handle(frame) }
+            }
+        }
     }
 
     private func handle(_ frame: ARFrame) {
