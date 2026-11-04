@@ -4,8 +4,12 @@ import SwiftUI
 import UIKit
 
 /// Scan anything by just walking round it, like Scaniverse (Phil, 2026-11-04): no bounding box.
-/// The LiDAR scene mesh builds up live on the camera picture; Finish textures it with pictures
-/// taken on the way and saves a USDZ (Files > Reset > Scans) that can be placed in the camera.
+/// The LiDAR depth of each picture taken on the way becomes a small mesh, textured with that same
+/// picture (so the texture lines up exactly), and drawn live as a blue skin to show what is covered.
+/// Finish joins them into one USDZ (Files > Reset > Scans) that can be placed in the camera.
+///
+/// ARKit's own scene mesh is not used: on Phil's iPhone 14 Pro (iOS 26) it stayed empty, in line
+/// with every LiDAR pixel being reported as low confidence.
 @MainActor
 final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
     enum Phase: Equatable {
@@ -17,14 +21,15 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
     @Published var pictures = 0
 
     let view = ARSCNView()
-    static var supported: Bool { ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) }
+    static var supported: Bool { ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) }
 
-    /// One picture kept as texture: its JPEG, with where the camera was.
+    /// One picture and the surface its depth saw, in room coordinates.
     private struct Shot: Sendable {
-        let width: Int, height: Int
         let jpeg: Data
         let transform: simd_float4x4
-        let fx: Float, fy: Float, cx: Float, cy: Float
+        var vertices: [SIMD3<Float>] = []
+        var uvs: [SIMD2<Float>] = []  // 0 to 1 across the picture, y down
+        var indices: [UInt32] = []
     }
 
     private var shots: [Shot] = []
@@ -32,14 +37,16 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
     private var lastTime: TimeInterval = 0
     private var lastLog: TimeInterval = 0
     private let ciContext = CIContext()
-    private static let maxShots = 80
+    private static let maxShots = 100
     private static let shotWidth = 1280
+    /// Every third depth pixel makes a mesh vertex.
+    private static let step = 3
 
     func start() {
         view.delegate = self
         view.automaticallyUpdatesLighting = true
         let configuration = ARWorldTrackingConfiguration()
-        configuration.sceneReconstruction = .mesh
+        configuration.frameSemantics = .sceneDepth
         configuration.environmentTexturing = .none
         view.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         Diagnostics.log("Free scan started")
@@ -49,50 +56,9 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
         view.session.pause()
     }
 
-    // MARK: Live mesh
+    // MARK: Frames
 
-    nonisolated func renderer(_ renderer: SCNSceneRenderer, nodeFor anchor: ARAnchor) -> SCNNode? {
-        guard let mesh = anchor as? ARMeshAnchor else { return nil }
-        let node = SCNNode()
-        FreeScanner.fill(node, with: mesh)
-        return node
-    }
-
-    nonisolated func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        guard let mesh = anchor as? ARMeshAnchor else { return }
-        FreeScanner.fill(node, with: mesh)
-    }
-
-    /// A see-through blue skin with bright wire lines on it, so it shows on light and dark things.
-    private nonisolated static func fill(_ node: SCNNode, with anchor: ARMeshAnchor) {
-        let mesh = read(anchor.geometry)
-        let source = SCNGeometrySource(vertices: mesh.vertices.map { SCNVector3($0.x, $0.y, $0.z) })
-        let element = SCNGeometryElement(indices: mesh.indices, primitiveType: .triangles)
-        let skin = SCNGeometry(sources: [source], elements: [element])
-        let skinMaterial = SCNMaterial()
-        skinMaterial.diffuse.contents = UIColor(red: 0.1, green: 0.5, blue: 1, alpha: 1)
-        skinMaterial.transparency = 0.35
-        skinMaterial.lightingModel = .constant
-        skinMaterial.isDoubleSided = true
-        skinMaterial.writesToDepthBuffer = false
-        skin.materials = [skinMaterial]
-        let wire = SCNGeometry(sources: [source], elements: [element])
-        let wireMaterial = SCNMaterial()
-        wireMaterial.diffuse.contents = UIColor.cyan
-        wireMaterial.transparency = 0.8
-        wireMaterial.lightingModel = .constant
-        wireMaterial.isDoubleSided = true
-        wireMaterial.fillMode = .lines
-        wireMaterial.writesToDepthBuffer = false
-        wire.materials = [wireMaterial]
-        node.childNodes.forEach { $0.removeFromParentNode() }
-        node.addChildNode(SCNNode(geometry: skin))
-        node.addChildNode(SCNNode(geometry: wire))
-    }
-
-    // MARK: Pictures for texture
-
-    /// ARSCNView is its own session delegate (it makes the mesh nodes), so frames are read here.
+    /// ARSCNView is its own session delegate, so frames are read here.
     nonisolated func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
@@ -103,26 +69,24 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
 
     private func handle(_ frame: ARFrame) {
         guard phase == .scanning else { return }
-        let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-        let count = meshes.reduce(0) { $0 + $1.geometry.faces.count }
-        if count != triangles { triangles = count }
         if frame.timestamp - lastLog > 2 {
             lastLog = frame.timestamp
-            Diagnostics.log("Free scan: \(meshes.count) mesh pieces, \(count) triangles, \(shots.count) pictures, tracking \(frame.camera.trackingState)")
+            Diagnostics.log("Free scan: \(shots.count) pictures, \(triangles) triangles, tracking \(frame.camera.trackingState), depth \(frame.sceneDepth != nil)")
         }
         guard case .normal = frame.camera.trackingState else { return }
         guard frame.timestamp - lastTime > 0.4, shots.count < Self.maxShots else { return }
         if let last = lastShot {
             let moved = simd_distance(last.columns.3, frame.camera.transform.columns.3)
             let turned = Self.angle(between: last, and: frame.camera.transform)
-            guard moved > 0.12 || turned > 0.2 else { return }
+            guard moved > 0.15 || turned > 0.25 else { return }
         }
+        guard let shot = makeShot(frame) else { return }
         lastTime = frame.timestamp
         lastShot = frame.camera.transform
-        if let shot = makeShot(frame) {
-            shots.append(shot)
-            pictures = shots.count
-        }
+        shots.append(shot)
+        pictures = shots.count
+        triangles += shot.indices.count / 3
+        show(shot)
     }
 
     private static func angle(between a: simd_float4x4, and b: simd_float4x4) -> Float {
@@ -131,60 +95,99 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
         return acos(max(-1, min(1, simd_dot(fa, fb))))
     }
 
+    /// Keeps the picture as a JPEG and turns its depth into a grid mesh.
     private func makeShot(_ frame: ARFrame) -> Shot? {
+        guard let depth = Measurer.depth(of: frame), depth.width > 4, depth.height > 4 else { return nil }
         let buffer = frame.capturedImage
         let fullWidth = CVPixelBufferGetWidth(buffer), fullHeight = CVPixelBufferGetHeight(buffer)
         let scale = CGFloat(Self.shotWidth) / CGFloat(fullWidth)
-        let width = Self.shotWidth, height = Int((CGFloat(fullHeight) * scale).rounded())
         let image = CIImage(cvPixelBuffer: buffer).transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         let key = CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String)
         guard let jpeg = ciContext.jpegRepresentation(
             of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [key: 0.8])
         else { return nil }
+        var shot = Shot(jpeg: jpeg, transform: frame.camera.transform)
+        // Intrinsics are for the full-size picture; depth pixels map onto it by proportion.
         let k = frame.camera.intrinsics
-        let s = Float(scale)
-        return Shot(
-            width: width, height: height, jpeg: jpeg, transform: frame.camera.transform,
-            fx: k[0][0] * s, fy: k[1][1] * s, cx: k[2][0] * s, cy: k[2][1] * s)
+        let fx = k[0][0], fy = k[1][1], cx = k[2][0], cy = k[2][1]
+        let imageWidth = Float(fullWidth), imageHeight = Float(fullHeight)
+        let step = Self.step
+        let columns = (depth.width - 1) / step + 1, rows = (depth.height - 1) / step + 1
+        var grid = [Int32](repeating: -1, count: columns * rows)
+        for r in 0..<rows {
+            for c in 0..<columns {
+                let i = min(c * step, depth.width - 1), j = min(r * step, depth.height - 1)
+                let d = depth.values[j * depth.width + i]
+                guard d.isFinite, (0.15...5).contains(d) else { continue }
+                let u = (Float(i) + 0.5) / Float(depth.width) * imageWidth
+                let v = (Float(j) + 0.5) / Float(depth.height) * imageHeight
+                let local = SIMD4((u - cx) / fx * d, -(v - cy) / fy * d, -d, 1)
+                let w = frame.camera.transform * local
+                grid[r * columns + c] = Int32(shot.vertices.count)
+                shot.vertices.append(SIMD3(w.x, w.y, w.z))
+                shot.uvs.append(SIMD2(u / imageWidth, v / imageHeight))
+            }
+        }
+        func depthAt(_ c: Int, _ r: Int) -> Float {
+            depth.values[min(r * step, depth.height - 1) * depth.width + min(c * step, depth.width - 1)]
+        }
+        for r in 0..<rows - 1 {
+            for c in 0..<columns - 1 {
+                let a = grid[r * columns + c], b = grid[r * columns + c + 1]
+                let d = grid[(r + 1) * columns + c], e = grid[(r + 1) * columns + c + 1]
+                guard a >= 0, b >= 0, d >= 0, e >= 0 else { continue }
+                let ds = [depthAt(c, r), depthAt(c + 1, r), depthAt(c, r + 1), depthAt(c + 1, r + 1)]
+                // No skin across a jump between a near thing and a far one.
+                guard let low = ds.min(), let high = ds.max(), high - low < 0.04 + 0.06 * low else { continue }
+                shot.indices.append(contentsOf: [UInt32(a), UInt32(d), UInt32(b), UInt32(b), UInt32(d), UInt32(e)])
+            }
+        }
+        return shot.indices.isEmpty ? nil : shot
+    }
+
+    /// Draws a picture's surface in the camera view: a see-through blue skin with bright lines.
+    private func show(_ shot: Shot) {
+        let source = SCNGeometrySource(vertices: shot.vertices.map { SCNVector3($0.x, $0.y, $0.z) })
+        let element = SCNGeometryElement(indices: shot.indices, primitiveType: .triangles)
+        let skin = SCNGeometry(sources: [source], elements: [element])
+        let skinMaterial = SCNMaterial()
+        skinMaterial.diffuse.contents = UIColor(red: 0.1, green: 0.5, blue: 1, alpha: 1)
+        skinMaterial.transparency = 0.3
+        skinMaterial.lightingModel = .constant
+        skinMaterial.isDoubleSided = true
+        skinMaterial.writesToDepthBuffer = false
+        skin.materials = [skinMaterial]
+        let wire = SCNGeometry(sources: [source], elements: [element])
+        let wireMaterial = SCNMaterial()
+        wireMaterial.diffuse.contents = UIColor.cyan
+        wireMaterial.transparency = 0.6
+        wireMaterial.lightingModel = .constant
+        wireMaterial.isDoubleSided = true
+        wireMaterial.fillMode = .lines
+        wireMaterial.writesToDepthBuffer = false
+        wire.materials = [wireMaterial]
+        let node = SCNNode()
+        node.addChildNode(SCNNode(geometry: skin))
+        node.addChildNode(SCNNode(geometry: wire))
+        view.scene.rootNode.addChildNode(node)
     }
 
     // MARK: Finish
 
-    private struct Raw: Sendable {
-        var vertices: [SIMD3<Float>] = []
-        var normals: [SIMD3<Float>] = []
-        var indices: [UInt32] = []
-    }
-
     func finish() {
         guard phase == .scanning else { return }
-        let anchors = view.session.currentFrame?.anchors.compactMap { $0 as? ARMeshAnchor } ?? []
         view.session.pause()
-        guard !anchors.isEmpty else {
-            phase = .failed("Nothing was scanned. Walk slowly round the object with the phone 0.5 to 3 m away until the blue mesh covers it.")
+        guard !shots.isEmpty else {
+            phase = .failed("Nothing was scanned. Walk slowly round the object with the phone 0.5 to 3 m away until the blue skin covers it.")
             return
         }
         phase = .building
-        // Everything into world space, one list.
-        var raw = Raw()
-        for anchor in anchors {
-            let part = Self.read(anchor.geometry)
-            let base = UInt32(raw.vertices.count)
-            let t = anchor.transform
-            for (v, n) in zip(part.vertices, part.normals) {
-                let w = t * SIMD4(v, 1)
-                let wn = t * SIMD4(n, 0)
-                raw.vertices.append(SIMD3(w.x, w.y, w.z))
-                raw.normals.append(simd_normalize(SIMD3(wn.x, wn.y, wn.z)))
-            }
-            raw.indices.append(contentsOf: part.indices.map { $0 + base })
-        }
         let shots = self.shots
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let output = ObjectScanner.scansFolder.appendingPathComponent("Free-\(stamp).usdz")
-        Diagnostics.log("Free scan: \(raw.vertices.count) vertices, \(raw.indices.count / 3) triangles, \(shots.count) pictures")
-        Task.detached(priority: .userInitiated) { [raw] in
-            let ok = Self.export(raw, shots: shots, to: output)
+        Diagnostics.log("Free scan finishing: \(shots.count) pictures, \(triangles) triangles")
+        Task.detached(priority: .userInitiated) {
+            let ok = Self.export(shots, to: output)
             await MainActor.run {
                 if ok {
                     Diagnostics.log("Free scan saved: \(output.lastPathComponent)")
@@ -197,122 +200,43 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
         }
     }
 
-    /// The picture that saw a triangle most face-on and closest, with all three corners inside it.
-    private nonisolated static func bestShot(
-        _ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, normal: SIMD3<Float>, shots: [Shot], inverses: [simd_float4x4]
-    ) -> Int {
-        let centre = (a + b + c) / 3
-        var best = -1
-        var bestScore: Float = 0.1
-        for (index, shot) in shots.enumerated() {
-            let eye = SIMD3(shot.transform.columns.3.x, shot.transform.columns.3.y, shot.transform.columns.3.z)
-            let toEye = eye - centre
-            let distance = simd_length(toEye)
-            let facing = simd_dot(normal, toEye / max(distance, 0.001))
-            guard facing > 0.25 else { continue }
-            let score = facing / (1 + distance * 0.4)
-            guard score > bestScore else { continue }
-            let inverse = inverses[index]
-            guard [a, b, c].allSatisfy({ project($0, shot: shot, inverse: inverse) != nil }) else { continue }
-            best = index
-            bestScore = score
-        }
-        return best
-    }
-
-    /// Where a world point lands in a picture (pixels, y down), or nil if behind it or outside it.
-    private nonisolated static func project(_ w: SIMD3<Float>, shot: Shot, inverse: simd_float4x4) -> SIMD2<Float>? {
-        let c = inverse * SIMD4(w, 1)
-        let depth = -c.z
-        guard depth > 0.15 else { return nil }
-        let px = shot.cx + shot.fx * c.x / depth
-        let py = shot.cy - shot.fy * c.y / depth
-        guard px >= 1, py >= 1, px < Float(shot.width - 1), py < Float(shot.height - 1) else { return nil }
-        return SIMD2(px, py)
-    }
-
-    /// One mesh with a photo texture: each triangle is mapped onto the picture that saw it best, so
-    /// the pictures themselves are the textures (one material per picture). Base on the floor,
-    /// middle at the origin, saved as USDZ.
-    private nonisolated static func export(_ raw: Raw, shots: [Shot], to url: URL) -> Bool {
+    /// One model: each picture's mesh with that picture as its texture. The middle is at the origin
+    /// and the lowest point on the floor.
+    private nonisolated static func export(_ shots: [Shot], to url: URL) -> Bool {
         var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude), high = -low
-        for v in raw.vertices {
-            low = simd_min(low, v)
-            high = simd_max(high, v)
+        for shot in shots {
+            for v in shot.vertices {
+                low = simd_min(low, v)
+                high = simd_max(high, v)
+            }
         }
         let shift = SIMD3((low.x + high.x) / 2, low.y, (low.z + high.z) / 2)
-        let inverses = shots.map { $0.transform.inverse }
-        // Triangles grouped by picture (the last group, index shots.count, has no picture).
-        var groups = [[Int]](repeating: [], count: shots.count + 1)
-        for t in 0..<raw.indices.count / 3 {
-            let i = Int(raw.indices[t * 3]), j = Int(raw.indices[t * 3 + 1]), k = Int(raw.indices[t * 3 + 2])
-            let normal = simd_normalize(raw.normals[i] + raw.normals[j] + raw.normals[k])
-            let shot = bestShot(raw.vertices[i], raw.vertices[j], raw.vertices[k], normal: normal, shots: shots, inverses: inverses)
-            groups[shot < 0 ? shots.count : shot].append(t)
-        }
-        var vertices = [SCNVector3](), normals = [SCNVector3](), uvs = [CGPoint]()
+        var vertices = [SCNVector3](), uvs = [CGPoint]()
         var elements = [SCNGeometryElement](), materials = [SCNMaterial]()
-        for (group, triangles) in groups.enumerated() where !triangles.isEmpty {
-            let start = UInt32(vertices.count)
-            for t in triangles {
-                for corner in 0..<3 {
-                    let i = Int(raw.indices[t * 3 + corner])
-                    let v = raw.vertices[i] - shift
-                    vertices.append(SCNVector3(v.x, v.y, v.z))
-                    let n = raw.normals[i]
-                    normals.append(SCNVector3(n.x, n.y, n.z))
-                    if group < shots.count, let p = project(raw.vertices[i], shot: shots[group], inverse: inverses[group]) {
-                        uvs.append(CGPoint(x: Double(p.x) / Double(shots[group].width), y: Double(p.y) / Double(shots[group].height)))
-                    } else {
-                        uvs.append(.zero)
-                    }
-                }
+        for shot in shots {
+            guard let image = UIImage(data: shot.jpeg) else { continue }
+            let base = UInt32(vertices.count)
+            for v in shot.vertices {
+                let p = v - shift
+                vertices.append(SCNVector3(p.x, p.y, p.z))
             }
-            let indices = (start..<UInt32(vertices.count)).map { $0 }
-            elements.append(SCNGeometryElement(indices: indices, primitiveType: .triangles))
+            uvs.append(contentsOf: shot.uvs.map { CGPoint(x: Double($0.x), y: Double($0.y)) })
+            elements.append(SCNGeometryElement(indices: shot.indices.map { $0 + base }, primitiveType: .triangles))
             let material = SCNMaterial()
+            material.diffuse.contents = image
             material.lightingModel = .constant
             material.isDoubleSided = true
-            if group < shots.count, let image = UIImage(data: shots[group].jpeg) {
-                material.diffuse.contents = image
-            } else {
-                material.diffuse.contents = UIColor.gray
-            }
             materials.append(material)
         }
+        guard !elements.isEmpty else { return false }
         let geometry = SCNGeometry(
-            sources: [
-                SCNGeometrySource(vertices: vertices), SCNGeometrySource(normals: normals),
-                SCNGeometrySource(textureCoordinates: uvs),
-            ],
+            sources: [SCNGeometrySource(vertices: vertices), SCNGeometrySource(textureCoordinates: uvs)],
             elements: elements)
         geometry.materials = materials
         let scene = SCNScene()
         scene.rootNode.addChildNode(SCNNode(geometry: geometry))
         try? FileManager.default.removeItem(at: url)
         return scene.write(to: url, options: nil, delegate: nil, progressHandler: nil)
-    }
-
-    // MARK: Reading ARKit meshes
-
-    private nonisolated static func read(_ g: ARMeshGeometry) -> (vertices: [SIMD3<Float>], normals: [SIMD3<Float>], indices: [UInt32]) {
-        func floats(_ source: ARGeometrySource) -> [SIMD3<Float>] {
-            (0..<source.count).map { i in
-                let p = source.buffer.contents().advanced(by: source.offset + source.stride * i)
-                    .assumingMemoryBound(to: Float.self)
-                return SIMD3(p[0], p[1], p[2])
-            }
-        }
-        let faces = g.faces
-        let per = faces.indexCountPerPrimitive
-        var indices = [UInt32]()
-        indices.reserveCapacity(faces.count * per)
-        for i in 0..<faces.count * per {
-            let p = faces.buffer.contents().advanced(by: i * faces.bytesPerIndex)
-            indices.append(faces.bytesPerIndex == 4 ? p.assumingMemoryBound(to: UInt32.self).pointee
-                : UInt32(p.assumingMemoryBound(to: UInt16.self).pointee))
-        }
-        return (floats(g.vertices), floats(g.normals), indices)
     }
 }
 
@@ -363,13 +287,13 @@ struct FreeScanView: View {
         switch scanner.phase {
         case .scanning:
             VStack(spacing: 10) {
-                Text("Walk slowly round it. The blue mesh shows what is covered.").font(.footnote)
+                Text("Walk slowly round it. The blue skin shows what is covered.").font(.footnote)
                 pill("Finish") { scanner.finish() }
             }
         case .building:
             VStack(spacing: 10) {
                 ProgressView()
-                Text("Texturing and saving…").font(.subheadline)
+                Text("Joining the pictures and saving…").font(.subheadline)
             }
         case .done(let url):
             VStack(spacing: 10) {
