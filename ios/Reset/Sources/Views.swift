@@ -1054,6 +1054,7 @@ final class CameraViewHolder {
 /// tap to stop and save.
 struct CaptureStage: View {
     @State private var scanningObject = false
+    @State private var freeScanning = false
     @StateObject private var recorder = Recorder()
     let scene: String
     let setup: String
@@ -1094,10 +1095,20 @@ struct CaptureStage: View {
                 TorchButton()
                 // Works while a scan or recording is going, too.
                 MeasureToggle(measurer: recorder.measurer)
-                if ObjectScanner.supported {
-                    Button {
-                        recorder.beginObjectScan()
-                        scanningObject = true
+                if ObjectScanner.supported || FreeScanner.supported {
+                    Menu {
+                        if FreeScanner.supported {
+                            Button {
+                                recorder.beginObjectScan()
+                                freeScanning = true
+                            } label: { Label("Scan freely", systemImage: "camera.metering.matrix") }
+                        }
+                        if ObjectScanner.supported {
+                            Button {
+                                recorder.beginObjectScan()
+                                scanningObject = true
+                            } label: { Label("Scan a small object (guided)", systemImage: "cube.transparent") }
+                        }
                     } label: { Image(systemName: "cube.transparent").font(.title3) }
                         .disabled(recorder.capturing)
                         .accessibilityLabel("Scan an object")
@@ -1190,6 +1201,9 @@ struct CaptureStage: View {
         .overlay { MeasureEntry(measurer: recorder.measurer).hiddenInScreenshots() }
         .fileImporter(isPresented: $importingModels, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { recorder.placer.add(from: urls) }
+        }
+        .fullScreenCover(isPresented: $freeScanning, onDismiss: { recorder.endObjectScan() }) {
+            FreeScanView { recorder.placer.add(from: [$0]) }
         }
         .fullScreenCover(isPresented: $scanningObject, onDismiss: { recorder.endObjectScan() }) {
             ObjectScanView { recorder.placer.add(from: [$0]) }
