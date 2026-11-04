@@ -11,17 +11,22 @@ import UIKit
 /// ARKit's own scene mesh is not used: on Phil's iPhone 14 Pro (iOS 26) it stayed empty, in line
 /// with every LiDAR pixel being reported as low confidence.
 @MainActor
-final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
+final class FreeScanner: NSObject, ObservableObject {
     enum Phase: Equatable {
         case scanning, building, done(URL), failed(String)
     }
 
     @Published var phase: Phase = .scanning
+    /// Whether the scan overlay is showing at all.
+    @Published var active = false
     @Published var triangles = 0
     @Published var pictures = 0
 
-    let view = ARSCNView()
     static var supported: Bool { ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) }
+
+    /// The camera view's own session is used, so models and marks stay where they are.
+    private weak var recorder: Recorder?
+    private var skins = SCNNode()
 
     /// One picture and the surface its depth saw, in room coordinates.
     private struct Shot: Sendable {
@@ -42,29 +47,34 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
     /// Every third depth pixel makes a mesh vertex.
     private static let step = 3
 
-    func start() {
-        view.delegate = self
-        view.automaticallyUpdatesLighting = true
-        let configuration = ARWorldTrackingConfiguration()
-        configuration.frameSemantics = .sceneDepth
-        configuration.environmentTexturing = .none
-        view.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+    func start(_ recorder: Recorder) {
+        guard !active else { return }
+        guard recorder.session.currentFrame?.sceneDepth != nil || recorder.session.currentFrame == nil else {
+            phase = .failed("Turn LiDAR on (top bar) to scan.")
+            active = true
+            return
+        }
+        self.recorder = recorder
+        shots = []
+        lastShot = nil
+        lastTime = 0
+        triangles = 0
+        pictures = 0
+        phase = .scanning
+        active = true
+        skins = SCNNode()
+        recorder.modelsNode.addChildNode(skins)
+        recorder.frameTap = { [weak self] frame in self?.handle(frame) }
         Diagnostics.log("Free scan started")
     }
 
-    func stop() {
-        view.session.pause()
-    }
-
-    // MARK: Frames
-
-    /// ARSCNView is its own session delegate, so frames are read here.
-    nonisolated func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated {
-                if let frame = self.view.session.currentFrame { self.handle(frame) }
-            }
-        }
+    /// Leaves the scan screen; the scanned model (if any) was saved to Files already.
+    func close() {
+        recorder?.frameTap = nil
+        skins.removeFromParentNode()
+        skins = SCNNode()
+        shots = []
+        active = false
     }
 
     private func handle(_ frame: ARFrame) {
@@ -107,41 +117,13 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
             of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [key: 0.8])
         else { return nil }
         var shot = Shot(jpeg: jpeg, transform: frame.camera.transform)
-        // Intrinsics are for the full-size picture; depth pixels map onto it by proportion.
-        let k = frame.camera.intrinsics
-        let fx = k[0][0], fy = k[1][1], cx = k[2][0], cy = k[2][1]
-        let imageWidth = Float(fullWidth), imageHeight = Float(fullHeight)
-        let step = Self.step
-        let columns = (depth.width - 1) / step + 1, rows = (depth.height - 1) / step + 1
-        var grid = [Int32](repeating: -1, count: columns * rows)
-        for r in 0..<rows {
-            for c in 0..<columns {
-                let i = min(c * step, depth.width - 1), j = min(r * step, depth.height - 1)
-                let d = depth.values[j * depth.width + i]
-                guard d.isFinite, (0.15...5).contains(d) else { continue }
-                let u = (Float(i) + 0.5) / Float(depth.width) * imageWidth
-                let v = (Float(j) + 0.5) / Float(depth.height) * imageHeight
-                let local = SIMD4((u - cx) / fx * d, -(v - cy) / fy * d, -d, 1)
-                let w = frame.camera.transform * local
-                grid[r * columns + c] = Int32(shot.vertices.count)
-                shot.vertices.append(SIMD3(w.x, w.y, w.z))
-                shot.uvs.append(SIMD2(u / imageWidth, v / imageHeight))
-            }
-        }
-        func depthAt(_ c: Int, _ r: Int) -> Float {
-            depth.values[min(r * step, depth.height - 1) * depth.width + min(c * step, depth.width - 1)]
-        }
-        for r in 0..<rows - 1 {
-            for c in 0..<columns - 1 {
-                let a = grid[r * columns + c], b = grid[r * columns + c + 1]
-                let d = grid[(r + 1) * columns + c], e = grid[(r + 1) * columns + c + 1]
-                guard a >= 0, b >= 0, d >= 0, e >= 0 else { continue }
-                let ds = [depthAt(c, r), depthAt(c + 1, r), depthAt(c, r + 1), depthAt(c + 1, r + 1)]
-                // No skin across a jump between a near thing and a far one.
-                guard let low = ds.min(), let high = ds.max(), high - low < 0.04 + 0.06 * low else { continue }
-                shot.indices.append(contentsOf: [UInt32(a), UInt32(d), UInt32(b), UInt32(b), UInt32(d), UInt32(e)])
-            }
-        }
+        let mesh = DepthMesh.build(
+            depth: depth.values, width: depth.width, height: depth.height, camera: frame.camera.transform,
+            intrinsics: frame.camera.intrinsics, imageWidth: Float(fullWidth), imageHeight: Float(fullHeight),
+            step: Self.step)
+        shot.vertices = mesh.vertices
+        shot.uvs = mesh.uvs
+        shot.indices = mesh.indices
         return shot.indices.isEmpty ? nil : shot
     }
 
@@ -169,14 +151,14 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
         let node = SCNNode()
         node.addChildNode(SCNNode(geometry: skin))
         node.addChildNode(SCNNode(geometry: wire))
-        view.scene.rootNode.addChildNode(node)
+        skins.addChildNode(node)
     }
 
     // MARK: Finish
 
     func finish() {
         guard phase == .scanning else { return }
-        view.session.pause()
+        recorder?.frameTap = nil
         guard !shots.isEmpty else {
             phase = .failed("Nothing was scanned. Walk slowly round the object with the phone 0.5 to 3 m away until the blue skin covers it.")
             return
@@ -240,71 +222,45 @@ final class FreeScanner: NSObject, ObservableObject, ARSCNViewDelegate {
     }
 }
 
-private struct FreeScanCamera: UIViewRepresentable {
-    let scanner: FreeScanner
-    func makeUIView(context: Context) -> ARSCNView { scanner.view }
-    func updateUIView(_ view: ARSCNView, context: Context) {}
-}
-
-struct FreeScanView: View {
+/// The scan controls, over the camera view: Cancel and a count on top, Finish, then Place.
+struct FreeScanOverlay: View {
+    @ObservedObject var scanner: FreeScanner
     /// Called with the finished USDZ when the person taps Place.
     let place: (URL) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @StateObject private var scanner = FreeScanner()
 
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            if scanner.phase == .scanning {
-                FreeScanCamera(scanner: scanner).ignoresSafeArea()
-            }
-            VStack {
+        if scanner.active {
+            VStack(spacing: 10) {
                 HStack {
-                    Button("Cancel") {
-                        scanner.stop()
-                        dismiss()
-                    }
-                    .padding(10)
+                    Button("Cancel") { scanner.close() }
                     Spacer()
                     if scanner.phase == .scanning {
                         Text("\(scanner.triangles / 1000)k triangles · \(scanner.pictures) pictures")
                             .font(.footnote.monospacedDigit())
-                            .padding(10)
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 108)
+                switch scanner.phase {
+                case .scanning:
+                    Text("Walk slowly round it. The blue skin shows what is covered.").font(.footnote)
+                    pill("Finish") { scanner.finish() }
+                case .building:
+                    ProgressView()
+                    Text("Joining the pictures and saving…").font(.subheadline)
+                case .done(let url):
+                    Text("Saved in Files > Reset > Scans").font(.footnote)
+                    pill("Place in the camera") {
+                        place(url)
+                        scanner.close()
+                    }
+                case .failed(let message):
+                    Text(message).font(.subheadline).multilineTextAlignment(.center).padding(.horizontal, 20)
+                }
                 Spacer()
-                controls.padding(.bottom, 30)
             }
             .foregroundStyle(.white)
             .shadow(color: .black.opacity(0.8), radius: 2)
-        }
-        .preferredColorScheme(.dark)
-        .onAppear { scanner.start() }
-        .onDisappear { scanner.stop() }
-    }
-
-    @ViewBuilder private var controls: some View {
-        switch scanner.phase {
-        case .scanning:
-            VStack(spacing: 10) {
-                Text("Walk slowly round it. The blue skin shows what is covered.").font(.footnote)
-                pill("Finish") { scanner.finish() }
-            }
-        case .building:
-            VStack(spacing: 10) {
-                ProgressView()
-                Text("Joining the pictures and saving…").font(.subheadline)
-            }
-        case .done(let url):
-            VStack(spacing: 10) {
-                Text("Saved in Files > Reset > Scans").font(.footnote)
-                pill("Place in the camera") {
-                    place(url)
-                    dismiss()
-                }
-            }
-        case .failed(let message):
-            Text(message).font(.subheadline).multilineTextAlignment(.center).padding()
         }
     }
 

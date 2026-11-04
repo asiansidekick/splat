@@ -1054,7 +1054,7 @@ final class CameraViewHolder {
 /// tap to stop and save.
 struct CaptureStage: View {
     @State private var scanningObject = false
-    @State private var freeScanning = false
+    @StateObject private var freeScanner = FreeScanner()
     @StateObject private var recorder = Recorder()
     let scene: String
     let setup: String
@@ -1099,8 +1099,7 @@ struct CaptureStage: View {
                     Menu {
                         if FreeScanner.supported {
                             Button {
-                                recorder.beginObjectScan()
-                                freeScanning = true
+                                freeScanner.start(recorder)
                             } label: { Label("Scan freely", systemImage: "camera.metering.matrix") }
                         }
                         if ObjectScanner.supported {
@@ -1202,9 +1201,7 @@ struct CaptureStage: View {
         .fileImporter(isPresented: $importingModels, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { recorder.placer.add(from: urls) }
         }
-        .fullScreenCover(isPresented: $freeScanning, onDismiss: { recorder.endObjectScan() }) {
-            FreeScanView { recorder.placer.add(from: [$0]) }
-        }
+        .overlay { FreeScanOverlay(scanner: freeScanner) { recorder.placer.add(from: [$0]) } }
         .fullScreenCover(isPresented: $scanningObject, onDismiss: { recorder.endObjectScan() }) {
             ObjectScanView { recorder.placer.add(from: [$0]) }
         }

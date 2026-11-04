@@ -998,6 +998,55 @@ func testFeatureTrack() {
     expect(FeatureTrack.depthAlong(o1: o1, d1: d1, o2: o2, d2: skew, minAngle: 0.05, maxGap: 0.01) == nil, "rays that miss each other are refused")
 }
 
+func testDepthMesh() {
+    // A wall 2 m ahead of an identity camera; 64x48 depth, picture 640x480, fx=fy=500, centre 320,240.
+    let k = simd_float3x3(columns: (SIMD3(500, 0, 0), SIMD3(0, 500, 0), SIMD3(320, 240, 1)))
+    var depth = [Float](repeating: 2, count: 64 * 48)
+    let wall = DepthMesh.build(depth: depth, width: 64, height: 48, camera: matrix_identity_float4x4, intrinsics: k,
+                               imageWidth: 640, imageHeight: 480, step: 3)
+    expect(wall.vertices.count == 22 * 16, "every third pixel is a vertex (\(wall.vertices.count))")
+    expect(wall.vertices.allSatisfy { abs($0.z + 2) < 1e-4 }, "the wall is 2 m in front of the camera (-z)")
+    expect(wall.indices.count == 21 * 15 * 6, "a flat wall is all triangles (\(wall.indices.count))")
+    expect(wall.indices.allSatisfy { Int($0) < wall.vertices.count }, "indices stay inside the vertices")
+    expect(wall.uvs.allSatisfy { $0.x >= 0 && $0.x <= 1 && $0.y >= 0 && $0.y <= 1 }, "texture coordinates stay inside the picture")
+    // A pixel to the right of the middle is to the +x side, one lower on the picture is -y (up is +y).
+    let right = zip(wall.vertices, wall.uvs).first { $0.1.x > 0.9 && abs($0.1.y - 0.5) < 0.05 }
+    expect((right?.0.x ?? -1) > 0.5, "right side of the picture is +x")
+    let bottom = zip(wall.vertices, wall.uvs).first { $0.1.y > 0.9 && abs($0.1.x - 0.5) < 0.05 }
+    expect((bottom?.0.y ?? 1) < -0.5, "bottom of the picture is -y")
+    // Real size: the picture is 640 px wide at 500 px focal length, so 2 m away it spans 2.56 m.
+    let xs = wall.vertices.map(\.x)
+    expect(abs((xs.max()! - xs.min()!) - 2.56 * 21 / 21.3) < 0.1, "width is true to scale")
+    // A moved camera: 1 m to the right puts the wall 1 m to the right.
+    var moved = matrix_identity_float4x4
+    moved.columns.3 = SIMD4(1, 0, 0, 1)
+    let shifted = DepthMesh.build(depth: depth, width: 64, height: 48, camera: moved, intrinsics: k,
+                                  imageWidth: 640, imageHeight: 480, step: 3)
+    expect(abs(shifted.vertices[0].x - wall.vertices[0].x - 1) < 1e-4, "the camera's place is applied")
+    // A step in the wall (near half 1 m, far half 3 m): no triangles across the jump.
+    for j in 0..<48 { for i in 32..<64 { depth[j * 64 + i] = 3 } }
+    for j in 0..<48 { for i in 0..<32 { depth[j * 64 + i] = 1 } }
+    let jump = DepthMesh.build(depth: depth, width: 64, height: 48, camera: matrix_identity_float4x4, intrinsics: k,
+                               imageWidth: 640, imageHeight: 480, step: 3)
+    expect(jump.indices.count < wall.indices.count, "the jump is left open")
+    for t in 0..<jump.indices.count / 3 {
+        let zs = (0..<3).map { jump.vertices[Int(jump.indices[t * 3 + $0])].z }
+        expect(zs.max()! - zs.min()! < 0.5, "no triangle spans near and far")
+    }
+    // Missing depth leaves holes; bad inputs give nothing.
+    var holes = [Float](repeating: 2, count: 64 * 48)
+    for j in 0..<48 { for i in 0..<64 { if i < 30 { holes[j * 64 + i] = 0 } } }
+    let holey = DepthMesh.build(depth: holes, width: 64, height: 48, camera: matrix_identity_float4x4, intrinsics: k,
+                                imageWidth: 640, imageHeight: 480, step: 3)
+    expect(holey.vertices.count < wall.vertices.count && !holey.indices.isEmpty, "zero depth is skipped")
+    expect(DepthMesh.build(depth: [], width: 64, height: 48, camera: matrix_identity_float4x4, intrinsics: k,
+                           imageWidth: 640, imageHeight: 480, step: 3).indices.isEmpty, "short depth gives nothing")
+    let nan = DepthMesh.build(depth: [Float](repeating: .nan, count: 64 * 48), width: 64, height: 48,
+                              camera: matrix_identity_float4x4, intrinsics: k, imageWidth: 640, imageHeight: 480, step: 3)
+    expect(nan.vertices.isEmpty, "NaN depth gives nothing")
+}
+
+testDepthMesh()
 testDepthBuffers()
 testMiddleDepth()
 testPlaneDepth()

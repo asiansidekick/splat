@@ -285,7 +285,11 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         if abs(next - scanProgress) > 0.01 { scanProgress = next }
     }
 
+    /// Something else (a free scan) that wants every camera frame.
+    var frameTap: ((ARFrame) -> Void)?
+
     private func handle(_ frame: ARFrame) {
+        frameTap?(frame)
         let isNormal: Bool
         if case .normal = frame.camera.trackingState { isNormal = true } else { isNormal = false }
         if trackingNormal != isNormal { trackingNormal = isNormal }
