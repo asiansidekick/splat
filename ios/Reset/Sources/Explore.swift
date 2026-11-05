@@ -134,7 +134,7 @@ struct ExploreView: View {
             }
             VStack {
                 HStack(spacing: 14) {
-                    Button("Done") { dismiss() }.font(.body.weight(.semibold))
+                    Button("Done") { dismiss() }.font(.body.weight(.semibold)).lineLimit(1).fixedSize()
                     Spacer()
                     Button { jump(-1) } label: { Image(systemName: "chevron.left").frame(width: 34, height: 34) }
                     Text("From frame \(frameIndex + 1)").font(.footnote.weight(.semibold)).monospacedDigit()

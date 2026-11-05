@@ -82,38 +82,55 @@ struct FrameReview: View {
         }
     }
 
+    /// Two rows so nothing is squeezed: Done and the frame pager on top, the tools underneath.
     private var topBar: some View {
-        HStack(spacing: 14) {
-            Button("Done") { dismiss() }
-                .font(.body.weight(.semibold))
-            Spacer()
-            Button { move(-1) } label: { Image(systemName: "chevron.left").frame(width: 36, height: 36) }
-                .disabled(index == 0)
-            VStack(spacing: 0) {
-                Text("Frame \(index + 1) of \(frames.count)").font(.subheadline.weight(.semibold)).monospacedDigit()
-                if index >= reference.keyframes.count { Text("Snapshot").font(.caption2).foregroundStyle(.secondary) }
+        VStack(spacing: 2) {
+            ZStack {
+                HStack(spacing: 4) {
+                    Button { move(-1) } label: { Image(systemName: "chevron.left").frame(width: 40, height: 40) }
+                        .disabled(index == 0)
+                    VStack(spacing: 0) {
+                        Text("Frame \(index + 1) of \(frames.count)")
+                            .font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).fixedSize()
+                        if index >= reference.keyframes.count {
+                            Text("Snapshot").font(.caption2).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                        }
+                    }
+                    .frame(minWidth: 96)
+                    Button { move(1) } label: { Image(systemName: "chevron.right").frame(width: 40, height: 40) }
+                        .disabled(index >= frames.count - 1)
+                }
+                HStack {
+                    Button { dismiss() } label: {
+                        Text("Done").font(.body.weight(.semibold)).lineLimit(1).fixedSize()
+                            .padding(.horizontal, 14).frame(height: 40)
+                            .background(Capsule().fill(Color.white.opacity(0.18)))
+                    }
+                    Spacer(minLength: 0)
+                }
             }
-            Button { move(1) } label: { Image(systemName: "chevron.right").frame(width: 36, height: 36) }
-                .disabled(index >= frames.count - 1)
-            Spacer()
-            Button { exploring = true } label: { Image(systemName: "view.3d").frame(width: 30, height: 36) }
-                .accessibilityLabel("Fly through in 3D")
-            Button {
-                editingModels.toggle()
-                if editingModels { measurer.deselect() } else { placer.selectedModel = nil }
-            } label: {
-                Image(systemName: editingModels ? "cube.fill" : "cube").frame(width: 30, height: 36)
+            HStack(spacing: 22) {
+                Button { exploring = true } label: { Image(systemName: "view.3d").frame(width: 40, height: 36) }
+                    .accessibilityLabel("Fly through in 3D")
+                Button {
+                    editingModels.toggle()
+                    if editingModels { measurer.deselect() } else { placer.selectedModel = nil }
+                } label: {
+                    Image(systemName: editingModels ? "cube.fill" : "cube").frame(width: 40, height: 36)
+                }
+                .tint(editingModels ? .yellow : nil)
+                .accessibilityLabel(editingModels ? "Back to dimensions and notes" : "Place 3D models")
+                if editingModels {
+                    Button { importingModel = true } label: { Image(systemName: "plus").frame(width: 40, height: 36) }
+                        .accessibilityLabel("Add a 3D model")
+                }
+                Button { measurer.scaleText(by: 0.8) } label: { Text("A").font(.footnote.weight(.bold)).frame(width: 40, height: 36) }
+                    .accessibilityLabel("Smaller text")
+                Button { measurer.scaleText(by: 1.25) } label: { Text("A").font(.title3.weight(.bold)).frame(width: 40, height: 36) }
+                    .accessibilityLabel("Bigger text")
             }
-            .tint(editingModels ? .yellow : nil)
-            .accessibilityLabel(editingModels ? "Back to dimensions and notes" : "Place 3D models")
-            if editingModels {
-                Button { importingModel = true } label: { Image(systemName: "plus").frame(width: 30, height: 36) }
-                    .accessibilityLabel("Add a 3D model")
-            }
-            Button { measurer.scaleText(by: 0.8) } label: { Text("A").font(.footnote.weight(.bold)).frame(width: 30, height: 36) }
-            Button { measurer.scaleText(by: 1.25) } label: { Text("A").font(.title3.weight(.bold)).frame(width: 30, height: 36) }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .foregroundStyle(.white)
     }
