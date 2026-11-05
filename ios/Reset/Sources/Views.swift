@@ -75,6 +75,8 @@ struct CameraHome: View {
     @AppStorage("saveToPhotos") private var saveToPhotos = true
     /// The newest reference jiggles after it is recorded, to say "load me" (Phil, 2026-11-05).
     @State private var nudgeLoad = false
+    /// Whether anything has been saved since the app opened, for the "not saved yet" reminder.
+    @State private var anySaved = false
     @State private var nudgeTask: Task<Void, Never>?
 
     enum Panel: Identifiable {
@@ -182,6 +184,15 @@ struct CameraHome: View {
             nextScene = Slate.currentScene(in: references)
             nextSetup = Slate.nextSetup(scene: nextScene, in: references)
             if !seenHelp { panel = .help }
+            Task {
+                // Nothing is saved until the shutter: say so if the camera has just sat there.
+                try? await Task.sleep(for: .seconds(14))
+                let shown = UserDefaults.standard.integer(forKey: "tip.unsaved")
+                if panel == nil, !anySaved, shown < 3 {
+                    UserDefaults.standard.set(shown + 1, forKey: "tip.unsaved")
+                    show("Nothing is saved until you tap the shutter.", seconds: 5)
+                }
+            }
             if let warning = InstallExpiry.warning {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { show(warning, seconds: 8) }
             }
@@ -205,7 +216,7 @@ struct CameraHome: View {
                 .modifier(LoadNudge(active: nudgeLoad))
                 .overlay(alignment: .bottom) {
                     Text(nudgeLoad ? "Tap to load" : "Reference")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(nudgeLoad ? Color.yellow : Color.white)
                         .shadow(color: .black.opacity(0.9), radius: 2)
                         .lineLimit(1)
@@ -261,6 +272,7 @@ struct CameraHome: View {
 
     private func saved(_ reference: Reference) {
         references.insert(reference, at: 0)
+        anySaved = true
         startNudge()
         Haptics.success()
         show("Saved \(reference.slate.isEmpty ? "reference" : reference.slate)")
@@ -669,7 +681,7 @@ struct SideButton: View {
                     .font(.title3)
                     .frame(width: 50, height: 50)
                     .background(Color.white.opacity(0.15), in: Circle())
-                Text(title).font(.caption2.bold()).lineLimit(1).minimumScaleFactor(0.7)
+                Text(title).font(.caption.bold()).lineLimit(1).minimumScaleFactor(0.7)
             }
             .foregroundStyle(tint)
         }
@@ -800,7 +812,7 @@ struct ReferenceThumbnail: View {
                         .font(.system(size: max(14, size * (size >= 100 ? 0.2 : 0.32)), weight: .heavy).monospacedDigit())
                     if size >= 100 {
                         Spacer(minLength: 0)
-                        Text(timestamp(reference.created)).font(.system(size: 11).monospacedDigit())
+                        Text(timestamp(reference.created)).font(.system(size: 13).monospacedDigit())
                     }
                 }
                 .lineLimit(1)
@@ -1521,6 +1533,8 @@ struct ResetStage: View {
     @State private var tagsValue: Double?
     /// The little swipe demonstration shown when a reference loads.
     @State private var showSwipeHint = true
+    /// A one-time tip near the top (edge guides, pause, first measurement), gone after nine seconds.
+    @State private var tip: String?
     @State private var tagsTask: Task<Void, Never>?
     /// While paused: 0 shows the reference, 1 the frozen live picture.
     @State private var toNow = 1.0
@@ -1587,6 +1601,9 @@ struct ResetStage: View {
         }
         .onReceive(restorer.measurer.$active) { measuring = $0 }
         .onReceive(restorer.measurer.$revision.dropFirst()) { _ in
+            if !restorer.measurer.measurements.isEmpty {
+                showTip("Tap A4 or Tape in the ruler bar to make sizes exact. Hold a line's end, then drag, to move it.", key: "tip.measure")
+            }
             reference.measurements = restorer.measurer.measurements
             reference.notes = restorer.measurer.notes
             reference.removedMarks = restorer.measurer.removed
@@ -1595,7 +1612,15 @@ struct ResetStage: View {
         .onChange(of: reference.measurements) { _, _ in followSyncedMarks() }
         .onChange(of: reference.notes) { _, _ in followSyncedMarks() }
         .onChange(of: restorer.paused) { _, paused in
-            if paused { restorer.measurer.active = false }
+            if paused {
+                restorer.measurer.active = false
+                showTip("Paused. Swipe left or right to compare THEN and NOW. Tap the same button to carry on.", key: "tip.pause")
+            }
+        }
+        .onChange(of: restorer.status) { _, status in
+            if status == .ready, !reference.photoOnly {
+                showTip("Move or turn the phone until all four edge marks go green.", key: "tip.guides")
+            }
         }
         .onChange(of: restorer.matched) { _, matched in
             if matched { Diagnostics.log("Edge guides all seated") }
@@ -1611,6 +1636,17 @@ struct ResetStage: View {
         .onDisappear {
             tapCatcher.remove()
             restorer.stop()
+        }
+    }
+
+    /// Shows a tip once ever (per key), for nine seconds.
+    private func showTip(_ text: String, key: String) {
+        guard !UserDefaults.standard.bool(forKey: key), tip == nil else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        withAnimation(.snappy) { tip = text }
+        Task {
+            try? await Task.sleep(for: .seconds(9))
+            withAnimation(.snappy) { if tip == text { tip = nil } }
         }
     }
 
@@ -1778,10 +1814,17 @@ struct ResetStage: View {
                     if let headline, !restorer.paused {
                         Banner(text: headline)
                     }
+                    if let tip {
+                        Banner(text: tip, fadesAfter: 8)
+                            .transition(.opacity)
+                    }
                     Spacer()
                     if showSwipeHint, !restorer.paused, reference.models.isEmpty, !measuring, ghostShown {
                         SwipeHint()
                             .transition(.opacity)
+                    }
+                    if !showSwipeHint, !swipingStrength, !restorer.paused, reference.models.isEmpty, !measuring, ghostShown {
+                        StrengthIndicator(value: 1 - ghostOpacity)
                     }
                     if restorer.paused {
                         ScrubCursor(value: toNow, start: "THEN", end: "NOW")

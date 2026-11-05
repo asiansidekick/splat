@@ -12,6 +12,7 @@ enum PhotoLibrary {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else {
             Diagnostics.log("Photos: no permission to add (\(status.rawValue))")
+            await MainActor.run { SettingsPrompt.photos() }
             return false
         }
         do {

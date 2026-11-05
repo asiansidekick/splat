@@ -41,7 +41,8 @@ struct FrameReview: View {
                 topBar
                 if frames.indices.contains(index) {
                     FramePage(frame: frames[index], folder: folder, measurer: measurer,
-                              stage: stage, placer: placer, editingModels: editingModels, panMode: !measuring && !editingModels)
+                              stage: stage, placer: placer, editingModels: editingModels, panMode: !measuring && !editingModels,
+                              onPickMark: { measuring = true })
                         .id(frames[index].id)
                 } else {
                     Spacer()
@@ -95,7 +96,7 @@ struct FrameReview: View {
                         Text("Frame \(index + 1) of \(frames.count)")
                             .font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).fixedSize()
                         if index >= reference.keyframes.count {
-                            Text("Snapshot").font(.caption2).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                            Text("Snapshot").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
                         }
                     }
                     .frame(minWidth: 96)
@@ -211,10 +212,10 @@ struct FrameThumb: View {
             } else {
                 Color.white.opacity(0.1)
             }
-            Text("\(number)").font(.caption2.weight(.bold)).monospacedDigit()
+            Text("\(number)").font(.caption.weight(.bold)).monospacedDigit()
                 .padding(.horizontal, 4).background(Color.black.opacity(0.6)).foregroundStyle(.white)
             if frame.depthFile == nil {
-                Image(systemName: "ruler").font(.caption2).foregroundStyle(.white.opacity(0.7))
+                Image(systemName: "ruler").font(.caption).foregroundStyle(.white.opacity(0.7))
                     .overlay(Rectangle().fill(Color.white.opacity(0.7)).frame(height: 1).rotationEffect(.degrees(-35)))
                     .padding(3).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
@@ -283,6 +284,8 @@ struct FramePage: View {
     let placer: ModelPlacer
     let editingModels: Bool
     var panMode = false
+    /// Called when a tap in zoom mode lands on a mark: the screen switches to measuring so it can be edited.
+    var onPickMark: () -> Void = {}
 
     private struct Loaded: @unchecked Sendable {
         let image: UIImage
@@ -347,7 +350,18 @@ struct FramePage: View {
                         guard !pinching else { return }
                         pan = clamped(CGSize(width: basePan.width + value.translation.width, height: basePan.height + value.translation.height), zoom: zoom, size: size)
                     }
-                    .onEnded { _ in basePan = pan },
+                    .onEnded { value in
+                        basePan = pan
+                        // A tap, not a drag: if it lands on a mark, switch to measuring and open the mark.
+                        if hypot(value.translation.width, value.translation.height) < 6 {
+                            let centre = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                            let local = CGPoint(
+                                x: (value.location.x - centre.x - pan.width) / zoom + size.width / 2,
+                                y: (value.location.y - centre.y - pan.height) / zoom + size.height / 2)
+                            tap(local, size: size)
+                            if measurer.selected != nil { onPickMark() }
+                        }
+                    },
                 including: panMode ? .all : .none
             )
             .overlay(alignment: .topTrailing) {

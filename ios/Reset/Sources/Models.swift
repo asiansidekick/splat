@@ -409,7 +409,7 @@ struct ModelOverlay: View {
         Group {
             if let name = placer.selectedModelName {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(placer.lifting ? "\(name): drag up or down to lift it" : "\(name): drag to move (it stands on surfaces), pinch to scale, twist to turn").font(.caption2)
+                    Text(placer.lifting ? "\(name): drag up or down to lift it" : "\(name): drag to move (it stands on surfaces), pinch to scale, twist to turn").font(.caption)
                     Text("W × D × H  \(placer.sizeText)").font(.caption.bold().monospacedDigit())
                     HStack {
                         Button {

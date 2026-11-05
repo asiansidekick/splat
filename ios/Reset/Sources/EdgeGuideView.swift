@@ -286,7 +286,7 @@ struct ScrubCursor: View {
             .frame(width: 120)
             Text(end)
         }
-        .font(.caption2.bold())
+        .font(.caption.bold())
         .foregroundStyle(.white)
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -392,13 +392,13 @@ struct SwipeHint: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text("THEN").font(.caption2.weight(.heavy))
+            Text("THEN").font(.caption.weight(.heavy))
             Image(systemName: "chevron.left").font(.caption.weight(.bold))
             Image(systemName: "hand.point.up.fill")
                 .font(.title2)
                 .offset(x: slid ? 28 : -28)
             Image(systemName: "chevron.right").font(.caption.weight(.bold))
-            Text("NOW").font(.caption2.weight(.heavy))
+            Text("NOW").font(.caption.weight(.heavy))
         }
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.8), radius: 3)

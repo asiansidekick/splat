@@ -44,6 +44,10 @@ struct ReferenceSyncView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Label("Open Sync in Reset on every phone, close together, with the same passcode.", systemImage: "iphone.gen3.radiowaves.left.and.right")
+                        .font(.subheadline.weight(.semibold))
+                }
                 if let sync {
                     ReferenceSyncStatus(sync: sync)
                 } else {
