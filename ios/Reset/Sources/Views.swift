@@ -73,6 +73,9 @@ struct CameraHome: View {
     @State private var sharingPhoto: UIImage?
     @State private var sketching: UIImage?
     @AppStorage("saveToPhotos") private var saveToPhotos = true
+    /// The newest reference jiggles after it is recorded, to say "load me" (Phil, 2026-11-05).
+    @State private var nudgeLoad = false
+    @State private var nudgeTask: Task<Void, Never>?
 
     enum Panel: Identifiable {
         case takeLog(UUID), compare(UUID), review(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery, sharePhoto, sync, sketch
@@ -182,14 +185,21 @@ struct CameraHome: View {
     private var thumbnail: AnyView {
         AnyView(Button {
             Haptics.tap()
-            panel = .gallery
+            // Just recorded: one tap loads it, the next step anyone wants. Hold for all references.
+            if nudgeLoad, let newest = references.first {
+                endNudge()
+                selectedID = newest.id
+            } else {
+                panel = .gallery
+            }
         } label: {
             // The title hangs under the thumbnail so it stays level with the shutter.
             ReferenceThumbnail(reference: references.first, thumbnails: thumbnails, size: 50)
+                .modifier(LoadNudge(active: nudgeLoad))
                 .overlay(alignment: .bottom) {
-                    Text("Reference")
+                    Text(nudgeLoad ? "Tap to load" : "Reference")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(nudgeLoad ? Color.yellow : Color.white)
                         .shadow(color: .black.opacity(0.9), radius: 2)
                         .lineLimit(1)
                         .fixedSize()
@@ -197,7 +207,26 @@ struct CameraHome: View {
                 }
         }
         .buttonStyle(PressScale())
-        .accessibilityLabel("References"))
+        .contextMenu {
+            Button { endNudge(); panel = .gallery } label: { Label("All references", systemImage: "square.grid.2x2") }
+        }
+        .accessibilityLabel(nudgeLoad ? "Load the reference you just recorded" : "References"))
+    }
+
+    /// Starts the "load me" cue, which stops when tapped or after 20 seconds.
+    private func startNudge() {
+        nudgeTask?.cancel()
+        withAnimation(.snappy) { nudgeLoad = true }
+        nudgeTask = Task {
+            try? await Task.sleep(for: .seconds(20))
+            guard !Task.isCancelled else { return }
+            withAnimation(.snappy) { nudgeLoad = false }
+        }
+    }
+
+    private func endNudge() {
+        nudgeTask?.cancel()
+        withAnimation(.snappy) { nudgeLoad = false }
     }
 
     /// A binding to one reference that stays safe if the reference is deleted.
@@ -224,6 +253,7 @@ struct CameraHome: View {
 
     private func saved(_ reference: Reference) {
         references.insert(reference, at: 0)
+        startNudge()
         Haptics.success()
         show("Saved \(reference.slate.isEmpty ? "reference" : reference.slate)")
         nextSetup = Slate.nextSetup(scene: nextScene, in: references)
@@ -1170,6 +1200,9 @@ struct CaptureStage: View {
                     open(.nextSlate)
                 }
                 .disabled(recorder.capturing)
+                // A bump when the take number moves on, so the change is noticed.
+                .scaleEffect(justSaved ? 1.15 : 1, anchor: .leading)
+                .animation(.spring(duration: 0.35, bounce: 0.5), value: justSaved)
                 Spacer()
                 if Recorder.lidarAvailable {
                     TopPill(text: "LiDAR", systemImage: "dot.circle.viewfinder", highlighted: useLiDAR) {
@@ -1996,5 +2029,28 @@ struct GroupNameSheet: View {
         guard !trimmed.isEmpty else { return }
         onPick(trimmed)
         dismiss()
+    }
+}
+
+
+/// A gentle "tap me": the view grows a little and jiggles every second or so, with a yellow ring.
+/// With Reduce Motion on it only grows and glows, without the jiggle.
+struct LoadNudge: ViewModifier {
+    let active: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        if active {
+            content
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow, lineWidth: 3))
+                .shadow(color: .yellow.opacity(0.8), radius: 8)
+                .phaseAnimator(reduceMotion ? [0] : [0, -9, 9, -7, 7, 0, 0], content: { view, angle in
+                    view.rotationEffect(.degrees(Double(angle))).scaleEffect(1.25)
+                }, animation: { angle in
+                    angle == 0 ? .easeOut(duration: 0.7) : .easeInOut(duration: 0.08)
+                })
+        } else {
+            content
+        }
     }
 }
