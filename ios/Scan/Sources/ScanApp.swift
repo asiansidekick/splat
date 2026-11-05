@@ -6,7 +6,7 @@ import SwiftUI
 struct ScanApp: App {
     @StateObject private var model = ScanModel()
 
-    var body: some Scene {
+    var body: some SwiftUI.Scene {
         WindowGroup {
             ScanScreen()
                 .environmentObject(model)
