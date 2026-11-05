@@ -10,6 +10,8 @@ enum SceneCloud {
     struct Result: @unchecked Sendable {
         var positions: [SIMD3<Float>] = []
         var colours: [SIMD4<Float>] = []
+        /// Triangle corners (three per triangle) when this is a surface instead of loose points.
+        var indices: [UInt32] = []
         var framesUsed = 0
     }
 
@@ -62,6 +64,73 @@ enum SceneCloud {
         return result
     }
 
+    /// A solid, photo-coloured surface: every second depth reading becomes a corner and neighbouring corners
+    /// are joined into triangles unless depth jumps between them (the edge of a prop), so walls, floors and
+    /// furniture read as surfaces instead of a speckle of dots. Later frames skip patches an earlier one covered.
+    static func buildSurface(frames: [Keyframe], folder: URL, maxTriangles: Int = 2_500_000) -> Result {
+        var result = Result()
+        var covered = Set<UInt64>()
+        let voxel: Float = 0.03
+        func key(_ p: SIMD3<Float>) -> UInt64 {
+            let offset = Int64(1 << 20)
+            let x = UInt64(truncatingIfNeeded: Int64((p.x / voxel).rounded(.down)) + offset) & 0x1F_FFFF
+            let y = UInt64(truncatingIfNeeded: Int64((p.y / voxel).rounded(.down)) + offset) & 0x1F_FFFF
+            let z = UInt64(truncatingIfNeeded: Int64((p.z / voxel).rounded(.down)) + offset) & 0x1F_FFFF
+            return x << 42 | y << 21 | z
+        }
+        let step = 2
+        for frame in frames {
+            guard result.indices.count / 3 < maxTriangles, let depthFile = frame.depthFile, frame.depthWidth > 8, frame.depthHeight > 8,
+                  frame.imageWidth > 0, frame.imageHeight > 0, frame.intrinsics.count >= 9,
+                  let data = try? Data(contentsOf: folder.appendingPathComponent(depthFile)) else { continue }
+            let depth = DepthMap.floats(data)
+            let dw = frame.depthWidth, dh = frame.depthHeight
+            guard depth.count >= dw * dh,
+                  let rgba = colours(of: folder.appendingPathComponent(frame.imageFile), width: dw, height: dh) else { continue }
+            let k = frame.cameraIntrinsics
+            let pose = frame.cameraToWorld
+            let w = Float(frame.imageWidth), h = Float(frame.imageHeight)
+            let cols = (dw - 1) / step + 1, rows = (dh - 1) / step + 1
+            let base = UInt32(result.positions.count)
+            var valid = [Bool](repeating: false, count: cols * rows)
+            var grid = [SIMD3<Float>](repeating: .zero, count: cols * rows)
+            for gy in 0..<rows {
+                for gx in 0..<cols {
+                    let x = gx * step, y = gy * step
+                    let d = depth[y * dw + x]
+                    let i = (y * dw + x) * 4
+                    var position = SIMD3<Float>.zero
+                    if d.isFinite, d > 0.12, d < 5 {
+                        let u = (Float(x) + 0.5) / Float(dw) * w, v = (Float(y) + 0.5) / Float(dh) * h
+                        let world4 = pose * SIMD4((u - k[2][0]) / k[0][0] * d, -(v - k[2][1]) / k[1][1] * d, -d, 1)
+                        position = SIMD3(world4.x, world4.y, world4.z)
+                        valid[gy * cols + gx] = true
+                    }
+                    grid[gy * cols + gx] = position
+                    result.positions.append(position)
+                    result.colours.append(SIMD4(Float(rgba[i]) / 255, Float(rgba[i + 1]) / 255, Float(rgba[i + 2]) / 255, 1))
+                }
+            }
+            var used = false
+            for gy in 0..<(rows - 1) {
+                for gx in 0..<(cols - 1) {
+                    let a = gy * cols + gx, b = a + 1, c = a + cols, e = c + 1
+                    guard valid[a], valid[b], valid[c], valid[e] else { continue }
+                    let ds = [depth[gy * step * dw + gx * step], depth[gy * step * dw + (gx + 1) * step],
+                              depth[(gy + 1) * step * dw + gx * step], depth[(gy + 1) * step * dw + (gx + 1) * step]]
+                    let low = ds.min() ?? 0, high = ds.max() ?? 0
+                    guard high - low < 0.03 + 0.05 * low else { continue }
+                    guard covered.insert(key((grid[a] + grid[e]) / 2)).inserted else { continue }
+                    result.indices.append(contentsOf: [base + UInt32(a), base + UInt32(c), base + UInt32(b),
+                                                       base + UInt32(b), base + UInt32(c), base + UInt32(e)])
+                    used = true
+                }
+            }
+            if used { result.framesUsed += 1 }
+        }
+        return result
+    }
+
     /// The photo shrunk to the depth map's size, as RGBA bytes, top row first.
     private static func colours(of url: URL, width: Int, height: Int) -> [UInt8]? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
@@ -80,6 +149,25 @@ enum SceneCloud {
             return true
         }
         return ok ? bytes : nil
+    }
+
+    /// A SceneKit triangle surface for `buildSurface`, coloured at each corner.
+    static func surfaceGeometry(_ surface: Result) -> SCNGeometry? {
+        let count = surface.positions.count
+        guard count > 0, surface.indices.count >= 3 else { return nil }
+        let vertices = surface.positions.withUnsafeBytes { Data($0) }
+        let colours = surface.colours.withUnsafeBytes { Data($0) }
+        let positionSource = SCNGeometrySource(data: vertices, semantic: .vertex, vectorCount: count, usesFloatComponents: true,
+                                               componentsPerVector: 3, bytesPerComponent: 4, dataOffset: 0, dataStride: MemoryLayout<SIMD3<Float>>.stride)
+        let colourSource = SCNGeometrySource(data: colours, semantic: .color, vectorCount: count, usesFloatComponents: true,
+                                             componentsPerVector: 4, bytesPerComponent: 4, dataOffset: 0, dataStride: MemoryLayout<SIMD4<Float>>.stride)
+        let element = SCNGeometryElement(indices: surface.indices, primitiveType: .triangles)
+        let geometry = SCNGeometry(sources: [positionSource, colourSource], elements: [element])
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.isDoubleSided = true
+        geometry.materials = [material]
+        return geometry
     }
 
     /// A SceneKit point cloud for the result.
@@ -196,13 +284,13 @@ final class ExploreScene: ObservableObject {
     func build() async -> SceneCloud.Result {
         let frames = reference.keyframes + reference.snapshots.map(\.frame)
         let folder = ReferenceStore.folder(for: reference.id)
-        let result = await Task.detached(priority: .userInitiated) { SceneCloud.build(frames: frames, folder: folder) }.value
-        if let geometry = SceneCloud.geometry(result) {
+        let result = await Task.detached(priority: .userInitiated) { SceneCloud.buildSurface(frames: frames, folder: folder) }.value
+        if let geometry = SceneCloud.surfaceGeometry(result) {
             let node = SCNNode(geometry: geometry)
             node.name = "cloud"
             scene.rootNode.addChildNode(node)
         }
-        Diagnostics.log("Explore: \(result.positions.count) points from \(result.framesUsed) of \(frames.count) frames")
+        Diagnostics.log("Explore: \(result.indices.count / 3) triangles from \(result.framesUsed) of \(frames.count) frames")
         return result
     }
 
