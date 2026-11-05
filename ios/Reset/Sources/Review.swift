@@ -18,8 +18,8 @@ struct FrameReview: View {
     @State private var editingModels = false
     @State private var importingModel = false
     @State private var exploring = false
-    /// Hand tool: one finger moves a zoomed photo instead of drawing.
-    @State private var panMode = false
+    /// Off (the default): pinch to zoom, one finger moves the photo. On: one finger draws dimensions and notes.
+    @State private var measuring = false
     @State private var index = 0
     @Environment(\.dismiss) private var dismiss
 
@@ -41,7 +41,7 @@ struct FrameReview: View {
                 topBar
                 if frames.indices.contains(index) {
                     FramePage(frame: frames[index], folder: folder, measurer: measurer,
-                              stage: stage, placer: placer, editingModels: editingModels, panMode: panMode)
+                              stage: stage, placer: placer, editingModels: editingModels, panMode: !measuring && !editingModels)
                         .id(frames[index].id)
                 } else {
                     Spacer()
@@ -112,11 +112,13 @@ struct FrameReview: View {
                 }
             }
             HStack(spacing: 22) {
-                Button { exploring = true } label: { Image(systemName: "view.3d").frame(width: 40, height: 36) }
-                    .accessibilityLabel("Fly through in 3D")
+                if ExploreView.offered {
+                    Button { exploring = true } label: { Image(systemName: "view.3d").frame(width: 40, height: 36) }
+                        .accessibilityLabel("Fly through in 3D")
+                }
                 Button {
                     editingModels.toggle()
-                    if editingModels { measurer.deselect(); panMode = false } else { placer.selectedModel = nil }
+                    if editingModels { measurer.deselect(); measuring = false } else { placer.selectedModel = nil }
                 } label: {
                     Image(systemName: editingModels ? "cube.fill" : "cube").frame(width: 40, height: 36)
                 }
@@ -126,11 +128,11 @@ struct FrameReview: View {
                     Button { importingModel = true } label: { Image(systemName: "plus").frame(width: 40, height: 36) }
                         .accessibilityLabel("Add a 3D model")
                 }
-                Button { panMode.toggle(); if panMode { editingModels = false } } label: {
-                    Image(systemName: panMode ? "hand.draw.fill" : "hand.draw").frame(width: 40, height: 36)
+                Button { measuring.toggle(); if measuring { editingModels = false } } label: {
+                    Image(systemName: measuring ? "ruler.fill" : "ruler").frame(width: 40, height: 36)
                 }
-                .tint(panMode ? .yellow : nil)
-                .accessibilityLabel(panMode ? "Back to measuring" : "Move the zoomed photo")
+                .tint(measuring ? .yellow : nil)
+                .accessibilityLabel(measuring ? "Back to zooming" : "Measure and add notes")
                 Button { measurer.scaleText(by: 0.8) } label: { Text("A").font(.footnote.weight(.bold)).frame(width: 40, height: 36) }
                     .accessibilityLabel("Smaller text")
                 Button { measurer.scaleText(by: 1.25) } label: { Text("A").font(.title3.weight(.bold)).frame(width: 40, height: 36) }
@@ -374,7 +376,7 @@ struct FramePage: View {
         if let message { return message }
         guard let loaded else { return nil }
         if loaded.depth == nil { return "No LiDAR depth in this frame: notes go in mid-air, and lines need a frame that has depth (marked in the strip)." }
-        return panMode ? "Pinch to zoom. Drag to move the photo." : "Pinch to zoom. Drag to measure. Hold to add a note. Hold a line's end, then drag it to move it. Tap a mark to edit."
+        return panMode ? "Pinch to zoom, drag to move. Tap the ruler to measure or add notes." : "Drag to measure. Hold to add a note. Hold a line's end, then drag it to move it. Tap a mark to edit."
     }
 
     private static func fit(aspect: CGFloat, in box: CGSize) -> CGSize {

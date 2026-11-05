@@ -196,6 +196,8 @@ enum SceneCloud {
 /// Fly through a reference as a 3D scene: one finger looks round, two fingers slide, pinch moves
 /// forward and back. The numbered buttons jump to where each frame was taken.
 struct ExploreView: View {
+    /// Parked (Phil, 2026-11-05): the fly-through is not good enough to ship, so it is hidden.
+    static let offered = false
     let reference: Reference
     @Environment(\.dismiss) private var dismiss
     @StateObject private var scene: ExploreScene

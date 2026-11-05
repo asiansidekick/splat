@@ -930,7 +930,7 @@ struct Gallery: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .overlay(alignment: .bottom) { Color.clear.frame(height: 1).holdHint("galleryPhoto", "Hold the photo for more", above: true, delay: 2).offset(y: -70) }
+            .overlay(alignment: .center) { Color.clear.frame(width: 1, height: 1).holdHint("galleryPhoto2", "Hold the photo for options", above: true, delay: 0.8) }
             filmstrip
             if let shown {
                 Button {
@@ -1087,7 +1087,9 @@ struct Gallery: View {
     @ViewBuilder
     private func menuItems(for reference: Reference) -> some View {
         Button { dismiss(); action(.takeLog, reference) } label: { Label("Take log", systemImage: "list.number") }
-        Button { dismiss(); action(.explore, reference) } label: { Label("Explore in 3D", systemImage: "view.3d") }
+        if ExploreView.offered {
+            Button { dismiss(); action(.explore, reference) } label: { Label("Explore in 3D", systemImage: "view.3d") }
+        }
         Button { dismiss(); action(.review, reference) } label: { Label("Review all frames", systemImage: "rectangle.stack") }
         Button { dismiss(); action(.compare, reference) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
         Button { dismiss(); action(.pdf, reference) } label: { Label("Share PDF report", systemImage: "square.and.arrow.up") }
@@ -1119,6 +1121,9 @@ struct GalleryPage: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
+            Label("Hold the photo for options", systemImage: "hand.tap")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.yellow)
         }
         .contentShape(Rectangle())
         .task(id: reference.id) {
@@ -1627,7 +1632,9 @@ struct ResetStage: View {
                 Button { open(.gallery) } label: { Label("References", systemImage: "photo.on.rectangle") }
                 Button { importingModel = true } label: { Label("Add 3D models (USDZ)", systemImage: "cube") }
                     .disabled(restorer.status != .ready)
-                Button { open(.explore(reference.id)) } label: { Label("Explore in 3D", systemImage: "view.3d") }
+                if ExploreView.offered {
+                    Button { open(.explore(reference.id)) } label: { Label("Explore in 3D", systemImage: "view.3d") }
+                }
                 Button { open(.review(reference.id)) } label: { Label("Review all frames", systemImage: "rectangle.stack") }
                 Button { open(.compare(reference.id)) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
                 Button { open(.takeLog(reference.id)) } label: { Label("Take log", systemImage: "list.number") }
