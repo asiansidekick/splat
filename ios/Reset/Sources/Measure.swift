@@ -98,6 +98,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// How much the phone's depth readings are stretched to agree with a real length typed in
     /// against a tape measure (Phil, 2026-10-31). 1 = as read.
     @Published private(set) var calibration = Measurer.depthScale
+    /// Place line ends with ARKit's own surface raycast, the way Apple's Measure does (Phil,
+    /// 2026-11-05), falling back to the LiDAR depth where ARKit finds no surface or disagrees with it.
+    static var useRaycast: Bool { UserDefaults.standard.object(forKey: "measureRaycast") as? Bool ?? true }
+
     static var depthScale: Float = UserDefaults.standard.object(forKey: "measureDepthScale") as? Float ?? 1
     /// The line or note tapped, ready to delete on its own.
     @Published private(set) var selected: UUID? {
@@ -687,6 +691,23 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         } else {
             planeNote = ", no flat plane (own depth at each end)"
             dragPlane = nil
+        }
+        if Measurer.useRaycast {
+            let inverse = frame.camera.transform.inverse
+            func along(_ p: SIMD3<Float>) -> Float { -(inverse * SIMD4(p, 1)).z }
+            if let ra = Measurer.raycastPoint(frame, session: session, normalized: a.normalized),
+               let rb = Measurer.raycastPoint(frame, session: session, normalized: b.normalized) {
+                let (da, db, xa, xb) = (along(a.point), along(b.point), along(ra), along(rb))
+                let agrees = abs(xa - da) / max(da, 0.1) < 0.35 && abs(xb - db) / max(db, 0.1) < 0.35
+                planeNote += String(format: ", ARKit raycast ends %.3f/%.3f m vs depth %.3f/%.3f m, %@", xa, xb, da, db, agrees ? "used" : "disagreed, depth kept")
+                if agrees {
+                    pa = ra
+                    pb = rb
+                    dragPlane = nil
+                }
+            } else {
+                planeNote += ", ARKit found no surface (depth used)"
+            }
         }
         dragSamples.append(DragLine(a: pa, b: pb))
         if dragSamples.count > 8 { dragSamples.removeFirst() }
@@ -1352,6 +1373,14 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let y = -(Float(n.y) * Float(size.height) - k[2][1]) / k[1][1]
         let world = frame.camera.transform * SIMD4(x * metres, y * metres, -metres, 1)
         return SIMD3(world.x, world.y, world.z)
+    }
+
+    /// Where a place in the camera picture meets a surface ARKit has found or estimates.
+    static func raycastPoint(_ frame: ARFrame, session: ARSession, normalized n: CGPoint) -> SIMD3<Float>? {
+        let query = frame.raycastQuery(from: n, allowing: .estimatedPlane, alignment: .any)
+        guard let hit = session.raycast(query).first else { return nil }
+        let p = hit.worldTransform.columns.3
+        return SIMD3(p.x, p.y, p.z)
     }
 
     /// Where the middle of the screen meets a surface ARKit has found or estimates.

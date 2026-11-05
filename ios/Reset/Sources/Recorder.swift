@@ -90,6 +90,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         measurer.load(measurements: [], notes: [], removed: [])
         try? FileManager.default.removeItem(at: Recorder.staging)
         let config = ARWorldTrackingConfiguration()
+        config.planeDetection = [.horizontal, .vertical]
         if useLiDAR && Recorder.lidarAvailable {
             config.frameSemantics.insert(.sceneDepth)
         }

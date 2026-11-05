@@ -5,6 +5,7 @@ struct HelpView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("saveToPhotos") private var saveToPhotos = true
     @AppStorage("leftHanded") private var leftHanded = false
+    @AppStorage("measureRaycast") private var measureRaycast = true
 
     var body: some View {
         NavigationStack {
@@ -45,6 +46,10 @@ struct HelpView: View {
                 Section("Controls") {
                     Toggle("Left-handed controls", isOn: $leftHanded)
                     step("hand.raised", "Puts the controls down the left edge when the phone is turned sideways, and swaps Pause and Log.")
+                }
+                Section("Measuring") {
+                    Toggle("Measure with ARKit surfaces", isOn: $measureRaycast)
+                    step("ruler", "On, line ends sit on the surfaces ARKit finds, as in Apple's Measure app, and fall back to the LiDAR depth where it finds none. Off, they use the LiDAR depth alone.")
                 }
                 Section("Photos") {
                     Toggle("Save shutter photos to Photos", isOn: $saveToPhotos)

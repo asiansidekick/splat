@@ -159,6 +159,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         if reference.photoOnly {
             // An imported photo has no room map: show it as the ghost over the live camera.
             let config = ARWorldTrackingConfiguration()
+            config.planeDetection = [.horizontal, .vertical]
             // Depth for measuring, even with no depth saved in the reference.
             if Recorder.lidarAvailable { config.frameSemantics.insert(.sceneDepth) }
             session.delegate = self
@@ -175,6 +176,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         do {
             let map = try ReferenceStore.loadWorldMap(for: reference.id)
             let config = ARWorldTrackingConfiguration()
+            config.planeDetection = [.horizontal, .vertical]
             config.initialWorldMap = map
             mapPoints = map.rawFeaturePoints.points
             // Depth for measuring, even with no depth saved in the reference.
