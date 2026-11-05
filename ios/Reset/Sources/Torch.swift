@@ -114,6 +114,7 @@ struct TorchButton: View {
                     if !torch.on { torch.set(on: true) }
                     torch.showDial()
                 }
+                .holdHint("torchDial", "Hold: brightness", delay: 3)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityLabel(torch.on ? "Torch off" : "Torch on")
         }

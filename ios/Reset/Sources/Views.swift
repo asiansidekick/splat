@@ -208,6 +208,7 @@ struct CameraHome: View {
                 }
         }
         .buttonStyle(PressScale())
+        .holdHint("captureThumb", "Hold: all references", above: true, delay: 4)
         .contextMenu {
             Button { endNudge(); panel = .gallery } label: { Label("All references", systemImage: "square.grid.2x2") }
         }
@@ -929,6 +930,7 @@ struct Gallery: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            .overlay(alignment: .bottom) { Color.clear.frame(height: 1).holdHint("galleryPhoto", "Hold the photo for more", above: true, delay: 2).offset(y: -70) }
             filmstrip
             if let shown {
                 Button {
@@ -1554,6 +1556,7 @@ struct ResetStage: View {
         }
         .modifier(WindowFrame { frame in tapCatcher.targets["Log"] = (frame, nil) })
         .shadow(color: .black.opacity(0.6), radius: 3)
+        .holdHint("logNote", "Hold: add a note", above: true, delay: 9)
         .contextMenu {
             Button { notingTake = newTake() } label: { Label("Log with a note", systemImage: "square.and.pencil") }
             Button { open(.takeLog(reference.id)) } label: { Label("Take log", systemImage: "list.number") }
@@ -1580,6 +1583,7 @@ struct ResetStage: View {
                     ghostShown.toggle()
                 }
                 .onLongPressGesture { open(.gallery) }
+                .holdHint("resetThumb", "Hold: all references", delay: 2.5)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityLabel(ghostShown ? "Hide the ghost" : "Show the ghost")
             TopPill(text: reference.slate.isEmpty ? "Take \(reference.nextTakeNumber)" : "\(reference.slate) · T\(reference.nextTakeNumber)") {
