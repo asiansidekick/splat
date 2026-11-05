@@ -365,6 +365,10 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             node.addChildNode(child)
         }
         let (low, high) = node.boundingBox
+        var geometries = 0
+        node.enumerateHierarchy { child, _ in if child.geometry != nil { geometries += 1 } }
+        Diagnostics.log(String(format: "Model loaded: %@, %d geometries, box %.2f x %.2f x %.2f m",
+                               model.name, geometries, high.x - low.x, high.y - low.y, high.z - low.z))
         boxes[model.id] = (SIMD3<Float>(low), SIMD3<Float>(high))
         node.simdTransform = matrix4(model.transform)
         root.addChildNode(node)

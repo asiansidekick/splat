@@ -234,7 +234,28 @@ final class FreeScanner: NSObject, ObservableObject {
         let scene = SCNScene()
         scene.rootNode.addChildNode(SCNNode(geometry: geometry))
         try? FileManager.default.removeItem(at: url)
-        return scene.write(to: url, options: nil, delegate: nil, progressHandler: nil)
+        guard scene.write(to: url, options: nil, delegate: nil, progressHandler: nil) else { return false }
+        return verify(url, expectedVertices: vertices.count)
+    }
+
+    /// Opens the saved file again, the way placing it will, and logs what is in it.
+    private nonisolated static func verify(_ url: URL, expectedVertices: Int) -> Bool {
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        guard let scene = try? SCNScene(url: url, options: nil) else {
+            Diagnostics.log("Free scan check: the saved file does not open (\(size) bytes)")
+            return false
+        }
+        var geometries = 0, textured = 0
+        scene.rootNode.enumerateHierarchy { node, _ in
+            guard let geometry = node.geometry else { return }
+            geometries += 1
+            textured += geometry.materials.filter { $0.diffuse.contents != nil }.count
+        }
+        let (low, high) = scene.rootNode.boundingBox
+        Diagnostics.log(String(
+            format: "Free scan check: %d bytes, %d geometries, %d textured materials, box %.2f x %.2f x %.2f m, %d vertices written",
+            size, geometries, textured, high.x - low.x, high.y - low.y, high.z - low.z, expectedVertices))
+        return geometries > 0
     }
 }
 
@@ -269,6 +290,14 @@ struct FreeScanOverlay: View {
                     pill("Place in the camera") {
                         place(url)
                         scanner.close()
+                    }
+                    ShareLink(item: url) {
+                        Label("Save to Files", systemImage: "square.and.arrow.up")
+                            .font(.headline)
+                            .padding(.horizontal, 22)
+                            .padding(.vertical, 12)
+                            .background(Color.white, in: Capsule())
+                            .foregroundStyle(.black)
                     }
                 case .failed(let message):
                     Text(message).font(.subheadline).multilineTextAlignment(.center).padding(.horizontal, 20)
