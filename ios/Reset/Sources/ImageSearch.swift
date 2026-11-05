@@ -41,7 +41,7 @@ enum SearchIndexer {
                     kCGImageSourceThumbnailMaxPixelSize: 1280,
                     kCGImageSourceCreateThumbnailWithTransform: false,
                   ] as CFDictionary) else { continue }
-            let handler = VNImageRequestHandler(cgImage: cg, orientation: CGImagePropertyOrientation(frame.uprightOrientation), options: [:])
+            let handler = VNImageRequestHandler(cgImage: cg, orientation: Self.orientation(frame.uprightOrientation), options: [:])
             let classify = VNClassifyImageRequest()
             let read = VNRecognizeTextRequest()
             read.recognitionLevel = .accurate
@@ -59,6 +59,20 @@ enum SearchIndexer {
         entry.text = words.sorted().joined(separator: " ")
         if let data = try? JSONEncoder().encode(entry) { try? data.write(to: url(for: reference.id), options: .atomic) }
         return entry
+    }
+
+    private static func orientation(_ o: UIImage.Orientation) -> CGImagePropertyOrientation {
+        switch o {
+        case .up: return .up
+        case .down: return .down
+        case .left: return .left
+        case .right: return .right
+        case .upMirrored: return .upMirrored
+        case .downMirrored: return .downMirrored
+        case .leftMirrored: return .leftMirrored
+        case .rightMirrored: return .rightMirrored
+        @unknown default: return .up
+        }
     }
 
     private static func spread<T>(_ items: [T], count: Int) -> [T] {
@@ -87,7 +101,7 @@ enum SearchIndexer {
 
     /// Whether every word typed is found in the reference's labels, text, slate, name, group or notes.
     static func matches(_ query: String, reference: Reference, entry: SearchEntry?) -> Bool {
-        var hay = [reference.scene, reference.setup, reference.name, reference.group, reference.label]
+        var hay = [reference.scene, reference.setup, reference.name, reference.group, reference.title]
         hay += reference.takes.map(\.note)
         hay += reference.notes.map(\.text)
         if let entry { hay += entry.labels; hay.append(entry.text) }
