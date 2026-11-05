@@ -325,7 +325,9 @@ struct CameraHome: View {
         nextSetup = Slate.nextSetup(scene: nextScene, in: references)
     }
 
-    private func show(_ message: String, seconds: Double = 2) {
+    private func show(_ message: String) { show(message, seconds: 2) }
+
+    private func show(_ message: String, seconds: Double) {
         toastTask?.cancel()
         withAnimation(.snappy) { toast = message }
         toastTask = Task {
