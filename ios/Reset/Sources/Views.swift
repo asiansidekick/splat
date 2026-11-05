@@ -926,6 +926,28 @@ struct Gallery: View {
         }
     }
 
+    /// Arrows at the sides so it is clear the pictures page sideways (swiping works too).
+    private var pageArrows: some View {
+        let position = ordered.firstIndex { $0.id == current } ?? 0
+        return HStack {
+            if position > 0 {
+                Button { withAnimation { current = ordered[position - 1].id } } label: { arrow("chevron.left") }
+            }
+            Spacer()
+            if position < ordered.count - 1 {
+                Button { withAnimation { current = ordered[position + 1].id } } label: { arrow("chevron.right") }
+            }
+        }
+        .padding(.horizontal, 6)
+    }
+
+    private func arrow(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 20, weight: .bold)).foregroundStyle(.white)
+            .frame(width: 40, height: 64)
+            .background(Capsule().fill(Color.black.opacity(0.45)))
+    }
+
     private var pager: some View {
         VStack(spacing: 12) {
             TabView(selection: $current) {
@@ -937,6 +959,17 @@ struct Gallery: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            .overlay(alignment: .topTrailing) {
+                if let position = ordered.firstIndex(where: { $0.id == current }), ordered.count > 1 {
+                    Text("\(position + 1) of \(ordered.count)")
+                        .font(.footnote.weight(.bold)).monospacedDigit().foregroundStyle(.white)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Capsule().fill(Color.black.opacity(0.6)))
+                        .padding(8)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay { pageArrows }
             .overlay(alignment: .center) { Color.clear.frame(width: 1, height: 1).holdHint("galleryPhoto2", "Hold the photo for options", above: true, delay: 0.8) }
             filmstrip
             if let shown {
@@ -1099,18 +1132,21 @@ struct Gallery: View {
         .accessibilityLabel("More")
     }
 
+    /// Short, one-line rows so the whole menu fits on screen without scrolling (Phil, 2026-11-05).
     @ViewBuilder
     private func menuItems(for reference: Reference) -> some View {
+        Button { dismiss(); action(.review, reference) } label: { Label("Review frames", systemImage: "rectangle.stack") }
+        Button { dismiss(); action(.sketch, reference) } label: { Label("Sketch", systemImage: "pencil.tip.crop.circle") }
+        Button { dismiss(); action(.slate, reference) } label: { Label("Edit slate", systemImage: "pencil") }
         Button { dismiss(); action(.takeLog, reference) } label: { Label("Take log", systemImage: "list.number") }
+        Button { dismiss(); action(.compare, reference) } label: { Label("Compare", systemImage: "rectangle.split.2x1") }
         if ExploreView.offered {
             Button { dismiss(); action(.explore, reference) } label: { Label("Explore in 3D", systemImage: "view.3d") }
         }
-        Button { dismiss(); action(.review, reference) } label: { Label("Review all frames", systemImage: "rectangle.stack") }
-        Button { dismiss(); action(.compare, reference) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
-        Button { dismiss(); action(.pdf, reference) } label: { Label("Share PDF report", systemImage: "square.and.arrow.up") }
-        Button { dismiss(); action(.photos, reference) } label: { Label("Save photos to Photos", systemImage: "photo.on.rectangle.angled") }
-        Button { dismiss(); action(.sketch, reference) } label: { Label("Sketch on the photo", systemImage: "pencil.tip.crop.circle") }
-        Button { dismiss(); action(.slate, reference) } label: { Label("Edit slate", systemImage: "pencil") }
+        Menu {
+            Button { dismiss(); action(.pdf, reference) } label: { Label("PDF report", systemImage: "doc.richtext") }
+            Button { dismiss(); action(.photos, reference) } label: { Label("Save to Photos", systemImage: "photo.on.rectangle.angled") }
+        } label: { Label("Share", systemImage: "square.and.arrow.up") }
         Button(role: .destructive) { dismiss(); action(.delete, reference) } label: { Label("Delete", systemImage: "trash") }
     }
 }
@@ -1645,18 +1681,18 @@ struct ResetStage: View {
             }
             Menu {
                 Button { open(.gallery) } label: { Label("References", systemImage: "photo.on.rectangle") }
-                Button { importingModel = true } label: { Label("Add 3D models (USDZ)", systemImage: "cube") }
+                Button { importingModel = true } label: { Label("Add 3D model", systemImage: "cube") }
                     .disabled(restorer.status != .ready)
                 if ExploreView.offered {
                     Button { open(.explore(reference.id)) } label: { Label("Explore in 3D", systemImage: "view.3d") }
                 }
-                Button { open(.review(reference.id)) } label: { Label("Review all frames", systemImage: "rectangle.stack") }
-                Button { open(.compare(reference.id)) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
+                Button { open(.review(reference.id)) } label: { Label("Review frames", systemImage: "rectangle.stack") }
+                Button { open(.compare(reference.id)) } label: { Label("Compare", systemImage: "rectangle.split.2x1") }
                 Button { open(.takeLog(reference.id)) } label: { Label("Take log", systemImage: "list.number") }
                 Button { open(.pdf(reference.id)) } label: { Label("Share PDF report", systemImage: "square.and.arrow.up") }
                 Button { open(.slate(reference.id)) } label: { Label("Edit slate", systemImage: "pencil") }
-                Button { open(.sync) } label: { Label("Sync with nearby phones", systemImage: "arrow.triangle.2.circlepath") }
-                Toggle(isOn: $leftHanded) { Label("Left-handed controls", systemImage: "hand.raised") }
+                Button { open(.sync) } label: { Label("Sync phones", systemImage: "arrow.triangle.2.circlepath") }
+                Toggle(isOn: $leftHanded) { Label("Left-handed", systemImage: "hand.raised") }
                 Button { open(.help) } label: { Label("Help", systemImage: "questionmark.circle") }
             } label: {
                 Image(systemName: "ellipsis.circle").font(.title3)

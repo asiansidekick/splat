@@ -69,7 +69,7 @@ struct SketchEditor: View {
                         .accessibilityLabel("Share")
                 }
             }
-            .alert("Label", isPresented: $writing) {
+            .alert("Add text", isPresented: $writing) {
                 TextField("For example: move 10 cm left", text: $draft)
                 Button("Cancel", role: .cancel) {}
                 Button("Add") { addLabel() }
@@ -86,47 +86,57 @@ struct SketchEditor: View {
         .interactiveDismissDisabled()
     }
 
+    /// Two rows that fit any width, each button with a word under it so nothing has to be guessed or scrolled to.
     private var tools: some View {
-        HStack(spacing: 14) {
-            ForEach(Tool.allCases, id: \.self) { item in
-                Button {
-                    tool = item
-                } label: {
-                    Image(systemName: item == .pen ? "pencil.tip" : item == .marker ? "highlighter" : "eraser")
-                        .font(.title3)
-                        .frame(width: 36, height: 36)
-                        .background(tool == item ? Color.white.opacity(0.25) : .clear, in: Circle())
+        VStack(spacing: 10) {
+            HStack(spacing: 0) {
+                ForEach(Tool.allCases, id: \.self) { item in
+                    toolButton(
+                        item == .pen ? "Draw" : item == .marker ? "Highlight" : "Erase",
+                        item == .pen ? "pencil.tip" : item == .marker ? "highlighter" : "eraser",
+                        on: tool == item
+                    ) { tool = item }
                 }
-                .accessibilityLabel(item.rawValue.capitalized)
+                toolButton("Text", "textformat", on: false) {
+                    draft = ""
+                    writing = true
+                }
+                toolButton("Undo", "arrow.uturn.backward", on: false) { canvas.undoManager?.undo() }
             }
-            Divider().frame(height: 26)
-            ForEach(SketchColour.allCases, id: \.self) { item in
-                Circle()
-                    .fill(Color(item.ui))
-                    .frame(width: 24, height: 24)
-                    .overlay(Circle().stroke(Color.white, lineWidth: colour == item ? 3 : 0.5))
-                    .onTapGesture {
-                        colour = item
-                        if tool == .eraser { tool = .pen }
-                    }
-                    .accessibilityLabel(item.rawValue)
-                    .accessibilityAddTraits(.isButton)
+            HStack(spacing: 22) {
+                ForEach(SketchColour.allCases, id: \.self) { item in
+                    Circle()
+                        .fill(Color(item.ui))
+                        .frame(width: 32, height: 32)
+                        .overlay(Circle().stroke(Color.white, lineWidth: colour == item ? 3.5 : 0.5))
+                        .contentShape(Circle().inset(by: -6))
+                        .onTapGesture {
+                            colour = item
+                            if tool == .eraser { tool = .pen }
+                        }
+                        .accessibilityLabel(item.rawValue)
+                        .accessibilityAddTraits(.isButton)
+                }
             }
-            Divider().frame(height: 26)
-            Button {
-                draft = ""
-                writing = true
-            } label: {
-                Text("Aa").font(.title3.bold())
-            }
-            .accessibilityLabel("Add a label")
-            Button { canvas.undoManager?.undo() } label: { Image(systemName: "arrow.uturn.backward").font(.title3) }
-                .accessibilityLabel("Undo")
         }
         .foregroundStyle(.white)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity)
         .background(Color.black)
+    }
+
+    private func toolButton(_ title: String, _ image: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Image(systemName: image)
+                    .font(.title3)
+                    .frame(width: 44, height: 36)
+                    .background(on ? Color.white.opacity(0.25) : .clear, in: Capsule())
+                Text(title).font(.caption2.weight(.semibold)).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .accessibilityLabel(title)
     }
 
     private var inkingTool: PKTool {
