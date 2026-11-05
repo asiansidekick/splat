@@ -78,13 +78,14 @@ struct CameraHome: View {
     @State private var nudgeTask: Task<Void, Never>?
 
     enum Panel: Identifiable {
-        case takeLog(UUID), compare(UUID), review(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery, sharePhoto, sync, sketch
+        case takeLog(UUID), compare(UUID), review(UUID), explore(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery, sharePhoto, sync, sketch
 
         var id: String {
             switch self {
             case .takeLog(let id): return "log-\(id)"
             case .compare(let id): return "compare-\(id)"
             case .review(let id): return "review-\(id)"
+            case .explore(let id): return "explore-\(id)"
             case .slate(let id): return "slate-\(id)"
             case .pdf(let id): return "pdf-\(id)"
             case .nextSlate: return "next"
@@ -341,6 +342,8 @@ struct CameraHome: View {
                     try? ReferenceStore.save(updated)
                 }
             }
+        case .explore(let id):
+            if let reference = references.first(where: { $0.id == id }) { ExploreView(reference: reference) }
         case .slate(let id):
             if let reference = references.first(where: { $0.id == id }) {
                 SlateEditor(reference: reference) { updated in
@@ -372,6 +375,7 @@ struct CameraHome: View {
                     case .takeLog: self.panel = .takeLog(reference.id)
                     case .compare: self.panel = .compare(reference.id)
                     case .review: self.panel = .review(reference.id)
+                    case .explore: self.panel = .explore(reference.id)
                     case .slate: self.panel = .slate(reference.id)
                     case .pdf: self.panel = .pdf(reference.id)
                     case .delete: deleting = reference
@@ -434,6 +438,8 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
     var bars = true
     /// Phone upright: reference, two buttons and the shutter in four equal cells (the capture screen).
     var evenRow = false
+    /// Phone upright: reference-side control, shutter, then `trailing` as two equal cells (the Reset screen).
+    var shutterSecond = false
     /// Left-handed: in landscape the control column runs down the left edge instead.
     @AppStorage("leftHanded") var leftHanded = false
     @ViewBuilder let top: () -> Top
@@ -467,7 +473,13 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         VStack(spacing: 4) {
                             modes(false)
                             Group {
-                              if evenRow {
+                              if shutterSecond {
+                                HStack(spacing: 0) {
+                                    leading().frame(maxWidth: .infinity)
+                                    shutter().frame(maxWidth: .infinity)
+                                    trailing()
+                                }
+                              } else if evenRow {
                                 // Four equal cells: reference, the two buttons in `trailing`, then the shutter.
                                 HStack(spacing: 0) {
                                     leading().frame(maxWidth: .infinity)
@@ -813,7 +825,7 @@ struct ReferenceThumbnail: View {
 /// older ones, tap Load (or double-tap the photo) to bring up its ghost. The grid button shows them
 /// all by scene. Press and hold a photo for its take log, compare, report, slate or delete.
 struct Gallery: View {
-    enum Action { case takeLog, compare, review, slate, pdf, delete, photos, sketch }
+    enum Action { case takeLog, compare, review, explore, slate, pdf, delete, photos, sketch }
 
     @Environment(\.dismiss) private var dismiss
     /// Oldest first, so the newest is the last page, as in Photos.
@@ -1073,6 +1085,7 @@ struct Gallery: View {
     @ViewBuilder
     private func menuItems(for reference: Reference) -> some View {
         Button { dismiss(); action(.takeLog, reference) } label: { Label("Take log", systemImage: "list.number") }
+        Button { dismiss(); action(.explore, reference) } label: { Label("Explore in 3D", systemImage: "view.3d") }
         Button { dismiss(); action(.review, reference) } label: { Label("Review all frames", systemImage: "rectangle.stack") }
         Button { dismiss(); action(.compare, reference) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
         Button { dismiss(); action(.pdf, reference) } label: { Label("Share PDF report", systemImage: "square.and.arrow.up") }
@@ -1466,7 +1479,7 @@ struct ResetStage: View {
     }
 
     var body: some View {
-        CameraLayout(bars: false) {
+        CameraLayout(bars: false, shutterSecond: true) {
             topBar
         } preview: {
             preview
@@ -1486,7 +1499,7 @@ struct ResetStage: View {
                 .shadow(color: .black.opacity(0.5), radius: 3)
                 .accessibilityLabel("Snapshot")
         } trailing: {
-            WithScreenshot(camera: { holder.view }, toast: showToast) {
+            WithScreenshot(camera: { holder.view }, toast: showToast, size: 74, evenCells: true, screenshotFirst: true) {
                 if leftHanded { logButton } else { pauseButton }
             }
         }
@@ -1610,6 +1623,7 @@ struct ResetStage: View {
                 Button { open(.gallery) } label: { Label("References", systemImage: "photo.on.rectangle") }
                 Button { importingModel = true } label: { Label("Add 3D models (USDZ)", systemImage: "cube") }
                     .disabled(restorer.status != .ready)
+                Button { open(.explore(reference.id)) } label: { Label("Explore in 3D", systemImage: "view.3d") }
                 Button { open(.review(reference.id)) } label: { Label("Review all frames", systemImage: "rectangle.stack") }
                 Button { open(.compare(reference.id)) } label: { Label("Compare snapshots", systemImage: "rectangle.split.2x1") }
                 Button { open(.takeLog(reference.id)) } label: { Label("Take log", systemImage: "list.number") }

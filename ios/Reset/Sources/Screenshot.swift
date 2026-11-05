@@ -90,14 +90,21 @@ struct WithScreenshot<Content: View>: View {
     /// Phone upright: the 3D models button and this one each take an equal share of the bottom row
     /// (Phil, 2026-11-01), so with the reference thumbnail and the shutter all four sit evenly spaced.
     var evenCells = false
+    /// With `evenCells`: the screenshot button comes before the control instead of after it.
+    var screenshotFirst = false
     @ViewBuilder let content: () -> Content
     @Environment(\.chromeVertical) private var vertical
 
     var body: some View {
         if evenCells && !vertical {
             Group {
-                content().frame(maxWidth: .infinity)
-                ScreenshotButton(camera: camera, toast: toast, size: size).frame(maxWidth: .infinity)
+                if screenshotFirst {
+                    ScreenshotButton(camera: camera, toast: toast, size: size).frame(maxWidth: .infinity)
+                    content().frame(maxWidth: .infinity)
+                } else {
+                    content().frame(maxWidth: .infinity)
+                    ScreenshotButton(camera: camera, toast: toast, size: size).frame(maxWidth: .infinity)
+                }
             }
         } else {
             let layout = vertical ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 6))
