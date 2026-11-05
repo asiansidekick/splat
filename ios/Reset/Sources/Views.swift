@@ -844,6 +844,8 @@ struct Gallery: View {
     @State private var chosen: Set<UUID> = []
     @State private var naming = false
     @State private var picked: [PhotosPickerItem] = []
+    @State private var query = ""
+    @ObservedObject private var search = ImageIndex.shared
 
     init(
         references: [Reference], selectedID: Binding<UUID?>, thumbnails: Thumbnails,
@@ -862,6 +864,9 @@ struct Gallery: View {
     }
 
     private var shown: Reference? { ordered.first { $0.id == current } }
+    private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
+    /// The references that match what is typed in the search box (all of them when it is empty).
+    private var visible: [Reference] { searching ? ordered.filter { search.matches(query, $0) } : ordered }
 
     var body: some View {
         NavigationStack {
@@ -870,14 +875,16 @@ struct Gallery: View {
                     ContentUnavailableView(
                         "No references yet", systemImage: "camera.viewfinder",
                         description: Text("Close this and tap the shutter to save one, or import photos with the arrow at the top."))
-                } else if showingGrid {
+                } else if showingGrid || searching {
                     grid
                 } else {
                     pager
                 }
             }
             .background(Color.black.ignoresSafeArea())
-            .navigationTitle(showingGrid ? "References" : ((shown?.slate.isEmpty == false ? shown?.slate : shown?.title) ?? ""))
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search: watch, sofa, a word…")
+            .task { search.refresh(ordered) }
+            .navigationTitle(showingGrid || searching ? "References" : ((shown?.slate.isEmpty == false ? shown?.slate : shown?.title) ?? ""))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -978,7 +985,14 @@ struct Gallery: View {
     private var grid: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
-                ForEach(Slate.sortedScenes(ordered).reversed(), id: \.self) { scene in
+                if searching && visible.isEmpty {
+                    ContentUnavailableView.search(text: query)
+                }
+                if search.remaining > 0 {
+                    Label("Looking at your pictures so they can be searched… \(search.remaining) to go", systemImage: "sparkle.magnifyingglass")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                ForEach(Slate.sortedScenes(visible).reversed(), id: \.self) { scene in
                     Text(scene.isEmpty ? "No scene" : "Scene \(scene)").font(.headline)
                     let inScene = setups(in: scene)
                     let groups = Array(Set(inScene.map(\.group).filter { !$0.isEmpty }))
@@ -1036,6 +1050,7 @@ struct Gallery: View {
                             if chosen.contains(reference.id) { chosen.remove(reference.id) } else { chosen.insert(reference.id) }
                         } else {
                             current = reference.id
+                            query = ""
                             withAnimation { showingGrid = false }
                         }
                     } label: {
@@ -1064,7 +1079,7 @@ struct Gallery: View {
     }
 
     private func setups(in scene: String) -> [Reference] {
-        ordered
+        visible
             .filter { $0.scene == scene }
             .sorted { $0.setup.localizedStandardCompare($1.setup) == .orderedAscending }
     }
