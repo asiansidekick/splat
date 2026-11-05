@@ -8,6 +8,13 @@ enum HintStore {
     private static func key(_ id: String) -> String { "hint.\(id)" }
     static func shouldShow(_ id: String) -> Bool { UserDefaults.standard.integer(forKey: key(id)) < limit }
     static func shown(_ id: String) { UserDefaults.standard.set(UserDefaults.standard.integer(forKey: key(id)) + 1, forKey: key(id)) }
+    /// Brings every hint and one-time tip back ("Show tips again").
+    static func resetAll() {
+        let defaults = UserDefaults.standard
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("hint.") || key.hasPrefix("tip.") {
+            defaults.removeObject(forKey: key)
+        }
+    }
     static func learned(_ id: String) { UserDefaults.standard.set(limit, forKey: key(id)) }
 }
 

@@ -1737,6 +1737,10 @@ struct ResetStage: View {
                 Button { open(.slate(reference.id)) } label: { Label("Edit slate", systemImage: "pencil") }
                 Button { open(.sync) } label: { Label("Sync phones", systemImage: "arrow.triangle.2.circlepath") }
                 Toggle(isOn: $leftHanded) { Label("Left-handed", systemImage: "hand.raised") }
+                Button {
+                    HintStore.resetAll()
+                    showToast("Tips will show again")
+                } label: { Label("Show tips again", systemImage: "lightbulb") }
                 Button { open(.help) } label: { Label("Help", systemImage: "questionmark.circle") }
             } label: {
                 Image(systemName: "ellipsis.circle").font(.title3)

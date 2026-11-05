@@ -2,6 +2,7 @@ import SwiftUI
 
 /// First-run guide and feedback: how to use Reset, and a way to send the diagnostics log.
 struct HelpView: View {
+    @State private var tipsReset = false
     @Environment(\.dismiss) private var dismiss
     @AppStorage("saveToPhotos") private var saveToPhotos = true
     @AppStorage("leftHanded") private var leftHanded = false
@@ -19,6 +20,16 @@ struct HelpView: View {
                     Text("Testing")
                 } footer: {
                     Text("Sends a record of what the app did on this device (no photos), to help fix problems. Add screenshots in the same message.\n\n\(HelpView.buildLabel)")
+                }
+                Section {
+                    Button {
+                        HintStore.resetAll()
+                        tipsReset = true
+                    } label: {
+                        Label(tipsReset ? "Tips will show again" : "Show tips again", systemImage: "lightbulb")
+                    }
+                } footer: {
+                    Text("Brings back the short animated hints and one-time tips.")
                 }
                 Section("Recording a reference") {
                     step("camera.circle", "The app opens on the camera. In Quick Scan mode, point at the props and tap the shutter: that saves a reference for the setup shown at the top (tap it to change scene or setup).")
