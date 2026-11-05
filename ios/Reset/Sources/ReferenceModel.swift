@@ -56,11 +56,11 @@ struct Reference: Codable, Identifiable, Equatable {
     /// Just the take number for small thumbnails: "18", "3B", or "12B" for an old letter-only setup.
     var number: String { setup.first?.isNumber == true ? setup : scene + setup }
 
-    /// How a scene and setup read: "Sc 1 · Take 3", or "Sc 1 · Take 3B" with a letter after the
+    /// How a scene and setup read: "Sc 1 · Tk 3", or "Sc 1 · Tk 3B" with a letter after the
     /// number; a setup that is only a letter reads the way old ones were slated, "12B".
     static func label(scene: String, setup: String) -> String {
         guard setup.first?.isNumber == true else { return scene + setup }
-        return scene.isEmpty ? "Take \(setup)" : "Sc \(scene) · Take \(setup)"
+        return scene.isEmpty ? "Tk \(setup)" : "Sc \(scene) · Tk \(setup)"
     }
     var title: String {
         if slate.isEmpty { return name }

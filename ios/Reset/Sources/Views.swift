@@ -834,7 +834,7 @@ struct Gallery: View {
                 }
             }
             .background(Color.black.ignoresSafeArea())
-            .navigationTitle(showingGrid ? "References" : (shown?.title ?? ""))
+            .navigationTitle(showingGrid ? "References" : ((shown?.slate.isEmpty == false ? shown?.slate : shown?.title) ?? ""))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
