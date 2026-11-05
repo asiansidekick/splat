@@ -210,6 +210,18 @@ struct CameraHome: View {
             })
     }
 
+    /// Puts references into a sub-group of their scene (or out of it, with an empty name).
+    private func group(_ ids: [UUID], as name: String) {
+        for id in ids {
+            guard let index = references.firstIndex(where: { $0.id == id }) else { continue }
+            references[index].group = name
+            references[index].slateEdited = Date()
+            try? ReferenceStore.save(references[index])
+        }
+        Haptics.success()
+        show(name.isEmpty ? "Taken out of its group" : "Grouped in \(name)")
+    }
+
     private func saved(_ reference: Reference) {
         references.insert(reference, at: 0)
         Haptics.success()
@@ -321,7 +333,8 @@ struct CameraHome: View {
         case .gallery:
             Gallery(
                 references: references, selectedID: $selectedID, thumbnails: thumbnails, onImport: importPhotos,
-                onSync: { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.panel = .sync } }
+                onSync: { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.panel = .sync } },
+                onGroup: group
             ) { action, reference in
                 // Let the gallery close before the next sheet opens.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
@@ -729,26 +742,23 @@ struct ReferenceThumbnail: View {
             }
             .frame(width: size, height: size)
             .clipped()
-            if let reference, size >= 50 {
-                HStack(spacing: 3) {
-                    if !reference.slate.isEmpty { Text(reference.slate).bold() }
-                    Spacer(minLength: 0)
-                    Text(timestamp(reference.created))
+            if let reference {
+                // The take number, big enough to read at a glance (Phil, 2026-11-05).
+                HStack(alignment: .lastTextBaseline, spacing: 3) {
+                    Text(reference.number)
+                        .font(.system(size: max(14, size * (size >= 100 ? 0.2 : 0.32)), weight: .heavy).monospacedDigit())
+                    if size >= 100 {
+                        Spacer(minLength: 0)
+                        Text(timestamp(reference.created)).font(.system(size: 11).monospacedDigit())
+                    }
                 }
-                .font(.system(size: size >= 100 ? 11 : 9).monospacedDigit())
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .padding(.horizontal, 3)
+                .minimumScaleFactor(0.6)
+                .padding(.horizontal, 4)
                 .padding(.vertical, 1)
                 .frame(width: size)
                 .background(Color.black.opacity(0.65))
                 .foregroundStyle(.white)
-            } else if let slate = reference?.slate, !slate.isEmpty {
-                Text(slate)
-                    .font(.caption2.bold())
-                    .padding(.horizontal, 4)
-                    .background(Color.black.opacity(0.65))
-                    .foregroundStyle(.white)
             }
         }
         .frame(width: size, height: size)
@@ -782,14 +792,20 @@ struct Gallery: View {
     @ObservedObject var thumbnails: Thumbnails
     let onImport: ([PhotosPickerItem]) -> Void
     let onSync: () -> Void
+    /// Puts the references into a sub-group of their scene ("" takes them out of any group).
+    let onGroup: ([UUID], String) -> Void
     let action: (Action, Reference) -> Void
     @State private var current: UUID?
     @State private var showingGrid = false
+    @State private var selecting = false
+    @State private var chosen: Set<UUID> = []
+    @State private var naming = false
     @State private var picked: [PhotosPickerItem] = []
 
     init(
         references: [Reference], selectedID: Binding<UUID?>, thumbnails: Thumbnails,
         onImport: @escaping ([PhotosPickerItem]) -> Void, onSync: @escaping () -> Void = {},
+        onGroup: @escaping ([UUID], String) -> Void = { _, _ in },
         action: @escaping (Action, Reference) -> Void
     ) {
         ordered = references.sorted { $0.created < $1.created }
@@ -797,6 +813,7 @@ struct Gallery: View {
         self.thumbnails = thumbnails
         self.onImport = onImport
         self.onSync = onSync
+        self.onGroup = onGroup
         self.action = action
         _current = State(initialValue: selectedID.wrappedValue ?? ordered.last?.id)
     }
@@ -841,6 +858,12 @@ struct Gallery: View {
                         Image(systemName: showingGrid ? "photo" : "square.grid.2x2")
                     }
                     .accessibilityLabel(showingGrid ? "One at a time" : "All references")
+                    if showingGrid {
+                        Button(selecting ? "Done" : "Select") {
+                            selecting.toggle()
+                            chosen = []
+                        }
+                    }
                     if let shown, !showingGrid { menu(for: shown) }
                 }
             }
@@ -892,7 +915,7 @@ struct Gallery: View {
                         Button {
                             withAnimation { current = reference.id }
                         } label: {
-                            ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 40, selected: current == reference.id)
+                            ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 58, selected: current == reference.id)
                         }
                         .id(reference.id)
                     }
@@ -900,7 +923,7 @@ struct Gallery: View {
                 .padding(.horizontal)
                 .padding(.vertical, 3)
             }
-            .frame(height: 48)
+            .frame(height: 66)
             .onAppear { if let current { proxy.scrollTo(current, anchor: .center) } }
             .onChange(of: current) { _, id in
                 if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
@@ -913,22 +936,86 @@ struct Gallery: View {
             LazyVStack(alignment: .leading, spacing: 16) {
                 ForEach(Slate.sortedScenes(ordered).reversed(), id: \.self) { scene in
                     Text(scene.isEmpty ? "No scene" : "Scene \(scene)").font(.headline)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) {
-                        ForEach(setups(in: scene)) { reference in
-                            Button {
-                                Haptics.tap()
-                                current = reference.id
-                                withAnimation { showingGrid = false }
-                            } label: {
-                                ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 100, selected: selectedID == reference.id)
-                            }
-                            .accessibilityLabel(reference.title)
-                            .contextMenu { menuItems(for: reference) }
-                        }
+                    let inScene = setups(in: scene)
+                    let groups = Array(Set(inScene.map(\.group).filter { !$0.isEmpty }))
+                        .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+                    section(title: groups.isEmpty ? nil : "Not grouped", references: inScene.filter { $0.group.isEmpty })
+                    ForEach(groups, id: \.self) { name in
+                        section(title: name, references: inScene.filter { $0.group == name })
                     }
                 }
             }
             .padding()
+        }
+        .safeAreaInset(edge: .bottom) {
+            if selecting {
+                HStack(spacing: 12) {
+                    Button { naming = true } label: {
+                        Label("Group \(chosen.count)", systemImage: "rectangle.stack.badge.plus").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.yellow)
+                    .foregroundStyle(.black)
+                    .disabled(chosen.isEmpty)
+                    Button {
+                        onGroup(Array(chosen), "")
+                        chosen = []
+                        selecting = false
+                    } label: { Text("Ungroup").frame(maxWidth: .infinity) }
+                        .buttonStyle(.bordered)
+                        .disabled(chosen.isEmpty)
+                }
+                .padding()
+                .background(.ultraThinMaterial)
+            }
+        }
+        .sheet(isPresented: $naming) {
+            GroupNameSheet(existing: Array(Set(ordered.map(\.group).filter { !$0.isEmpty })).sorted()) { name in
+                onGroup(Array(chosen), name)
+                chosen = []
+                selecting = false
+            }
+            .presentationDetents([.medium])
+        }
+    }
+
+    /// One heading and its tiles; in selection mode a tap ticks a tile instead of opening it.
+    @ViewBuilder
+    private func section(title: String?, references: [Reference]) -> some View {
+        if !references.isEmpty {
+            if let title { Text(title).font(.subheadline.bold()).foregroundStyle(.yellow) }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) {
+                ForEach(references) { reference in
+                    Button {
+                        Haptics.tap()
+                        if selecting {
+                            if chosen.contains(reference.id) { chosen.remove(reference.id) } else { chosen.insert(reference.id) }
+                        } else {
+                            current = reference.id
+                            withAnimation { showingGrid = false }
+                        }
+                    } label: {
+                        ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 100, selected: selecting ? chosen.contains(reference.id) : selectedID == reference.id)
+                            .overlay(alignment: .topTrailing) {
+                                if selecting {
+                                    Image(systemName: chosen.contains(reference.id) ? "checkmark.circle.fill" : "circle")
+                                        .font(.title3)
+                                        .foregroundStyle(chosen.contains(reference.id) ? Color.yellow : Color.white)
+                                        .shadow(radius: 2)
+                                        .padding(4)
+                                }
+                            }
+                    }
+                    .accessibilityLabel(reference.title)
+                    .contextMenu {
+                        Button {
+                            selecting = true
+                            chosen = [reference.id]
+                        } label: { Label("Select", systemImage: "checkmark.circle") }
+                        menuItems(for: reference)
+                    }
+                }
+            }
         }
     }
 
@@ -1862,5 +1949,52 @@ struct AimOverlay: View {
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+
+/// Asks what to call a sub-group, or picks one that exists.
+struct GroupNameSheet: View {
+    let existing: [String]
+    let onPick: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("New group") {
+                    TextField("Hair, Kitchen angle, Props…", text: $name)
+                        .textInputAutocapitalization(.words)
+                        .submitLabel(.done)
+                        .onSubmit(finish)
+                }
+                if !existing.isEmpty {
+                    Section("Add to a group") {
+                        ForEach(existing, id: \.self) { group in
+                            Button(group) {
+                                onPick(group)
+                                dismiss()
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Group")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Group", action: finish).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func finish() {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        onPick(trimmed)
+        dismiss()
     }
 }

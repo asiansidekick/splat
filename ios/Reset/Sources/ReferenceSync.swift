@@ -213,6 +213,7 @@ final class ReferenceSyncLibrary: SyncLibrary {
             result.scene = incoming.scene
             result.setup = incoming.setup
             result.name = incoming.name
+            result.group = incoming.group
             result.slateEdited = incoming.slateEdited
         }
 
@@ -293,7 +294,7 @@ final class ReferenceSyncLibrary: SyncLibrary {
     }
 
     nonisolated static func slateKey(_ reference: Reference) -> String {
-        [reference.scene, reference.setup, reference.name].joined(separator: "\u{1F}")
+        [reference.scene, reference.setup, reference.name, reference.group].joined(separator: "\u{1F}")
     }
 
     nonisolated static func key<T: Encodable>(_ value: T) -> String {

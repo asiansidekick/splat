@@ -28,6 +28,8 @@ struct Reference: Codable, Identifiable, Equatable {
     var scene: String  // "12"
     var setup: String  // "B", so the slate reads 12B
     var name: String  // optional description, "desk"
+    /// A sub-group within the scene, such as "Hair" or "Kitchen angle" (Phil, 2026-11-05); empty for none.
+    var group = ""
     let created: Date
     var keyframes: [Keyframe]
     var takes: [Take] = []
@@ -51,6 +53,8 @@ struct Reference: Codable, Identifiable, Equatable {
 
     var hasDepth: Bool { keyframes.contains { $0.depthFile != nil } }
     var slate: String { Reference.label(scene: scene, setup: setup) }
+    /// Just the take number for small thumbnails: "18", "3B", or "12B" for an old letter-only setup.
+    var number: String { setup.first?.isNumber == true ? setup : scene + setup }
 
     /// How a scene and setup read: "Sc 1 · Take 3", or "Sc 1 · Take 3B" with a letter after the
     /// number; a setup that is only a letter reads the way old ones were slated, "12B".
@@ -73,6 +77,7 @@ extension Reference {
         scene = try c.decodeIfPresent(String.self, forKey: .scene) ?? ""
         setup = try c.decodeIfPresent(String.self, forKey: .setup) ?? ""
         name = try c.decode(String.self, forKey: .name)
+        group = try c.decodeIfPresent(String.self, forKey: .group) ?? ""
         created = try c.decode(Date.self, forKey: .created)
         keyframes = try c.decode([Keyframe].self, forKey: .keyframes)
         takes = try c.decodeIfPresent([Take].self, forKey: .takes) ?? []

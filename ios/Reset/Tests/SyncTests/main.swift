@@ -79,6 +79,23 @@ let ba = ReferenceSyncLibrary.merged(local: theirs, incoming: mine, has: everyth
 expect(Reference.label(scene: "1", setup: "3") == "Sc 1 · Take 3" && Reference.label(scene: "12", setup: "B") == "12B" && Reference.label(scene: "", setup: "2") == "Take 2" && Reference.label(scene: "1", setup: "2C") == "Sc 1 · Take 2C",
     "numbered takes read Sc 1 · Take 3, old letters still read 12B")
 expect(ab.slate == ba.slate && ab.name == "kitchen" && ab.setup == "A", "the newest slate edit wins on both phones")
+var grouped = one, plain = one
+grouped.group = "Hair"; grouped.slateEdited = base.addingTimeInterval(30)
+plain.slateEdited = base.addingTimeInterval(5)
+let gm = ReferenceSyncLibrary.merged(local: plain, incoming: grouped, has: everything)!
+let gb = ReferenceSyncLibrary.merged(local: grouped, incoming: plain, has: everything)!
+expect(gm.group == "Hair" && gb.group == "Hair", "a newer group choice wins on both phones")
+var ungrouped = grouped
+ungrouped.group = ""; ungrouped.slateEdited = base.addingTimeInterval(40)
+expect(ReferenceSyncLibrary.merged(local: grouped, incoming: ungrouped, has: everything)!.group == "", "taking a reference out of its group syncs too")
+let decoded = try! JSONDecoder().decode(Reference.self, from: try! JSONEncoder().encode(grouped))
+expect(decoded.group == "Hair", "the group is saved with the reference")
+expect(one.number == "12A", "a letter-only setup reads 12A in the thumbnail")
+var old = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(one)) as! [String: Any]
+old.removeValue(forKey: "group")
+expect((try! JSONDecoder().decode(Reference.self, from: JSONSerialization.data(withJSONObject: old))).group == "", "references saved before groups load with none")
+expect(Reference(id: UUID(), scene: "1", setup: "18", name: "", created: base, keyframes: []).number == "18"
+    && Reference(id: UUID(), scene: "12", setup: "B", name: "", created: base, keyframes: []).number == "12B", "the thumbnail number is the take, or 12B for old slates")
 var tie1 = one, tie2 = one
 tie1.name = "aaa"; tie2.name = "zzz"
 expect(ReferenceSyncLibrary.merged(local: tie1, incoming: tie2, has: everything)!.name
