@@ -46,6 +46,8 @@ final class FreeScanner: NSObject, ObservableObject {
     }
 
     private var shots: [Shot] = []
+    /// Where the middle of the screen looked at, for each kept picture: the object being scanned.
+    private var aims: [SIMD3<Float>] = []
     private var lastShot: simd_float4x4?
     private var lastTime: TimeInterval = 0
     private var lastLog: TimeInterval = 0
@@ -64,6 +66,7 @@ final class FreeScanner: NSObject, ObservableObject {
         }
         self.recorder = recorder
         shots = []
+        aims = []
         lastShot = nil
         lastTime = 0
         previous = nil
@@ -106,6 +109,10 @@ final class FreeScanner: NSObject, ObservableObject {
         lastTime = frame.timestamp
         lastShot = frame.camera.transform
         shots.append(shot)
+        if let depth = Measurer.depth(of: frame), let d = DepthMap.middle(depth.values, width: depth.width, height: depth.height, radius: 2) {
+            let w = frame.camera.transform * SIMD4(0, 0, -d, 1)
+            aims.append(SIMD3(w.x, w.y, w.z))
+        }
         pictures = shots.count
         triangles += shot.indices.count / 3
         show(shot)
@@ -180,7 +187,8 @@ final class FreeScanner: NSObject, ObservableObject {
 
     // MARK: Finish
 
-    func finish() {
+    /// `isolating`: keep only the object in the middle of the screen, not the room round it.
+    func finish(isolating: Bool) {
         guard phase == .scanning else { return }
         recorder?.frameTap = nil
         guard !shots.isEmpty else {
@@ -188,11 +196,33 @@ final class FreeScanner: NSObject, ObservableObject {
             return
         }
         phase = .building
-        let shots = self.shots
+        let all = self.shots
+        let aims = self.aims
+        let total = triangles
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let output = FreeScanner.scansFolder.appendingPathComponent("Free-\(stamp).usdz")
-        Diagnostics.log("Free scan finishing: \(shots.count) pictures, \(triangles) triangles")
+        Diagnostics.log("Free scan finishing: \(all.count) pictures, \(total) triangles, isolating \(isolating)")
+        // Off the main thread: finding the object and joining the pictures take a few seconds.
         Task.detached(priority: .userInitiated) {
+            var shots = all
+            if isolating, let centre = ScanClean.centre(of: aims) {
+                let meshes = shots.map {
+                    ScanClean.Mesh(
+                        vertices: $0.vertices, indices: $0.indices,
+                        eye: SIMD3($0.transform.columns.3.x, $0.transform.columns.3.y, $0.transform.columns.3.z))
+                }
+                let kept = ScanClean.isolate(meshes, centre: centre)
+                for i in shots.indices { shots[i].indices = kept[i] }
+                shots = shots.filter { !$0.indices.isEmpty }
+                let left = shots.reduce(0) { $0 + $1.indices.count / 3 }
+                Diagnostics.log("Free scan isolated around \(centre): \(shots.count) pictures, \(left) of \(total) triangles kept")
+            }
+            guard !shots.isEmpty else {
+                await MainActor.run {
+                    self.phase = .failed("No object found in the middle of the screen. Keep the object in the middle while you walk round it, or use Whole scene.")
+                }
+                return
+            }
             let ok = Self.export(shots, to: output)
             await MainActor.run {
                 if ok {
@@ -209,9 +239,11 @@ final class FreeScanner: NSObject, ObservableObject {
     /// One model: each picture's mesh with that picture as its texture. The middle is at the origin
     /// and the lowest point on the floor.
     private nonisolated static func export(_ shots: [Shot], to url: URL) -> Bool {
+        // Only the vertices some triangle uses count (after isolating, most are not wanted).
         var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude), high = -low
         for shot in shots {
-            for v in shot.vertices {
+            for index in shot.indices {
+                let v = shot.vertices[Int(index)]
                 low = simd_min(low, v)
                 high = simd_max(high, v)
             }
@@ -221,13 +253,22 @@ final class FreeScanner: NSObject, ObservableObject {
         var elements = [SCNGeometryElement](), materials = [SCNMaterial]()
         for shot in shots {
             guard let image = UIImage(data: shot.jpeg) else { continue }
-            let base = UInt32(vertices.count)
-            for v in shot.vertices {
-                let p = v - shift
-                vertices.append(SCNVector3(p.x, p.y, p.z))
+            var renumbered: [UInt32: UInt32] = [:]
+            var indices: [UInt32] = []
+            for old in shot.indices {
+                if let new = renumbered[old] {
+                    indices.append(new)
+                } else {
+                    let new = UInt32(vertices.count)
+                    renumbered[old] = new
+                    let p = shot.vertices[Int(old)] - shift
+                    vertices.append(SCNVector3(p.x, p.y, p.z))
+                    let uv = shot.uvs[Int(old)]
+                    uvs.append(CGPoint(x: Double(uv.x), y: Double(uv.y)))
+                    indices.append(new)
+                }
             }
-            uvs.append(contentsOf: shot.uvs.map { CGPoint(x: Double($0.x), y: Double($0.y)) })
-            elements.append(SCNGeometryElement(indices: shot.indices.map { $0 + base }, primitiveType: .triangles))
+            elements.append(SCNGeometryElement(indices: indices, primitiveType: .triangles))
             let material = SCNMaterial()
             material.diffuse.contents = image
             material.lightingModel = .constant
@@ -288,8 +329,11 @@ struct FreeScanOverlay: View {
                 .padding(.top, 108)
                 switch scanner.phase {
                 case .scanning:
-                    Text("Walk slowly round it. The blue skin shows what is covered.").font(.footnote)
-                    pill("Finish") { scanner.finish() }
+                    Text("Keep the object in the middle of the screen and walk slowly round it. The blue skin shows what is covered.")
+                        .font(.footnote).multilineTextAlignment(.center).padding(.horizontal, 20)
+                    pill("Finish: just the object") { scanner.finish(isolating: true) }
+                    Button("Finish: whole scene") { scanner.finish(isolating: false) }
+                        .font(.subheadline.bold())
                 case .building:
                     ProgressView()
                     Text("Joining the pictures and saving…").font(.subheadline)

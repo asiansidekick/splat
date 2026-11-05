@@ -11,8 +11,8 @@ enum DepthMesh {
 
     /// `intrinsics` are the camera's for the full-size picture (`imageWidth` by `imageHeight`); depth
     /// pixels map onto that picture by proportion. Every `step`th depth pixel is a vertex. A square
-    /// of four vertices is skipped if any is missing or if its depths differ by more than 4 cm plus
-    /// 6% of the nearest, so there is no skin stretched across the gap between a near and a far thing.
+    /// of four vertices is skipped if any is missing or if its depths differ by more than 2 cm plus
+    /// 3% of the nearest, so there is no skin stretched across the gap between a near and a far thing.
     static func build(
         depth: [Float], width: Int, height: Int, camera: simd_float4x4, intrinsics k: simd_float3x3,
         imageWidth: Float, imageHeight: Float, step: Int, range: ClosedRange<Float> = 0.15...5
@@ -45,7 +45,7 @@ enum DepthMesh {
                 let d = grid[(r + 1) * columns + c], e = grid[(r + 1) * columns + c + 1]
                 guard a >= 0, b >= 0, d >= 0, e >= 0 else { continue }
                 let ds = [value(c, r), value(c + 1, r), value(c, r + 1), value(c + 1, r + 1)]
-                guard let low = ds.min(), let high = ds.max(), high - low < 0.04 + 0.06 * low else { continue }
+                guard let low = ds.min(), let high = ds.max(), high - low < 0.02 + 0.03 * low else { continue }
                 result.indices.append(contentsOf: [UInt32(a), UInt32(d), UInt32(b), UInt32(b), UInt32(d), UInt32(e)])
             }
         }

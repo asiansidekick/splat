@@ -1046,7 +1046,61 @@ func testDepthMesh() {
     expect(nan.vertices.isEmpty, "NaN depth gives nothing")
 }
 
+func testScanClean() {
+    // A grid of triangles on a plane: origin, two edge directions, counts and step.
+    func patch(_ o: SIMD3<Float>, _ u: SIMD3<Float>, _ v: SIMD3<Float>, _ nu: Int, _ nv: Int, step: Float = 0.05,
+               eye: SIMD3<Float>) -> ScanClean.Mesh {
+        var vertices: [SIMD3<Float>] = [], indices: [UInt32] = []
+        for j in 0...nv { for i in 0...nu { vertices.append(o + u * (Float(i) * step) + v * (Float(j) * step)) } }
+        for j in 0..<nv { for i in 0..<nu {
+            let a = UInt32(j * (nu + 1) + i), b = a + 1, c = a + UInt32(nu + 1), d = c + 1
+            indices += [a, c, b, b, c, d]
+        } }
+        return ScanClean.Mesh(vertices: vertices, indices: indices, eye: eye)
+    }
+    func merged(_ meshes: [ScanClean.Mesh]) -> ScanClean.Mesh {
+        var out = ScanClean.Mesh(vertices: [], indices: [], eye: meshes[0].eye)
+        for m in meshes { let base = UInt32(out.vertices.count); out.vertices += m.vertices; out.indices += m.indices.map { $0 + base } }
+        return out
+    }
+    let eye = SIMD3<Float>(1.5, 0.3, 0)
+    let X = SIMD3<Float>(1, 0, 0), Y = SIMD3<Float>(0, 1, 0), Z = SIMD3<Float>(0, 0, 1)
+    // Floor, the object's side (a 50 x 45 cm wall at x = 0.2 standing on the floor), a wall 1.4 m behind, and a wall 3 m away.
+    let floor = patch(SIMD3(-2, 0, -2), X, Z, 80, 80, eye: eye)
+    let object = patch(SIMD3(0.2, 0.05, -0.25), Z, Y, 10, 9, eye: eye)
+    let near = patch(SIMD3(-1, 0.1, -1.4), X, Y, 40, 38, eye: eye)
+    let far = patch(SIMD3(-1, 0.1, -3), X, Y, 40, 38, eye: eye)
+    let scene = merged([floor, object, near, far])
+    let centre = SIMD3<Float>(0, 0.25, 0)
+    let kept = ScanClean.isolate([scene], centre: centre)[0]
+    expect(!kept.isEmpty, "something is kept")
+    var onlyObject = true, count = 0
+    var i = 0
+    while i + 2 < kept.count {
+        let m = (scene.vertices[Int(kept[i])] + scene.vertices[Int(kept[i + 1])] + scene.vertices[Int(kept[i + 2])]) / 3
+        if abs(m.x - 0.2) > 1e-4 || m.y < 0.03 { onlyObject = false }
+        count += 1
+        i += 3
+    }
+    expect(onlyObject, "only the object stays: no floor, no walls")
+    expect(count == object.indices.count / 3, "all of the object stays (\(count) of \(object.indices.count / 3))")
+    // Two pictures of the same wall: only the nearer, better one keeps its triangles.
+    let close = patch(SIMD3(0.2, 0.05, -0.25), Z, Y, 10, 9, eye: SIMD3(1.0, 0.3, 0))
+    let distant = patch(SIMD3(0.2, 0.05, -0.25), Z, Y, 10, 9, eye: SIMD3(3.0, 0.3, 0))
+    let both = ScanClean.isolate([close, distant], centre: centre)
+    expect(!both[0].isEmpty && both[1].isEmpty, "the best view of a surface wins, the other is dropped")
+    // The middle of where the scan looked is the median, and nothing gives nil.
+    expect(ScanClean.centre(of: []) == nil, "no aim, no centre")
+    let c = ScanClean.centre(of: [SIMD3(0, 0, 0), SIMD3(1, 1, 1), SIMD3(100, 100, 100)])
+    expect(c == SIMD3<Float>(1, 1, 1), "the median shrugs off a stray aim")
+    expect(ScanClean.isolate([], centre: centre).isEmpty, "no pictures, no result")
+    // Nothing near the centre: nothing is kept, and nothing crashes.
+    let empty = ScanClean.isolate([far], centre: SIMD3(10, 0, 10))
+    expect(empty[0].isEmpty, "nothing within reach of the middle gives nothing")
+}
+
 testDepthMesh()
+testScanClean()
 testDepthBuffers()
 testMiddleDepth()
 testPlaneDepth()
