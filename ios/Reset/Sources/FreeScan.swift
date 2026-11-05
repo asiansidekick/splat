@@ -30,7 +30,11 @@ final class FreeScanner: NSObject, ObservableObject {
         return folder
     }
 
-    static var supported: Bool { ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) }
+    /// Parked (Phil, 2026-11-05): scanning is not a core feature and results were not yet as good as
+    /// commercial apps, so the button stays hidden. Turn on only when the scan is rebuilt and works.
+    static let shownInApp = false
+
+    static var supported: Bool { shownInApp && ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) }
 
     /// The camera view's own session is used, so models and marks stay where they are.
     private weak var recorder: Recorder?
