@@ -90,6 +90,12 @@ final class ScanModel: ObservableObject {
     private var poll: Timer?
     private var buildTask: Task<Void, Never>?
 
+    /// iOS 17 needs Apple's box round the object; from iOS 18 capture starts without one.
+    static var usesBox: Bool {
+        if #available(iOS 18.0, *) { return false }
+        return true
+    }
+
     static var supported: Bool { ObjectCaptureSession.isSupported }
 
     func start() {
@@ -145,7 +151,7 @@ final class ScanModel: ObservableObject {
         guard let session else { return }
         shots = session.numberOfShotsTaken
         maxShots = session.maximumNumberOfInputImages
-        if phase == .capturing && session.userCompletedScanPass {
+        if phase == .capturing && Self.usesBox && session.userCompletedScanPass {
             phase = .passDone
             ScanLog.add("Pass \(passes) done, \(shots) pictures")
         }
@@ -175,7 +181,13 @@ final class ScanModel: ObservableObject {
         guard let session else { return }
         switch phase {
         case .ready:
-            if !session.startDetecting() { hint = "Point at the object, then tap again." }
+            // Area mode (iOS 18+): no box, just record and walk round, like Scaniverse.
+            if #available(iOS 18.0, *) {
+                session.startCapturing()
+                ScanLog.add("Record start (area mode, no box)")
+            } else if !session.startDetecting() {
+                hint = "Point at the object, then tap again."
+            }
         case .detecting:
             session.startCapturing()
         case .capturing, .passDone:

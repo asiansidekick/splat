@@ -91,9 +91,9 @@ struct ScanScreen: View {
     private var stepText: String {
         switch model.phase {
         case .starting: return "Starting camera…"
-        case .ready: return "Aim at the object, then tap"
+        case .ready: return ScanModel.usesBox ? "Aim at the object, then tap" : "Tap to record, then walk slowly round the object"
         case .detecting: return "Fit the box round the object, then tap to start"
-        case .capturing: return "Walk slowly round it. Tap to finish"
+        case .capturing: return "Walk slowly round it, high and low. Tap to stop"
         case .passDone: return "One turn done"
         case .finishing: return "Saving pictures…"
         default: return ""
