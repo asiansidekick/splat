@@ -119,7 +119,10 @@ struct CameraHome: View {
                     .font(.subheadline.bold())
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 6)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+                    .padding(.horizontal, 12)
                     .padding(.top, 52)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .allowsHitTesting(false)
@@ -179,6 +182,9 @@ struct CameraHome: View {
             nextScene = Slate.currentScene(in: references)
             nextSetup = Slate.nextSetup(scene: nextScene, in: references)
             if !seenHelp { panel = .help }
+            if let warning = InstallExpiry.warning {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { show(warning, seconds: 8) }
+            }
         }
     }
 
@@ -319,11 +325,11 @@ struct CameraHome: View {
         nextSetup = Slate.nextSetup(scene: nextScene, in: references)
     }
 
-    private func show(_ message: String) {
+    private func show(_ message: String, seconds: Double = 2) {
         toastTask?.cancel()
         withAnimation(.snappy) { toast = message }
         toastTask = Task {
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             withAnimation(.snappy) { toast = nil }
         }
