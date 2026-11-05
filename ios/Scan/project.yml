@@ -1,0 +1,34 @@
+# Generate the Xcode project with XcodeGen: `brew install xcodegen && xcodegen`
+# A separate test app, so object scanning can be tried without touching Reset. Its scans are
+# USDZ files that Reset's 3D models button imports.
+name: Scan
+options:
+  bundleIdPrefix: com.asiansidekick
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  Scan:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    scheme: {}
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.asiansidekick.scan
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_KEY_CFBundleDisplayName: Scan
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        INFOPLIST_KEY_UIRequiresFullScreen: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSCameraUsageDescription: "The camera photographs the object to build its 3D model."
+        INFOPLIST_KEY_UIRequiredDeviceCapabilities: arkit
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        # Apple's Object Capture view is laid out for portrait on iPhone.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        # Scans show in Files > On My iPhone > Scan.
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        SWIFT_VERSION: "5.9"
