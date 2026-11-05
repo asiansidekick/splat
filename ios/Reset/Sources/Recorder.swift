@@ -209,20 +209,6 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         captureNext = true
     }
 
-    /// An object scan has the camera: this session must stay paused until it is over.
-    var scanningObject = false
-
-    func beginObjectScan() {
-        scanningObject = true
-        measurer.active = false
-        session.pause()
-    }
-
-    func endObjectScan() {
-        scanningObject = false
-        prepare(useLiDAR: lastUseLiDAR)
-    }
-
     /// Stops the camera and throws away a reference that was started but not saved.
     func stop() {
         measurer.active = false
@@ -256,7 +242,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         // somewhere new, never does: the camera shows "Finding the room again" and measuring is
         // dead. With no reference being recorded there is nothing to get back to, so start fresh.
         Task { @MainActor in
-            guard !self.capturing, !self.pendingSave, !self.saving, !self.scanningObject else { return }
+            guard !self.capturing, !self.pendingSave, !self.saving else { return }
             Diagnostics.log("Record: starting the camera afresh after the interruption")
             self.prepare(useLiDAR: self.lastUseLiDAR)
         }

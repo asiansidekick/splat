@@ -22,6 +22,14 @@ final class FreeScanner: NSObject, ObservableObject {
     @Published var triangles = 0
     @Published var pictures = 0
 
+    /// Finished scans, shown in Files > Reset > Scans.
+    static var scansFolder: URL {
+        let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Scans", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
     static var supported: Bool { ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) }
 
     /// The camera view's own session is used, so models and marks stay where they are.
@@ -182,7 +190,7 @@ final class FreeScanner: NSObject, ObservableObject {
         phase = .building
         let shots = self.shots
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-        let output = ObjectScanner.scansFolder.appendingPathComponent("Free-\(stamp).usdz")
+        let output = FreeScanner.scansFolder.appendingPathComponent("Free-\(stamp).usdz")
         Diagnostics.log("Free scan finishing: \(shots.count) pictures, \(triangles) triangles")
         Task.detached(priority: .userInitiated) {
             let ok = Self.export(shots, to: output)
