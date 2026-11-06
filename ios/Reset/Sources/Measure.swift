@@ -64,6 +64,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var dragTooClose = false
     /// The depth and ARKit disagree, or the room is too dark for the LiDAR: the length is a guess.
     private var dragDoubtful = false
+    private var grabTyped: Float?
     private var lastCursorTime = Date.distantPast
     /// Where the finger is, the point it is aiming at above it, and where the corner snap put
     /// that point, all in screen points, so the aim can be drawn where it can be seen.
@@ -583,6 +584,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             return
         }
         if g.end == 0 { measurements[index].a = array(hit.point) } else { measurements[index].b = array(hit.point) }
+        // A length typed before the end was moved is the truth the new position is checked against.
+        if !grabMoved { grabTyped = measurements[index].typed }
         measurements[index].typed = nil
         grabMoved = true
         let other = g.end == 0 ? measurements[index].end : measurements[index].start
@@ -607,6 +610,13 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             measurements[index].edited = Date()
             Haptics.success()
             Diagnostics.log("Line end \(g.end) moved by hand: now \(Measurer.text(measurements[index].measured))")
+            // The end sits on a freshly read surface point. If a real length had been typed, the new reading against
+            // it improves the correction for later lines, and this line takes it too.
+            if let typed = grabTyped {
+                learn(from: g.id, metres: typed)
+                if Measurer.depthScale != 1, let i = measurements.firstIndex(where: { $0.id == g.id }) { measurements[i].scale = Measurer.depthScale }
+            }
+            grabTyped = nil
             changed()
             startTracking(measurements[index])
         } else {
