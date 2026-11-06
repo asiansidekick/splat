@@ -102,7 +102,19 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// 2026-11-05), falling back to the LiDAR depth where ARKit finds no surface or disagrees with it.
     static var useRaycast: Bool { UserDefaults.standard.object(forKey: "measureRaycast") as? Bool ?? true }
 
-    static var depthScale: Float = UserDefaults.standard.object(forKey: "measureDepthScale") as? Float ?? 1
+    /// The tape or A4 correction, stretching lengths (never positions). A saved value outside 0.5 to 2 is a bad
+    /// calibration (build 168 saved ×0.30 from a mistyped tape length) and is dropped.
+    static var depthScale: Float = {
+        let saved = UserDefaults.standard.object(forKey: "measureDepthScale") as? Float ?? 1
+        return (0.5...2).contains(saved) ? saved : 1
+    }()
+
+    /// A new line, carrying the correction in force now.
+    static func makeLine(a: [Float], b: [Float]) -> RoomMeasurement {
+        var line = RoomMeasurement(a: a, b: b, created: Date())
+        if depthScale != 1 { line.scale = depthScale }
+        return line
+    }
     /// The line or note tapped, ready to delete on its own.
     @Published private(set) var selected: UUID? {
         didSet { if selected != oldValue { rebuild() } }
@@ -675,8 +687,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
            let da = plane.depth(x: Float(a.normalized.x) * px, y: Float(a.normalized.y) * py),
            let db = plane.depth(x: Float(b.normalized.x) * px, y: Float(b.normalized.y) * py),
            (0.1...6).contains(da), (0.1...6).contains(db) {
-            pa = Measurer.world(in: frame, normalized: a.normalized, metres: da * Measurer.depthScale)
-            pb = Measurer.world(in: frame, normalized: b.normalized, metres: db * Measurer.depthScale)
+            pa = Measurer.world(in: frame, normalized: a.normalized, metres: da)
+            pb = Measurer.world(in: frame, normalized: b.normalized, metres: db)
             planeNote = String(format: ", flat plane %.0f%% of depth, ends %.3f/%.3f m", plane.inliers * 100, da, db)
             // A third point beside the line, to know which way the surface faces.
             let mid = SIMD2(Float(a.normalized.x + b.normalized.x) / 2, Float(a.normalized.y + b.normalized.y) / 2)
@@ -684,7 +696,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let side = SIMD2(-along.y, along.x) * (0.1 / max(0.05, simd_length(along)))
             let third = CGPoint(x: Double(mid.x + side.x), y: Double(mid.y + side.y))
             if plane.inliers >= 0.8, let d3 = plane.depth(x: Float(third.x) * px, y: Float(third.y) * py), (0.1...6).contains(d3) {
-                let pc = Measurer.world(in: frame, normalized: third, metres: d3 * Measurer.depthScale)
+                let pc = Measurer.world(in: frame, normalized: third, metres: d3)
                 let n = simd_cross(pb - pa, pc - pa)
                 if simd_length(n) > 1e-6 { dragPlane = (pa, simd_normalize(n)) } else { dragPlane = nil }
             } else { dragPlane = nil }
@@ -724,7 +736,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private func finishDrag(screenLength: CGFloat) {
         defer { endDrag() }
         guard let drag, screenLength > 24, simd_distance(drag.a, drag.b) > 0.005 else { return }
-        let line = RoomMeasurement(a: array(drag.a), b: array(drag.b), created: Date())
+        let line = Measurer.makeLine(a: array(drag.a), b: array(drag.b))
         measurements.append(line)
         Haptics.success()
         Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (drawn on the screen)")
@@ -838,7 +850,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             updatePreview()
             return
         }
-        let line = RoomMeasurement(a: array(start), b: array(cursor), created: Date())
+        let line = Measurer.makeLine(a: array(start), b: array(cursor))
         measurements.append(line)
         Haptics.success()
         let camera = session.currentFrame?.camera.transform.columns.3
@@ -854,7 +866,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     @discardableResult
     func addLine(from a: SIMD3<Float>, to b: SIMD3<Float>) -> UUID? {
         guard simd_distance(a, b) > 0.005 else { return nil }
-        let line = RoomMeasurement(a: array(a), b: array(b), created: Date())
+        let line = Measurer.makeLine(a: array(a), b: array(b))
         measurements.append(line)
         Haptics.success()
         Diagnostics.log("Measured in a saved frame: \(Measurer.text(line.measured))")
@@ -884,11 +896,18 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     @discardableResult
     func calibrate(_ id: UUID, to metres: Float) -> Bool {
         guard let line = measurements.first(where: { $0.id == id }), line.measured > 0.03, metres > 0.03 else { return false }
-        let scale = min(max(Measurer.depthScale * metres / line.measured, 0.3), 3)
+        let raw = simd_distance(line.start, line.end)
+        let scale = metres / raw
+        // Far from what the phone read means a mistyped length or unit (a bare number is centimetres), not a bias.
+        guard (0.5...2).contains(scale) else {
+            Diagnostics.log(String(format: "Calibration refused: read %.1f cm, typed %.1f cm, ratio %.3f", raw * 100, metres * 100, scale))
+            say(String(format: "Phone read %.0f cm, you typed %.0f cm. Check the number and unit.", raw * 100, metres * 100))
+            return false
+        }
         Measurer.depthScale = scale
         calibration = scale
         UserDefaults.standard.set(scale, forKey: "measureDepthScale")
-        Diagnostics.log(String(format: "Calibrated: read %.1f cm, real %.1f cm, depth scale now %.3f", line.measured * 100, metres * 100, scale))
+        Diagnostics.log(String(format: "Calibrated: read %.1f cm, real %.1f cm, length scale now %.3f", raw * 100, metres * 100, scale))
         setLength(metres, for: id)
         return true
     }
@@ -952,7 +971,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             say(String(format: "A4 %.0f cm, LiDAR %.0f cm: too far apart, not used", pinhole * 100, lidar * 100))
             return
         }
-        let scale = min(max(pinhole / lidar, 0.3), 3)
+        let scale = pinhole / lidar
         Diagnostics.log(String(format: "A4 check (phone %.1f cm/s): pinhole %.3f m, LiDAR %.3f m (raw), ratio %.3f, shape mismatch %.3f, previous scale %.3f",
                                phoneSpeed, pinhole, lidar, pinhole / lidar, best.result.mismatch, Measurer.depthScale))
         Measurer.depthScale = scale
@@ -1360,7 +1379,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             ?? DepthMap.planeDepth(depth.values, width: depth.width, height: depth.height, x: px, y: py)
             ?? DepthMap.sample(depth.values, width: depth.width, height: depth.height,
                                x: Int(n.x * CGFloat(depth.width)), y: Int(n.y * CGFloat(depth.height)))
-        guard let metres = metres.map({ $0 * depthScale }) else { return nil }
+        guard let metres else { return nil }
         return world(in: frame, normalized: n, metres: metres)
     }
 

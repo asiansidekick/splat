@@ -134,11 +134,14 @@ struct RoomMeasurement: Codable, Identifiable, Equatable {
     var typed: Float?
     /// When the typed length was last changed, so syncing phones keep the newest.
     var edited: Date?
+    /// The tape or A4 correction in force when the line was drawn. It stretches the length only: the two
+    /// points stay exactly where the camera saw the surface, so the line keeps sticking to it as the phone moves.
+    var scale: Float?
 
     var start: SIMD3<Float> { vector3(a) }
     var end: SIMD3<Float> { vector3(b) }
-    /// What the phone measured between the two points.
-    var measured: Float { simd_distance(start, end) }
+    /// What the phone measured between the two points, after the tape or A4 correction.
+    var measured: Float { simd_distance(start, end) * (scale ?? 1) }
     /// What is shown: the typed length if there is one, else the measured one.
     var length: Float { typed ?? measured }
 }
