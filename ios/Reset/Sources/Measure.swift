@@ -98,6 +98,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// How much the phone's depth readings are stretched to agree with a real length typed in
     /// against a tape measure (Phil, 2026-10-31). 1 = as read.
     @Published private(set) var calibration = Measurer.depthScale
+    /// Why the last tape calibration was refused, for the length card.
+    private(set) var lastProblem: String?
     /// Place line ends with ARKit's own surface raycast, the way Apple's Measure does (Phil,
     /// 2026-11-05), falling back to the LiDAR depth where ARKit finds no surface or disagrees with it.
     static var useRaycast: Bool { UserDefaults.standard.object(forKey: "measureRaycast") as? Bool ?? true }
@@ -900,13 +902,18 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// the truth: later readings are stretched by the same ratio. Returns false if it can't be used.
     @discardableResult
     func calibrate(_ id: UUID, to metres: Float) -> Bool {
-        guard let line = measurements.first(where: { $0.id == id }), line.measured > 0.03, metres > 0.03 else { return false }
+        lastProblem = nil
+        guard let line = measurements.first(where: { $0.id == id }), line.measured > 0.03, metres > 0.03 else {
+            lastProblem = "That line or length is too short to calibrate with."
+            return false
+        }
         let raw = simd_distance(line.start, line.end)
         let scale = metres / raw
         // Far from what the phone read means a mistyped length or unit (a bare number is centimetres), not a bias.
         guard (0.5...2).contains(scale) else {
             Diagnostics.log(String(format: "Calibration refused: read %.1f cm, typed %.1f cm, ratio %.3f", raw * 100, metres * 100, scale))
-            say(String(format: "Phone read %.0f cm, you typed %.0f cm. Check the number and unit.", raw * 100, metres * 100))
+            lastProblem = String(format: "Phone read %.0f cm, you typed %.0f cm. Check the number and unit.", raw * 100, metres * 100)
+            say(lastProblem ?? "")
             return false
         }
         Measurer.depthScale = scale
@@ -1813,6 +1820,8 @@ struct MeasureEntry: View {
     @State private var text = ""
     @AppStorage("lengthUnit") private var unit = "cm"
     @FocusState private var focused: Bool
+    /// Why Set or Tape did nothing, shown under the number.
+    @State private var problem: String?
 
     private static let units: [(name: String, metres: Float)] = [("cm", 0.01), ("mm", 0.001), ("m", 1), ("in", 0.0254), ("ft", 0.3048)]
 
@@ -1869,7 +1878,14 @@ struct MeasureEntry: View {
                 plainButton("Tape", fill: Color.green.opacity(0.85), text: .black) {
                     var typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if let last = typed.last, last.isNumber || last == "." { typed += unit }
-                    guard let metres = LengthText.parse(typed), measurer.calibrate(id, to: metres) else {
+                    guard let metres = LengthText.parse(typed) else {
+                        Diagnostics.log("Tape pressed: could not read '\(typed)'")
+                        problem = "Can't read that. Type a number like 30."
+                        Haptics.warning()
+                        return
+                    }
+                    guard measurer.calibrate(id, to: metres) else {
+                        problem = measurer.lastProblem ?? "That doesn't fit the line. Check the number and unit."
                         Haptics.warning()
                         return
                     }
@@ -1884,9 +1900,12 @@ struct MeasureEntry: View {
                     }
                     if let last = typed.last, last.isNumber || last == "." { typed += unit }
                     guard let metres = LengthText.parse(typed) else {
+                        Diagnostics.log("Set pressed: could not read '\(typed)'")
+                        problem = "Can't read that. Type a number like 30."
                         Haptics.warning()
                         return
                     }
+                    Diagnostics.log("Set pressed: '\(typed)' = \(Measurer.text(metres))")
                     measurer.setLength(metres, for: id)
                     measurer.dismissEntry()
                 }
@@ -1899,6 +1918,20 @@ struct MeasureEntry: View {
                 .foregroundStyle(.white)
                 .padding(.vertical, 2)
                 .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(alignment: .trailing) {
+                    if !text.isEmpty {
+                        Button { text = ""; problem = nil } label: {
+                            Image(systemName: "xmark.circle.fill").font(.title2).foregroundStyle(.white.opacity(0.6))
+                                .padding(.trailing, 8)
+                        }
+                        .accessibilityLabel("Clear")
+                    }
+                }
+                .onChange(of: text) { _, _ in problem = nil }
+            if let problem {
+                Text(problem).font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+            }
             HStack(spacing: 6) {
                 ForEach(Self.units, id: \.name) { item in
                     Button { unit = item.name } label: {
