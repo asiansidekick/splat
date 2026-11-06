@@ -28,6 +28,12 @@ Photos are stored in the app's Documents folder (visible in the Files app). Re-s
 
 Every push that touches `ios/Match` builds an unsigned IPA on GitHub Actions (`.github/workflows/ios-match.yml`). Download the **Match-build-N** artifact from the run (N is the run number, also shown at the bottom of the app's home screen) and install `Match-build-N.ipa` with Sideloadly using your Apple ID.
 
+## TestFlight
+
+`.github/workflows/testflight-match.yml` builds, signs (Apple's cloud signing, no certificate stored in GitHub) and uploads Match to TestFlight on every push that touches `ios/Match`, using the same repository secrets as Reset (`APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8`). The bundle ID is `com.asiansidekick.match.K2LQWV85T9`, the one Sideloadly registers for the sideloaded copy, so TestFlight installs over it and keeps its boards.
+
+One step is by hand, because Apple only allows it on the website: in App Store Connect, open Apps, tap +, New App, pick that bundle ID (the first run registers it) and give the app a name that is free on the App Store, for example "Match Continuity" (the name on the home screen stays Match). Until that exists the workflow checks the ID, says so in its log and uploads nothing.
+
 ## Build with a Mac
 
 ```sh
