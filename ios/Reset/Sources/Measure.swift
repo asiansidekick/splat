@@ -1470,7 +1470,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let line = node(
                 for: measurement.start, measurement.end, axes: showAxes && !picked,
                 colour: picked ? Measurer.pickedColour : Measurer.lineColour,
-                scale: measurement.measured > 0 ? measurement.length / measurement.measured : 1,
+                scale: simd_distance(measurement.start, measurement.end) > 0 ? measurement.length / simd_distance(measurement.start, measurement.end) : 1,
                 approx: measurement.typed == nil)
             line.name = "mark:\(measurement.id.uuidString)"
             root.addChildNode(line)
