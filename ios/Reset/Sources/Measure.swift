@@ -64,6 +64,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var dragTooClose = false
     /// The depth and ARKit disagree, or the room is too dark for the LiDAR: the length is a guess.
     private var dragDoubtful = false
+    private var lastCursorTime = Date.distantPast
     /// Where the finger is, the point it is aiming at above it, and where the corner snap put
     /// that point, all in screen points, so the aim can be drawn where it can be seen.
     struct Pointer: Equatable {
@@ -838,12 +839,12 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// What the readout under the crosshair says.
     var readout: String {
         if let notice { return notice }
-        if let drag { return "~" + Measurer.text(simd_distance(drag.a, drag.b)) + (dragTooClose ? " · too close" : dragDoubtful ? " · unsure" : "") }
+        if let drag { return "~" + Measurer.liveText(simd_distance(drag.a, drag.b)) + (dragTooClose ? " · too close" : dragDoubtful ? " · unsure" : "") }
         if moving != nil { return "Aim where it goes, tap ✓" }
         if selected != nil { return "Edit, move or delete the red one" }
         guard let cursor else { return trackingNote ?? "Aim at a surface" }
         if tooClose { return "Too close: step back a little" }
-        if let start { return "~" + Measurer.text(simd_distance(start, cursor)) }
+        if let start { return "~" + Measurer.liveText(simd_distance(start, cursor)) }
         return measurements.isEmpty && notes.isEmpty ? "Drag a line across it, or hold to add a note" : "Drag a line, or hold to add a note"
     }
 
@@ -1190,12 +1191,22 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         trackingNote = nil
         loggedNote = nil
         logMarkCheck(frame)
+        var reading: SIMD3<Float>?
         if let point = Measurer.depthPoint(frame) {
-            cursor = point
+            reading = point
             fromLiDAR = true
         } else {
-            cursor = Measurer.surfacePoint(frame, session: session)
+            reading = Measurer.surfacePoint(frame, session: session)
             fromLiDAR = false
+        }
+        // Held steady: a gap of under 0.7 s keeps the last reading (the crosshair and its words no longer
+        // flicker between "Aim at a surface" and the distance), and a close reading is blended with the last.
+        if var point = reading {
+            if let last = cursor, simd_distance(last, point) < 0.15 { point = last * 0.6 + point * 0.4 }
+            cursor = point
+            lastCursorTime = Date()
+        } else if Date().timeIntervalSince(lastCursorTime) > 0.7 {
+            cursor = nil
         }
         if loggedSource != fromLiDAR {
             loggedSource = fromLiDAR
@@ -1437,6 +1448,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     /// Millimetres are noise from a phone: tenths of a centimetre up to a metre, then centimetres.
     static func text(_ metres: Float) -> String { LengthText.format(metres) }
+
+    /// Live readouts while aiming or dragging: to the nearest half centimetre, so the digits stop flickering.
+    static func liveText(_ metres: Float) -> String {
+        metres < 1 ? String(format: "%.1f cm", (metres * 200).rounded() / 2) : String(format: "%.2f m", metres)
+    }
 
     private func array(_ p: SIMD3<Float>) -> [Float] { [p.x, p.y, p.z] }
 
