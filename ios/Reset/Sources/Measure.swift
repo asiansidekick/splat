@@ -158,6 +158,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         var shifted = false
     }
     private var tracks: [String: EndTrack] = [:]
+    /// Each held line's length, kept while its ends follow the picture, so holding never stretches or shrinks it.
+    private var restLength: [UUID: Float] = [:]
     private var lastRefine: TimeInterval = 0
     private var refinedAt: Date?
     private static let patchHalf = 12
@@ -305,6 +307,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// Remembers the picture round both ends of a line just drawn, so they can be found again.
     private func startTracking(_ line: RoomMeasurement, plane: (point: SIMD3<Float>, normal: SIMD3<Float>)? = nil) {
         guard let frame = session.currentFrame, case .normal = frame.camera.trackingState else { return }
+        restLength[line.id] = simd_distance(line.start, line.end)
         for (end, point) in [line.start, line.end].enumerated() {
             guard let p = Measurer.pixel(of: point, in: frame) else { continue }
             let centre = SIMD2(Int(p.x / 2), Int(p.y / 2))
@@ -343,6 +346,12 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
               case .normal = frame.camera.trackingState else { return }
         lastRefine = frame.timestamp
         var changedAny = false
+        // A length changed by hand (an end dragged) becomes the new length to keep.
+        for (id, rest) in restLength {
+            guard let i = measurements.firstIndex(where: { $0.id == id }) else { restLength[id] = nil; continue }
+            let d = simd_distance(measurements[i].start, measurements[i].end)
+            if abs(d - rest) > 0.0005 { restLength[id] = d }
+        }
         let side = 2 * Measurer.patchHalf + 1
         let grid = side + 2 * Measurer.searchRadius
         for (key, var track) in tracks {
@@ -402,6 +411,17 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             tracks[key] = track
         }
         if changedAny {
+            // Holding the ends to the picture must not change the length: put them back to it about the middle.
+            for (id, rest) in restLength {
+                guard let i = measurements.firstIndex(where: { $0.id == id }),
+                      tracks["\(id.uuidString):0"] != nil, tracks["\(id.uuidString):1"] != nil else { continue }
+                let a = measurements[i].start, b = measurements[i].end
+                let d = simd_distance(a, b)
+                guard d > 0.001, abs(d - rest) > 0.0005 else { continue }
+                let middle = (a + b) / 2, along = (b - a) / d
+                measurements[i].a = array(middle - along * rest / 2)
+                measurements[i].b = array(middle + along * rest / 2)
+            }
             refinedAt = Date()
             rebuild()
             updatePreview()
