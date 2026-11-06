@@ -59,6 +59,20 @@ jobs:
           python3 -m pip install --quiet --break-system-packages pyjwt cryptography
           python3 .github/scripts/asc_check.py
 
+      # Apple only accepts uploads built with the iOS 26 SDK (Xcode 26) or later.
+      - name: Select Xcode 26 or later
+        run: |
+          ls -d /Applications/Xcode*.app || true
+          best=$(ls -d /Applications/Xcode_*.app 2>/dev/null | grep -viE 'beta|_rc|candidate' | sed -E 's#.*/Xcode_([0-9.]+)(_[A-Za-z0-9]+)?\.app#\1 &#' | awk '$1 >= 26' | sort -V | tail -1 | cut -d' ' -f2-)
+          if [ -z "$best" ]; then
+            echo "::error::No Xcode 26 or later on this runner. Installed: $(ls -d /Applications/Xcode*.app | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "Using $best"
+          sudo xcode-select -s "$best/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
       - name: Generate Xcode project
         working-directory: ios/Reset
         run: |
