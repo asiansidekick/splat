@@ -311,7 +311,12 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let through = Measurer.ray(through: SIMD2(Float(centre.x * 2) + 1, Float(centre.y * 2) + 1), in: frame)
             let depth = simd_dot(point - through.origin, through.direction)
             guard depth > 0.1 else { continue }
-            tracks["\(line.id.uuidString):\(end)"] = EndTrack(patch: patch, origin: through.origin, direction: through.direction, depth: depth, first: depth, plane: plane)
+            // Not drawn on a flat surface (a laptop on a bed, a prop, a face): hold the end on a plane through it
+            // facing the camera it was drawn from. The end then stays under the picture detail it was put on,
+            // at the depth the LiDAR gave, instead of trusting the phone's pose alone (which drifts in dim rooms).
+            let back = frame.camera.transform.columns.2
+            let facing = (point: point, normal: simd_normalize(SIMD3(back.x, back.y, back.z)))
+            tracks["\(line.id.uuidString):\(end)"] = EndTrack(patch: patch, origin: through.origin, direction: through.direction, depth: depth, first: depth, plane: plane ?? facing)
         }
     }
 
