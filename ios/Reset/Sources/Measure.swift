@@ -943,7 +943,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             return
         }
         guard phoneSpeed < 5 else {
-            say("Hold the phone still, then tap A4")
+            say("Hold the phone still, then try A4 again")
             return
         }
         let buffer = frame.capturedImage
