@@ -137,6 +137,8 @@ struct RoomMeasurement: Codable, Identifiable, Equatable {
     /// The tape or A4 correction in force when the line was drawn. It stretches the length only: the two
     /// points stay exactly where the camera saw the surface, so the line keeps sticking to it as the phone moves.
     var scale: Float?
+    /// The reading was doubtful when it was drawn (dark, shiny, or depth and ARKit disagreed), so it is not used to learn from.
+    var unsure: Bool?
 
     var start: SIMD3<Float> { vector3(a) }
     var end: SIMD3<Float> { vector3(b) }

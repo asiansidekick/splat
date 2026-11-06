@@ -114,6 +114,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         return (0.5...2).contains(saved) ? saved : 1
     }()
 
+    /// The real/measured ratios of the last typed lengths (up to five), whose median is the correction.
+    static var ratios: [Float] = UserDefaults.standard.array(forKey: "measureRatios") as? [Float] ?? [] {
+        didSet { UserDefaults.standard.set(ratios, forKey: "measureRatios") }
+    }
+
     /// A new line, carrying the correction in force now.
     static func makeLine(a: [Float], b: [Float]) -> RoomMeasurement {
         var line = RoomMeasurement(a: a, b: b, created: Date())
@@ -772,7 +777,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private func finishDrag(screenLength: CGFloat) {
         defer { endDrag() }
         guard let drag, screenLength > 24, simd_distance(drag.a, drag.b) > 0.005 else { return }
-        let line = Measurer.makeLine(a: array(drag.a), b: array(drag.b))
+        var line = Measurer.makeLine(a: array(drag.a), b: array(drag.b))
+        if dragDoubtful { line.unsure = true }
         measurements.append(line)
         Haptics.success()
         Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (drawn on the screen)")
@@ -828,6 +834,26 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         measurements[index].edited = Date()
         Diagnostics.log("Measurement edited: measured \(Measurer.text(measurements[index].measured)), shown \(Measurer.text(measurements[index].length))")
         changed()
+    }
+
+    /// Every length typed in for a line the phone read with confidence teaches the correction: the
+    /// median of the last five real/measured ratios, ignoring any outside 0.8 to 1.25.
+    func learn(from id: UUID, metres: Float) {
+        guard let line = measurements.first(where: { $0.id == id }), line.unsure != true else { return }
+        let raw = simd_distance(line.start, line.end)
+        guard raw > 0.05, metres > 0.03 else { return }
+        let ratio = metres / raw
+        guard (0.8...1.25).contains(ratio) else {
+            Diagnostics.log(String(format: "Learn: ratio %.3f (read %.1f cm, typed %.1f cm) is out of range, not used", ratio, raw * 100, metres * 100))
+            return
+        }
+        Measurer.ratios = Array((Measurer.ratios + [ratio]).suffix(5))
+        let sorted = Measurer.ratios.sorted()
+        let median = sorted[sorted.count / 2]
+        Measurer.depthScale = median
+        calibration = median
+        UserDefaults.standard.set(median, forKey: "measureDepthScale")
+        Diagnostics.log(String(format: "Learn: ratio %.3f, last %d ratios, correction now %.3f", ratio, Measurer.ratios.count, median))
     }
 
     /// Deletes the picked line or note.
@@ -949,6 +975,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             return false
         }
         Measurer.depthScale = scale
+        Measurer.ratios = [scale]
         calibration = scale
         UserDefaults.standard.set(scale, forKey: "measureDepthScale")
         Diagnostics.log(String(format: "Calibrated: read %.1f cm, real %.1f cm, length scale now %.3f", raw * 100, metres * 100, scale))
@@ -1019,6 +1046,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         Diagnostics.log(String(format: "A4 check (phone %.1f cm/s): pinhole %.3f m, LiDAR %.3f m (raw), ratio %.3f, shape mismatch %.3f, previous scale %.3f",
                                phoneSpeed, pinhole, lidar, pinhole / lidar, best.result.mismatch, Measurer.depthScale))
         Measurer.depthScale = scale
+        Measurer.ratios = [scale]
         calibration = scale
         UserDefaults.standard.set(scale, forKey: "measureDepthScale")
         Haptics.tap()
@@ -1070,6 +1098,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     func resetCalibration() {
         Measurer.depthScale = 1
+        Measurer.ratios = []
         calibration = 1
         UserDefaults.standard.removeObject(forKey: "measureDepthScale")
         Haptics.tap()
@@ -1958,6 +1987,7 @@ struct MeasureEntry: View {
                         return
                     }
                     Diagnostics.log("Set pressed: '\(typed)' = \(Measurer.text(metres))")
+                    measurer.learn(from: id, metres: metres)
                     measurer.setLength(metres, for: id)
                     measurer.dismissEntry()
                 }
