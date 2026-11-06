@@ -1602,7 +1602,7 @@ struct ResetStage: View {
         .onReceive(restorer.measurer.$active) { measuring = $0 }
         .onReceive(restorer.measurer.$revision.dropFirst()) { _ in
             if !restorer.measurer.measurements.isEmpty {
-                showTip("Tap A4 or Tape in the ruler bar to make sizes exact. Hold a line's end, then drag, to move it.", key: "tip.measure")
+                showTip("Tap Exact in the ruler bar to make sizes exact. Hold a line's end, then drag, to move it.", key: "tip.measure")
             }
             reference.measurements = restorer.measurer.measurements
             reference.notes = restorer.measurer.notes

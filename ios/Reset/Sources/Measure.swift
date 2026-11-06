@@ -62,6 +62,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// The sheet the A4 check found, in screen points, shown for a few seconds so it can be seen to be the right one.
     @Published private(set) var paperQuad: [CGPoint] = []
     private var dragTooClose = false
+    /// The depth and ARKit disagree, or the room is too dark for the LiDAR: the length is a guess.
+    private var dragDoubtful = false
     /// Where the finger is, the point it is aiming at above it, and where the corner snap put
     /// that point, all in screen points, so the aim can be drawn where it can be seen.
     struct Pointer: Equatable {
@@ -724,10 +726,16 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
                     pb = rb
                     dragPlane = nil
                 }
+                dragDoubtful = !agrees
             } else {
                 planeNote += ", ARKit found no surface (depth used)"
+                dragDoubtful = false
             }
         }
+        // Dark rooms and black or glossy things send the LiDAR's light nowhere: it then reads the wall behind.
+        let lux = frame.lightEstimate?.ambientIntensity ?? 1000
+        if lux < 300 { dragDoubtful = true }
+        planeNote += String(format: ", light %.0f lm%@", lux, dragDoubtful ? ", UNSURE" : "")
         dragSamples.append(DragLine(a: pa, b: pb))
         if dragSamples.count > 8 { dragSamples.removeFirst() }
         let line = DragLine(a: Measurer.median(dragSamples.map(\.a)), b: Measurer.median(dragSamples.map(\.b)))
@@ -750,6 +758,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         Diagnostics.log("Drag detail: \(dragDetail)")
         changed()
         startTracking(line, plane: dragPlane)
+        if dragDoubtful {
+            say("Unsure here: dark, black or shiny. Add light or aim at a lighter surface.")
+        }
         if tapeMode {
             tapeMode = false
             tapeLine = line.id
@@ -827,7 +838,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// What the readout under the crosshair says.
     var readout: String {
         if let notice { return notice }
-        if let drag { return "~" + Measurer.text(simd_distance(drag.a, drag.b)) + (dragTooClose ? " · too close" : "") }
+        if let drag { return "~" + Measurer.text(simd_distance(drag.a, drag.b)) + (dragTooClose ? " · too close" : dragDoubtful ? " · unsure" : "") }
         if moving != nil { return "Aim where it goes, tap ✓" }
         if selected != nil { return "Edit, move or delete the red one" }
         guard let cursor else { return trackingNote ?? "Aim at a surface" }
@@ -1641,14 +1652,7 @@ struct MeasureBar: View {
                 } else if measurer.moving == nil {
                     small("arrow.uturn.backward", "Undo") { measurer.undo() }
                         .disabled(measurer.start == nil && measurer.isEmpty)
-                    small("ruler.fill", measurer.tapeMode ? "Drag on tape" : "Tape", tint: measurer.tapeMode ? .green : .white) {
-                        measurer.tapeMode.toggle()
-                    }
-                    small("doc.viewfinder", "A4") { measurer.calibrateToPaper() }
-                    if measurer.calibration != 1 {
-                        small("scalemass", String(format: "×%.2f", measurer.calibration)) { measurer.resetCalibration() }
-                    }
-                    small("questionmark.circle", "How") { showingGuide = true }
+                    fineTune
                 }
                 Button { measurer.addPoint() } label: {
                     Image(systemName: measurer.start == nil && measurer.moving == nil ? "plus" : "checkmark")
@@ -1676,15 +1680,27 @@ struct MeasureBar: View {
                 Button("Delete all", role: .destructive) { measurer.clear() }
             }
             .sheet(isPresented: $showingGuide) { MeasureGuideSheet() }
-            .onAppear {
-                // The first time the ruler is switched on, explain how to make it exact.
-                let key = "tip.measureGuide"
-                if !UserDefaults.standard.bool(forKey: key) {
-                    UserDefaults.standard.set(true, forKey: key)
-                    showingGuide = true
-                }
-            }
         }
+    }
+
+    /// Everything about making sizes exact in one place, so the bar stays short.
+    private var fineTune: some View {
+        Menu {
+            Button { measurer.tapeMode.toggle() } label: { Label(measurer.tapeMode ? "Drag a line on the tape now" : "Calibrate with a tape", systemImage: "ruler.fill") }
+            Button { measurer.calibrateToPaper() } label: { Label("Calibrate with A4 paper", systemImage: "doc.viewfinder") }
+            if measurer.calibration != 1 {
+                Button(role: .destructive) { measurer.resetCalibration() } label: { Label(String(format: "Remove correction ×%.2f", measurer.calibration), systemImage: "arrow.uturn.backward") }
+            }
+            Button { showingGuide = true } label: { Label("How it works", systemImage: "questionmark.circle") }
+        } label: {
+            VStack(spacing: 1) {
+                Image(systemName: measurer.tapeMode ? "ruler.fill" : "slider.horizontal.3").font(.body)
+                Text(measurer.tapeMode ? "Drag on tape" : measurer.calibration != 1 ? String(format: "Exact ×%.2f", measurer.calibration) : "Exact").font(.system(size: 9, weight: .semibold))
+            }
+            .frame(minWidth: 36)
+            .foregroundStyle((measurer.tapeMode ? Color.green : Color.white).opacity(0.95))
+        }
+        .accessibilityLabel("Make sizes exact")
     }
 
     private func small(_ symbol: String, _ title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
@@ -1713,15 +1729,15 @@ struct MeasureGuideSheet: View {
                 }
                 Section("Calibrate with a tape measure") {
                     step("1", "Stretch a tape measure along a flat surface in the picture.")
-                    step("2", "Tap Tape. The button turns green.")
+                    step("2", "Tap Exact, then Calibrate with a tape. The button turns green.")
                     step("3", "Drag a line along the tape, between two marks you can read.")
                     step("4", "Type what the tape says. Every size is corrected to match.")
                 }
                 Section("Calibrate with an A4 sheet") {
                     step("1", "Lay a sheet of A4 paper flat, the whole sheet in view.")
                     step("2", "Hold the phone still, a little over arm's length away.")
-                    step("3", "Tap A4. A green outline shows the sheet it found.")
-                    step("4", "The correction shows as ×1.0x. Tap it to undo.")
+                    step("3", "Tap Exact, then Calibrate with A4 paper. A green outline shows the sheet it found.")
+                    step("4", "The correction shows on the button as ×1.0x. Exact, then Remove correction, undoes it.")
                 }
                 Section("Edit a size any time") {
                     step("•", "Tap a line, then tap Size and type the real length.")
