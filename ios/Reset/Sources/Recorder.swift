@@ -230,7 +230,30 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     nonisolated func session(_ session: ARSession, didFailWithError error: Error) {
         let message = ARErrors.message(for: error)
         Diagnostics.log("Record session failed: \(error)")
-        Task { @MainActor in self.error = message }
+        Task { @MainActor in
+            self.error = message
+            self.retryAfterFailure()
+        }
+    }
+
+    private var failures = 0
+    private var lastFailure = Date.distantPast
+
+    /// A sensor that failed (another app took the camera, the phone got hot, a call) usually comes
+    /// back within seconds. Try again up to three times instead of leaving a frozen screen.
+    private func retryAfterFailure() {
+        if Date().timeIntervalSince(lastFailure) > 60 { failures = 0 }
+        lastFailure = Date()
+        guard failures < 3, !capturing, !pendingSave, !saving else { return }
+        failures += 1
+        let attempt = failures
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !self.capturing, !self.pendingSave, !self.saving else { return }
+            Diagnostics.log("Record: restarting the camera after a failure (try \(attempt))")
+            self.error = nil
+            self.prepare(useLiDAR: self.lastUseLiDAR)
+        }
     }
 
     nonisolated func sessionWasInterrupted(_ session: ARSession) {
