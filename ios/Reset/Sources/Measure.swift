@@ -1591,6 +1591,7 @@ struct MeasureHint: View {
 struct MeasureBar: View {
     @ObservedObject var measurer: Measurer
     @State private var confirmingClear = false
+    @State private var showingGuide = false
     /// iPhone on its side: the buttons stand in a column at the left edge instead of a row over the picture.
     @Environment(\.verticalSizeClass) private var verticalSize
 
@@ -1616,6 +1617,7 @@ struct MeasureBar: View {
                     if measurer.calibration != 1 {
                         small("scalemass", String(format: "×%.2f", measurer.calibration)) { measurer.resetCalibration() }
                     }
+                    small("questionmark.circle", "How") { showingGuide = true }
                 }
                 Button { measurer.addPoint() } label: {
                     Image(systemName: measurer.start == nil && measurer.moving == nil ? "plus" : "checkmark")
@@ -1642,6 +1644,15 @@ struct MeasureBar: View {
             .confirmationDialog("Delete every dimension and note?", isPresented: $confirmingClear, titleVisibility: .visible) {
                 Button("Delete all", role: .destructive) { measurer.clear() }
             }
+            .sheet(isPresented: $showingGuide) { MeasureGuideSheet() }
+            .onAppear {
+                // The first time the ruler is switched on, explain how to make it exact.
+                let key = "tip.measureGuide"
+                if !UserDefaults.standard.bool(forKey: key) {
+                    UserDefaults.standard.set(true, forKey: key)
+                    showingGuide = true
+                }
+            }
         }
     }
 
@@ -1655,6 +1666,50 @@ struct MeasureBar: View {
             .foregroundStyle(tint.opacity(0.95))
         }
         .accessibilityLabel(title)
+    }
+}
+
+/// Pop-up explaining how to make measurements exact. Shown the first time the ruler is on, and from the "How" button.
+struct MeasureGuideSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Label("The app's readings are estimates, good to a few per cent. Check them against the real thing: measure something on set with a tape, then correct the app to match.", systemImage: "exclamationmark.triangle")
+                        .font(.body)
+                }
+                Section("Calibrate with a tape measure") {
+                    step("1", "Stretch a tape measure along a flat surface in the picture.")
+                    step("2", "Tap Tape. The button turns green.")
+                    step("3", "Drag a line along the tape, between two marks you can read.")
+                    step("4", "Type what the tape says. Every size is corrected to match.")
+                }
+                Section("Calibrate with an A4 sheet") {
+                    step("1", "Lay a sheet of A4 paper flat, the whole sheet in view.")
+                    step("2", "Hold the phone still, a little over arm's length away.")
+                    step("3", "Tap A4. A green outline shows the sheet it found.")
+                    step("4", "The correction shows as ×1.0x. Tap it to undo.")
+                }
+                Section("Edit a size any time") {
+                    step("•", "Tap a line, then tap Size and type the real length.")
+                    step("•", "Hold the end of a line, then drag, to move it.")
+                    step("•", "Tap Note to write a comment on the picture.")
+                }
+            }
+            .navigationTitle("Making sizes exact")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.large])
+    }
+
+    private func step(_ number: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(number).font(.headline).foregroundStyle(.yellow).frame(width: 18)
+            Text(text).font(.body)
+        }
     }
 }
 
