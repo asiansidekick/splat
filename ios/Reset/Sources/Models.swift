@@ -583,6 +583,14 @@ struct ModelOverlay: View {
                         if showsFloor { Button("Floor") { placer.dropToFloor() } }
                         Button("Bring here") { placer.bringToView() }
                         Button("True size") { placer.resetSelectedModelSize() }
+                        Spacer(minLength: 0)
+                    }
+                    .buttonStyle(.bordered)
+                    .font(Theme.headline)
+                    .controlSize(.small)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
+                    HStack {
                         Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
                         Spacer()
                         Button("Done") { placer.selectedModel = nil }
