@@ -102,8 +102,21 @@ struct CaptureView: View {
         } leading: {
             referenceButton
         } shutter: {
-            ShutterButton(style: .photo) { shoot() }
-                .accessibilityLabel("Take photo")
+            // Pause sits right beside the shutter; the empty twin keeps the shutter in the middle.
+            // On its side there is no room across, so it goes under the shutter instead.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    Color.clear.frame(width: 44, height: 44)
+                    ShutterButton(style: .photo) { shoot() }
+                        .accessibilityLabel("Take photo")
+                    pauseButton
+                }
+                VStack(spacing: 10) {
+                    ShutterButton(style: .photo) { shoot() }
+                        .accessibilityLabel("Take photo")
+                    pauseButton
+                }
+            }
         } trailing: {
             SideButton(title: "Next T\(take + 1)", systemImage: "forward.end.fill", tint: .yellow) {
                 setTake(take + 1)
@@ -205,7 +218,6 @@ struct CaptureView: View {
                      highlighted: guideOn && ghost != nil)
             }
             .accessibilityLabel(guideOn ? "Turn the guide off" : "Turn the guide on")
-            pauseButton
             if hasLight { lightButton }
             Button { camera.flip() } label: { Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3) }
                 .accessibilityLabel("Switch camera")
@@ -238,10 +250,10 @@ struct CaptureView: View {
             if paused { resume() } else { pause() }
         } label: {
             Image(systemName: paused ? "play.fill" : "pause.fill")
-                .font(.footnote.bold())
+                .font(.body.bold())
                 .foregroundStyle(paused ? Color.black : Color.white)
-                .frame(width: 34, height: 34)
-                .background(paused ? Color.orange : Color.clear, in: Circle())
+                .frame(width: 44, height: 44)
+                .background(paused ? Color.orange : Color.black.opacity(0.35), in: Circle())
                 .overlay(Circle().stroke(paused ? Color.orange : Color.white, lineWidth: 2))
                 .contentShape(Circle())
         }
