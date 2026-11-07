@@ -78,7 +78,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .padding(.vertical, 8)
                         .frame(width: Self.sideWidth)
                         .frame(maxHeight: .infinity)
-                        .background(Color.black.opacity(0.35).ignoresSafeArea(edges: [.top, .bottom]))
+                        .background(Theme.band.ignoresSafeArea(edges: [.top, .bottom]))
                         if left { Spacer(minLength: 0) }
                     }
                     // Right against the edge of the screen, like the Camera app, not inset by the
@@ -141,7 +141,7 @@ struct ModePicker<Mode: Hashable>: View {
                         .font(.footnote.weight(.semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
-                        .foregroundStyle(selection == mode ? Color.yellow : Color.white)
+                        .foregroundStyle(selection == mode ? Theme.accent : Theme.text)
                 }
             }
         }
@@ -200,7 +200,7 @@ struct SideButton: View {
                 Image(systemName: systemImage)
                     .font(.title3)
                     .frame(width: 50, height: 50)
-                    .background(Color.white.opacity(0.15), in: Circle())
+                    .background(Theme.chip, in: Circle())
                 Text(title).font(.caption2.bold()).lineLimit(1).minimumScaleFactor(0.7)
             }
             .foregroundStyle(tint)
@@ -233,8 +233,8 @@ struct TopPill: View {
             .font(.subheadline.bold())
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(highlighted ? Color.yellow : Color.white.opacity(0.15), in: Capsule())
-            .foregroundStyle(highlighted ? Color.black : Color.white)
+            .background(highlighted ? Theme.accent : Theme.chip, in: Capsule())
+            .foregroundStyle(highlighted ? Theme.onAccent : Theme.text)
         }
     }
 }

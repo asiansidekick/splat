@@ -131,6 +131,8 @@ struct CaptureView: View {
         }
         .modifier(CaptureButtonAction { if paused { resume() } else { pause() } })
         .preferredColorScheme(.dark)
+        .fontDesign(.rounded)
+        .tint(Theme.accent)
         .statusBarHidden()
         .onAppear {
             camera.start()
@@ -230,7 +232,7 @@ struct CaptureView: View {
                 moreMenu
             }
             .frame(height: 44)
-            .background(Color.black.opacity(0.35).ignoresSafeArea(edges: .top))
+            .background(Theme.band.ignoresSafeArea(edges: .top))
             // Upright: a second row with the scene, shot, take and character in full, and Next take.
             if !sideways {
                 HStack(spacing: 8) {
@@ -268,10 +270,10 @@ struct CaptureView: View {
         } label: {
             Text("Next take")
                 .font(.subheadline.bold())
-                .foregroundStyle(Color.black)
+                .foregroundStyle(Theme.onAccent)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color.yellow, in: Capsule())
+                .background(Theme.accent, in: Capsule())
         }
         .buttonStyle(PressScale())
         .contextMenu {
@@ -294,10 +296,10 @@ struct CaptureView: View {
         } label: {
             Image(systemName: paused ? "play.fill" : "pause.fill")
                 .font(.system(size: size * 0.36, weight: .bold))
-                .foregroundStyle(paused ? Color.black : Color.white)
+                .foregroundStyle(paused ? Theme.onAccent : Theme.text)
                 .frame(width: size, height: size)
-                .background(paused ? Color.orange : Color.white.opacity(0.15), in: Circle())
-                .overlay(Circle().stroke(paused ? Color.orange : Color.white, lineWidth: size > 60 ? 4 : 3))
+                .background(paused ? Theme.accent : Theme.chip, in: Circle())
+                .overlay(Circle().stroke(paused ? Theme.accent : Theme.text, lineWidth: size > 60 ? 4 : 3))
                 .contentShape(Circle())
         }
         .accessibilityLabel(paused ? "Back to live" : "Pause and compare")
@@ -409,9 +411,9 @@ struct CaptureView: View {
     private var lightButton: some View {
         Image(systemName: lightOn ? "flashlight.on.fill" : "flashlight.off.fill")
             .font(.title3)
-            .foregroundStyle(lightOn ? Color.black : Color.white)
+            .foregroundStyle(lightOn ? Theme.onAccent : Theme.text)
             .frame(width: 34, height: 34)
-            .background(lightOn ? Color.yellow : Color.clear, in: Circle())
+            .background(lightOn ? Theme.accent : Color.clear, in: Circle())
             .contentShape(Rectangle())
             .onTapGesture {
                 Haptics.tap()
@@ -480,8 +482,8 @@ struct CaptureView: View {
         .font(.subheadline.bold())
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(highlighted ? Color.yellow : Color.white.opacity(0.15), in: Capsule())
-        .foregroundStyle(highlighted ? Color.black : Color.white)
+        .background(highlighted ? Theme.accent : Theme.chip, in: Capsule())
+        .foregroundStyle(highlighted ? Theme.onAccent : Theme.text)
     }
 
     /// Switch character in one tap; boards grouped by scene, newest scene first.
@@ -607,10 +609,10 @@ struct CaptureView: View {
                         // A picture, not words: point at the same view as the photo until it's sized.
                         Image(systemName: "viewfinder")
                             .font(.system(size: 26, weight: .heavy))
-                            .foregroundStyle(Color.yellow)
+                            .foregroundStyle(Theme.accent)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
-                            .background(Color.black.opacity(0.4), in: Capsule())
+                            .background(Theme.chip, in: Capsule())
                             .accessibilityLabel("Sizing the imported photo to the camera. Point at the same view.")
                     }
                     if let toast {
@@ -662,7 +664,7 @@ struct CaptureView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(Color.black.opacity(0.35), in: Capsule())
+        .background(Theme.chip, in: Capsule())
         .foregroundStyle(.white)
         // Portrait: the whole width of the screen. Landscape: a compact one in the corner.
         .frame(maxWidth: wide ? nil : .infinity)
@@ -742,9 +744,9 @@ struct CaptureView: View {
                     } label: {
                         Text(Self.zoomText(stop))
                             .font(.footnote.bold())
-                            .foregroundStyle(camera.zoom == stop ? Color.black : Color.white)
+                            .foregroundStyle(camera.zoom == stop ? Theme.onAccent : Theme.text)
                             .frame(width: 34, height: 34)
-                            .background(camera.zoom == stop ? Color.yellow : Color.black.opacity(0.35), in: Circle())
+                            .background(camera.zoom == stop ? Theme.accent : Theme.chip, in: Circle())
                     }
                     .accessibilityLabel(Self.zoomName(stop))
                 }
@@ -761,7 +763,7 @@ struct CaptureView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 9)
                 .frame(height: 34)
-                .background(Color.black.opacity(0.35), in: Capsule())
+                .background(Theme.chip, in: Capsule())
             }
             .accessibilityLabel("Lens, \(Self.zoomText(camera.zoom)) times")
         }
@@ -836,7 +838,7 @@ struct CaptureView: View {
                         }
                         .frame(width: 30, height: 30)
                         .clipShape(RoundedRectangle(cornerRadius: 5))
-                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(shot.id == ghostID ? Color.yellow : .white.opacity(0.5), lineWidth: 2))
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(shot.id == ghostID ? Theme.accent : .white.opacity(0.5), lineWidth: 2))
                     }
                     .accessibilityLabel("Reference photo, \(shot.taken.formatted(date: .omitted, time: .shortened))")
                 }
@@ -874,12 +876,12 @@ struct CaptureView: View {
                 }
             }
             .frame(width: size, height: size)
-            .background(.white.opacity(0.15))
+            .background(Theme.chip)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(alignment: .bottom) {
                 if let shot { TimeStamp(date: shot.taken, size: 8).offset(y: 9) }
             }
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(shown != nil ? Color.yellow : .white, lineWidth: 2))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(shown != nil ? Theme.accent : Theme.text, lineWidth: 2))
         }
         .accessibilityLabel("Reference photos")
     }
@@ -1249,7 +1251,7 @@ struct GalleryView: View {
                             }
                             .overlay(alignment: .topLeading) {
                                 if shot.isReference {
-                                    Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(.yellow).padding(2)
+                                    Image(systemName: "star.fill").font(.system(size: 8)).foregroundStyle(Theme.accent).padding(2)
                                 }
                             }
                         }

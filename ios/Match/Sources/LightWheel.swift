@@ -18,7 +18,7 @@ struct LightWheel: View {
         VStack(spacing: 4) {
             Text("\(title) \(Int((level * 100).rounded()))%")
                 .font(.caption.bold().monospacedDigit())
-                .foregroundStyle(.yellow)
+                .foregroundStyle(Theme.accent)
             Canvas { context, size in
                 let mid = size.width / 2
                 for step in 0...LightScrub.steps {
@@ -32,7 +32,7 @@ struct LightWheel: View {
                 }
                 // The fixed marker: the level under it is the one in use.
                 let marker = Path(roundedRect: CGRect(x: mid - 1.5, y: 2, width: 3, height: size.height - 4), cornerRadius: 1.5)
-                context.fill(marker, with: .color(.yellow))
+                context.fill(marker, with: .color(Theme.accent))
             }
             .frame(width: width, height: 28)
             .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.2),
@@ -41,7 +41,7 @@ struct LightWheel: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.black.opacity(0.45), in: Capsule())
+        .background(Theme.chip, in: Capsule())
         .contentShape(Capsule())
         .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
             let start = dragStart ?? level
