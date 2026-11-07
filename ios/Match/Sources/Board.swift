@@ -44,6 +44,7 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
     var id = UUID()
     var taken: Date
     var take: Int  // 0 is prep, before the first take
+    /// Only boards from older builds have one: the app no longer asks for an angle.
     var angle = ""
     var note = ""
     var isReference = false
@@ -54,6 +55,8 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
     var zoom: Double?
     /// How the phone was held (pitch and roll from gravity), for the pitch and roll guides.
     var attitude: Attitude?
+    /// The reference that was on screen at the shutter, so Compare checks against the same one.
+    var against: UUID?
 
     init(taken: Date, take: Int, angle: String = "", source: Source = .camera) {
         self.taken = taken
@@ -74,6 +77,7 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
         source = (try? c.decode(Source.self, forKey: .source)) ?? .camera
         fit = (try? c.decode(OverlayFit.self, forKey: .fit)).flatMap { $0.isSensible ? $0 : nil }
         zoom = (try? c.decode(Double.self, forKey: .zoom)).flatMap { $0 > 0 && $0 < 20 ? $0 : nil }
+        against = try? c.decode(UUID.self, forKey: .against)
         attitude = (try? c.decode(Attitude.self, forKey: .attitude)).flatMap {
             $0.pitch.isFinite && $0.roll.isFinite && abs($0.pitch) <= 90 && abs($0.roll) <= 180 ? $0 : nil
         }
@@ -142,12 +146,15 @@ struct Board: Codable, Identifiable, Equatable {
         shots.filter { $0.take == take }.sorted { $0.taken < $1.taken }
     }
 
-    /// What to compare a photo against: the reference from the same angle, else any reference,
-    /// else the first photo on the board.
+    /// What to compare a photo against: the reference that was on screen when it was taken, else
+    /// (older photos) the reference from the same angle, else the latest reference taken before it,
+    /// else any reference, else the first photo on the board.
     func reference(for shot: Shot) -> Shot? {
         let others = shots.filter { $0.id != shot.id }
+        if let id = shot.against, let chosen = others.first(where: { $0.id == id }) { return chosen }
         let references = others.filter(\.isReference).sorted { $0.taken < $1.taken }
-        return references.first { $0.angle == shot.angle } ?? references.first ?? others.min { $0.taken < $1.taken }
+        if !shot.angle.isEmpty, let same = references.first(where: { $0.angle == shot.angle }) { return same }
+        return references.last { $0.taken <= shot.taken } ?? references.first ?? others.min { $0.taken < $1.taken }
     }
 
     func matches(_ search: String) -> Bool {
@@ -166,21 +173,6 @@ struct Failable<T: Decodable>: Decodable {
 
 /// Scene and take numbering.
 enum Slate {
-    /// Angles round a person, in the order crew walk round them.
-    static let angles = ["Front", "3/4 Left", "Left", "Back", "Right", "3/4 Right", "Close-up", "Full length"]
-
-    /// The short label under the camera, for example "¾ L". Older angles show in capitals.
-    static func angleLabel(_ angle: String) -> String {
-        switch angle {
-        case "": "ANY"
-        case "3/4 Left": "¾ L"
-        case "3/4 Right": "¾ R"
-        case "Close-up": "CLOSE"
-        case "Full length": "FULL"
-        default: angle.uppercased()
-        }
-    }
-
     /// Text safe to use in a file name.
     static func fileSafe(_ text: String) -> String {
         let bad = CharacterSet(charactersIn: "/\\:?%*|\"<>")

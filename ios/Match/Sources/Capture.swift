@@ -22,8 +22,8 @@ extension EnvironmentValues {
 
 /// The main screen, laid out like Reset's (and the Camera app's): the camera fills the screen with
 /// the controls floating over it. Nothing is saved until the shutter is pressed. Top: library,
-/// board and take, guide, switch camera, more. Above the shutter: angles (swipe, or tap; picking
-/// one shows its reference). Bottom left: the reference thumbnail, which opens the gallery. Bottom
+/// board and take, guide, switch camera, more. Above the shutter: the board's reference photos (tap one to
+/// line up with it). Bottom left: the reference thumbnail, which opens the gallery. Bottom
 /// right: next take. The guide sits on the edges of the screen, so the face, hair and costume stay
 /// clear.
 struct CaptureView: View {
@@ -36,7 +36,6 @@ struct CaptureView: View {
     @AppStorage("guideOn") private var guideOn = true
     @AppStorage("saveToPhotos") private var saveToPhotos = false
     @State private var ghostID: UUID?
-    @State private var angle = ""
     @State private var ghost: UIImage?
     @State private var ghostEdges: UIImage?
     @State private var ghostDepth: DepthGrid?
@@ -87,7 +86,7 @@ struct CaptureView: View {
         } preview: {
             preview
         } modes: { vertical in
-            anglePicker(vertical: vertical)
+            referenceStrip(vertical: vertical)
         } leading: {
             referenceButton
         } shutter: {
@@ -121,15 +120,13 @@ struct CaptureView: View {
         }
         .onChange(of: board?.id) { _, _ in
             lastShot = nil
-            pickReference(for: angle)
+            pickReference()
         }
         .onChange(of: guideOn) { _, _ in connectGuide() }
         .onChange(of: ghostFit) { _, _ in connectGuide() }
         .onChange(of: guide.fitted) { _, fit in keepFit(fit) }
         .onChange(of: useLiDAR) { _, _ in camera.reconfigure() }
         .onChange(of: showChanges) { _, on in guide.showChanges = on }
-        // Close-ups on the macro lens: the LiDAR camera can't focus that close.
-        .onChange(of: angle) { _, value in camera.setCloseUp(value == "Close-up") }
         .onChange(of: visibleAspect) { _, _ in connectGuide() }
         .onChange(of: picked) { _, items in importPicked(items) }
         .task(id: ghostID) { await loadGhost() }
@@ -144,10 +141,9 @@ struct CaptureView: View {
                 .environment(\.shoot, ShootAction { boardID, shot in
                     currentBoard = boardID.uuidString
                     if let shot {
-                        angle = shot.angle
                         ghostID = shot.id
                     } else {
-                        pickReference(for: angle, in: store.board(boardID))
+                        pickReference(in: store.board(boardID))
                     }
                     showingLibrary = false
                 })
@@ -170,7 +166,6 @@ struct CaptureView: View {
                     switch choice {
                     case .overlay(let shot):
                         ghostID = shot?.id
-                        if let shot { angle = shot.angle }
                     case .compare(let before, let after):
                         comparing = ComparePair(before: before, after: after)
                     }
@@ -594,18 +589,37 @@ struct CaptureView: View {
 
     // MARK: Controls
 
-    /// Angles above the shutter like Reset's modes: tap one or swipe. Picking one shows its reference.
-    private func anglePicker(vertical: Bool) -> some View {
-        ScrollViewReader { proxy in
+    /// The board's reference photos as small thumbnails above the shutter, once there are two or more.
+    /// Tap one to line up with it; no names, so nothing to read or fill in.
+    @ViewBuilder
+    private func referenceStrip(vertical: Bool) -> some View {
+        if let board, board.references.count > 1 {
             ScrollView(vertical ? .vertical : .horizontal, showsIndicators: false) {
-                ModePicker(modes: [""] + Slate.angles, label: Slate.angleLabel,
-                           selection: Binding(get: { angle }, set: { selectAngle($0) }), vertical: vertical)
-                    .padding(vertical ? .vertical : .horizontal, 16)
+                let items = ForEach(board.references) { shot in
+                    Button {
+                        Haptics.tap()
+                        ghostID = shot.id
+                    } label: {
+                        Group {
+                            if let image = store.thumbnail(shot, in: board.id) {
+                                Image(uiImage: image).resizable().scaledToFill()
+                            } else {
+                                Color.white.opacity(0.2)
+                            }
+                        }
+                        .frame(width: 30, height: 30)
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(shot.id == ghostID ? Color.yellow : .white.opacity(0.5), lineWidth: 2))
+                    }
+                    .accessibilityLabel("Reference photo, \(shot.taken.formatted(date: .omitted, time: .shortened))")
+                }
+                if vertical {
+                    VStack(spacing: 8) { items }.padding(.vertical, 8)
+                } else {
+                    HStack(spacing: 8) { items }.padding(.horizontal, 16)
+                }
             }
-            .frame(maxHeight: vertical ? 150 : 24)
-            .onChange(of: angle) { _, value in
-                withAnimation { proxy.scrollTo(value, anchor: .center) }
-            }
+            .frame(maxHeight: vertical ? 150 : 34)
         }
     }
 
@@ -669,23 +683,14 @@ struct CaptureView: View {
         show("Imported photo sized to the camera. Double tap to redo.")
     }
 
-    private func selectAngle(_ newAngle: String) {
-        angle = newAngle
-        pickReference(for: newAngle)
-    }
-
-    /// Shows the reference for the angle, if there is one.
-    private func pickReference(for angle: String, in chosen: Board? = nil) {
-        let target = chosen ?? board
-        guard let target else {
+    /// Shows a reference when none is showing: the latest one on the board.
+    private func pickReference(in chosen: Board? = nil) {
+        guard let target = chosen ?? board else {
             ghostID = nil
             return
         }
-        let references = target.references
-        if let match = references.last(where: { $0.angle == angle }) {
-            ghostID = match.id
-        } else if !references.contains(where: { $0.id == ghostID }) {
-            ghostID = angle.isEmpty ? references.last?.id : nil
+        if !target.shots.contains(where: { $0.id == ghostID }) {
+            ghostID = target.references.last?.id
         }
     }
 
@@ -718,7 +723,7 @@ struct CaptureView: View {
             var failed = 0
             for item in items {
                 if let data = try? await item.loadTransferable(type: Data.self),
-                    await store.addShot(data, to: target.id, angle: "", source: .imported) != nil
+                    await store.addShot(data, to: target.id, source: .imported) != nil
                 {
                     continue
                 }
@@ -740,7 +745,7 @@ struct CaptureView: View {
             store.save(target)
             currentBoard = target.id.uuidString
         }
-        let angle = self.angle
+        let against = ghostShot?.id
         let alsoToPhotos = saveToPhotos
         let crop = visibleAspect
         // LiDAR depth at the moment of the shot, cropped like the photo, so it can be a reference.
@@ -753,13 +758,13 @@ struct CaptureView: View {
                 return
             }
             Task {
-                if let shot = await store.addShot(data, to: target.id, angle: angle, source: .camera, crop: crop, depth: depth,
+                if let shot = await store.addShot(data, to: target.id, against: against, source: .camera, crop: crop, depth: depth,
                                                   zoom: camera.isFront ? nil : camera.zoom, attitude: attitude) {
                     lastShot = shot
                     // A new reference is shown straight away, so the next photo can be checked against it.
                     if shot.isReference, ghostID == nil { ghostID = shot.id }
                     saveError = nil
-                    show(shot.isReference ? "Reference \(Slate.angleLabel(shot.angle))" : Slate.takeName(shot.take))
+                    show(shot.isReference ? "Reference" : Slate.takeName(shot.take))
                     if alsoToPhotos, !(await PhotoLibrary.save([BoardStore.url(of: shot, in: target.id)])) {
                         show(PhotoLibrary.deniedMessage)
                     }
@@ -945,7 +950,7 @@ struct GalleryView: View {
             var failed = 0
             for item in items {
                 if let data = try? await item.loadTransferable(type: Data.self),
-                    let shot = await store.addShot(data, to: boardID, angle: "", source: .imported)
+                    let shot = await store.addShot(data, to: boardID, source: .imported)
                 {
                     first = first ?? shot
                 } else {

@@ -335,4 +335,31 @@ let mailInstalled = try TeamPack.install(mailOpened, into: phoneB, existing: [])
 expect(mailInstalled.report.newPhotos == 1, "a smaller-photo pack installs like any other")
 
 print(failures == 0 ? "All pack tests passed" : "\(failures) pack test(s) failed")
+// Which reference a photo is compared with: the one on screen when it was taken, else (older
+// photos) the same angle, else the latest reference before it.
+do {
+    func shot(_ minute: Double, take: Int, ref: Bool = false, angle: String = "", against: UUID? = nil) -> Shot {
+        var s = Shot(taken: Date(timeIntervalSince1970: 1_800_000_000 + minute * 60), take: take, angle: angle)
+        s.isReference = ref
+        s.against = against
+        return s
+    }
+    let r1 = shot(0, take: 0, ref: true), r2 = shot(1, take: 0, ref: true)
+    let viaSecond = shot(5, take: 1, against: r2.id)
+    let plain = shot(6, take: 1)
+    var b = Board(scene: "1", subject: "Sarah", department: .hair, created: .now)
+    b.shots = [r1, r2, viaSecond, plain]
+    expect(b.reference(for: viaSecond)?.id == r2.id, "compare uses the reference it was checked against")
+    expect(b.reference(for: plain)?.id == r2.id, "without a record, the latest reference before it")
+    let later = shot(9, take: 2, against: UUID())
+    b.shots.append(later)
+    expect(b.reference(for: later)?.id == r2.id, "a deleted reference falls back to the latest one")
+    let old = shot(10, take: 2, angle: "Front"); var oldRef = shot(2, take: 0, ref: true, angle: "Front")
+    b.shots += [old, oldRef]
+    expect(b.reference(for: old)?.id == oldRef.id, "older photos still match by angle")
+    oldRef.against = r1.id
+    let data = try JSONEncoder().encode(oldRef)
+    expect(try JSONDecoder().decode(Shot.self, from: data).against == r1.id, "the checked-against reference survives saving")
+}
+
 exit(failures == 0 ? 0 : 1)

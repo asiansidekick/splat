@@ -310,7 +310,7 @@ struct BoardView: View {
                     ProgressView("Importing \(importing) photo\(importing == 1 ? "" : "s")")
                 }
                 if board.shots.isEmpty {
-                    Text("No photos yet. Tap Camera to take reference photos, or Import to bring in QTake screenshots or photos. The first photo from each angle becomes the reference.")
+                    Text("No photos yet. Tap Camera to take reference photos, or Import to bring in QTake screenshots or photos. Prep photos (take 0), or the first photo, become the references; star any other.")
                         .foregroundStyle(.secondary)
                 }
                 if !board.references.isEmpty {
@@ -454,7 +454,7 @@ struct BoardView: View {
                 // Fails for photos kept only in iCloud when there is no signal.
                 let data = try? await item.loadTransferable(type: Data.self)
                 if data == nil { failed += 1 }
-                if let data, await store.addShot(data, to: boardID, angle: "", source: .imported) == nil { failed += 1 }
+                if let data, await store.addShot(data, to: boardID, source: .imported) == nil { failed += 1 }
                 importing -= 1
             }
             report(failed: failed, of: items.count)
@@ -490,7 +490,7 @@ struct BoardView: View {
         Task {
             var failed = expected - files.count
             for data in files {
-                if await store.addShot(data, to: boardID, angle: "", source: .imported) == nil { failed += 1 }
+                if await store.addShot(data, to: boardID, source: .imported) == nil { failed += 1 }
                 importing -= 1
             }
             report(failed: failed, of: expected)
@@ -721,13 +721,6 @@ struct ShotEditor: View {
         NavigationStack {
             Form {
                 Stepper(Slate.takeName(shot.take), value: $shot.take, in: 0...999)
-                Picker("Angle", selection: $shot.angle) {
-                    Text("None").tag("")
-                    ForEach(Slate.angles, id: \.self) { Text($0).tag($0) }
-                    if !shot.angle.isEmpty && !Slate.angles.contains(shot.angle) {
-                        Text(shot.angle).tag(shot.angle)
-                    }
-                }
                 Toggle("Reference photo", isOn: $shot.isReference)
                 Section("Notes") {
                     TextField("For example: collar flipped up on the right", text: $shot.note, axis: .vertical)

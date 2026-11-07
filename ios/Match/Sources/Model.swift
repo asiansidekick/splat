@@ -87,13 +87,14 @@ final class BoardStore: ObservableObject {
     // MARK: Photos
 
     /// Saves a photo (JPEG, HEIC, PNG or RAW data) to the board at the scene's current take.
-    /// The first photo from each angle becomes that angle's reference. Nil if it could not be read or saved.
+    /// Prep photos (take 0) and the first photo on a board become references; any photo can be starred later. Nil if it could not be read or saved.
     @discardableResult
     /// `crop` (width over height, upright) trims a camera photo to what the screen showed.
-    func addShot(_ data: Data, to boardID: UUID, angle: String, source: Shot.Source, crop: CGFloat? = nil,
+    func addShot(_ data: Data, to boardID: UUID, against: UUID? = nil, source: Shot.Source, crop: CGFloat? = nil,
                  depth: DepthGrid? = nil, zoom: Double? = nil, attitude: Attitude? = nil) async -> Shot? {
         guard let board = board(boardID) else { return nil }
-        var shot = Shot(taken: .now, take: take(for: board.scene), angle: angle, source: source)
+        var shot = Shot(taken: .now, take: take(for: board.scene), source: source)
+        shot.against = against
         shot.zoom = zoom
         shot.attitude = attitude
         let folder = Self.folder(for: boardID)
@@ -107,9 +108,9 @@ final class BoardStore: ObservableObject {
             return written
         }.value
         guard saved, var latest = self.board(boardID) else { return nil }
-        if !latest.shots.contains(where: { $0.isReference && $0.angle == angle }) {
-            shot.isReference = true
-        }
+        // Hair and make-up artists shoot the angles that matter to them in the moment, so there is no list:
+        // prep photos are the references, and so is the first photo if there was no prep.
+        if shot.take == 0 || latest.shots.isEmpty { shot.isReference = true }
         latest.shots.append(shot)
         save(latest)
         return shot
