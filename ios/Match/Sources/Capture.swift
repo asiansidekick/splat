@@ -324,7 +324,7 @@ struct CaptureView: View {
                 }
             }
         } label: {
-            pill(board.map { "Sc \($0.scene) · \($0.shortTitle) · \(Slate.shortTake(take))" } ?? "New board")
+            pill(board.map { "\(Slate.sceneLabel($0.scene, shot: $0.shotLetter)) · \($0.shortTitle) · \(Slate.shortTake(take))" } ?? "New board")
         }
         .accessibilityLabel("Choose character")
     }

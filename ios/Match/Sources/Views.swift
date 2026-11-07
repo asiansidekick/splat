@@ -201,6 +201,16 @@ struct BoardEditor: View {
                         .keyboardType(.numbersAndPunctuation)
                         .multilineTextAlignment(.trailing)
                 }
+                LabeledContent("Shot") {
+                    TextField("A (optional)", text: $board.shotLetter)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .multilineTextAlignment(.trailing)
+                        .onChange(of: board.shotLetter) { _, text in
+                            let clean = Slate.cleanShot(text)
+                            if clean != text { board.shotLetter = clean }
+                        }
+                }
                 LabeledContent("Character") {
                     HStack {
                         TextField("Sarah", text: $board.subject)
@@ -312,7 +322,7 @@ struct BoardView: View {
             }
             .padding()
         }
-        .navigationTitle("Sc \(board.scene) · \(board.subject.isEmpty ? board.department.name : board.subject)")
+        .navigationTitle("\(Slate.sceneLabel(board.scene, shot: board.shotLetter)) · \(board.subject.isEmpty ? board.department.name : board.subject)")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

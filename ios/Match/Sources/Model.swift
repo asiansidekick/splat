@@ -49,7 +49,10 @@ final class BoardStore: ObservableObject {
     /// A new board in the latest scene and department, since one person usually works through a scene.
     func newBoard() -> Board {
         let latest = boards.max { $0.created < $1.created }
-        return Board(scene: latest?.scene ?? "1", subject: "", department: latest?.department ?? .hair, created: .now)
+        var board = Board(scene: latest?.scene ?? "1", subject: "", department: latest?.department ?? .hair, created: .now)
+        // The shot carries on like the scene until it is changed.
+        board.shotLetter = latest?.shotLetter ?? ""
+        return board
     }
 
     func save(_ board: Board) {

@@ -62,6 +62,7 @@ struct HelpView: View {
                     Text("• Top: the grid opens all boards. The middle pill shows the scene, character and take; tap it to switch character or start a new one. Guide turns the edge guide on or off. Then the light, switch camera, and ••• for Import from Photos, Compare, outlines and Help.")
                     Text("• Above the shutter: angles (Any, Front, ¾ L, Left, Back, Right, ¾ R, Close, Full). Tap or swipe. Picking an angle shows its reference see-through over the camera. The first photo of each angle becomes its reference.")
                     Text("• Bottom left: the reference thumbnail, with the time it was taken. Tap it for the gallery: swipe like Photos, Use as overlay, Compare, Import from Photos, Save to Photos.")
+                    Text("• Scene, Shot and Take, as QTAKE and Reset name them: a board has a Scene, an optional Shot letter (the A in Sc 12 · Shot A · Tk 3, set when you edit the board and carried on to new boards like the scene) and the Take counter. Each photo is a Reference, or a later photo you compare with it.")
                     Text("• Bottom right: Next take. Touch and hold to go back or to Prep. Every board in the scene follows it.")
                     Text("• Pinch or drag the overlay to line up a QTake screenshot; double tap resets it.")
                     Text("• Then / Now slider (bottom left, with a reference showing): all the way left is the reference at full strength, all the way right is the live camera alone.")

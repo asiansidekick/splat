@@ -307,7 +307,7 @@ enum TeamReceiver {
                 if typed, let passcode { TeamPasscode.save(passcode) }
                 removeIfReceived(url)
                 let from = opened.manifest.from.isEmpty ? "a teammate" : opened.manifest.from
-                let names = boards.map { "Sc \($0.scene) \($0.title)" }.joined(separator: "\n")
+                let names = boards.map { "\(Slate.sceneLabel($0.scene, shot: $0.shotLetter)) \($0.title)" }.joined(separator: "\n")
                 show("From \(from)", report.summary + (names.isEmpty ? "" : "\n\n" + names))
             case .failure(let error as TeamPack.PackError) where error == .wrongPasscode || error == .needsPasscode:
                 ask(typed ? "That passcode didn't open it." : nil, data: data, url: url, store: store)

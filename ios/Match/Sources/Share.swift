@@ -53,7 +53,7 @@ enum BoardPDF {
         let page = CGRect(x: 0, y: 0, width: 595, height: 842)  // A4 in points
         let margin: CGFloat = 36
         let width = page.width - 2 * margin
-        let url = FileManager.default.temporaryDirectory.appending(path: Slate.fileSafe("Scene \(board.scene) \(board.title).pdf"))
+        let url = FileManager.default.temporaryDirectory.appending(path: Slate.fileSafe("\(Slate.sceneName(board.scene, shot: board.shotLetter)) \(board.title).pdf"))
 
         try UIGraphicsPDFRenderer(bounds: page).writePDF(to: url) { context in
             context.beginPage()
@@ -81,7 +81,7 @@ enum BoardPDF {
                 return height
             }
 
-            _ = text("Scene \(board.scene) · \(board.title)", size: 22, bold: true)
+            _ = text("\(Slate.sceneName(board.scene, shot: board.shotLetter)) · \(board.title)", size: 22, bold: true)
             _ = text("Made \(Date.now.formatted(date: .abbreviated, time: .shortened)) · \(board.shots.count) photos",
                      size: 10, color: .darkGray, after: 10)
             if !board.notes.isEmpty { _ = text(board.notes, size: 12, after: 14) }

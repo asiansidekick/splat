@@ -283,6 +283,28 @@ do {
     expect(merged.shots[0].fit == shot.fit, "a teammate's fit fills in one this phone hasn't worked out")
 }
 
+// MARK: The shot letter (QTAKE's middle level)
+
+do {
+    var board = Board(scene: "12", subject: "Sarah", department: .hair, created: .now)
+    board.shotLetter = "A"
+    let back = try? TeamPack.decoder.decode(Board.self, from: TeamPack.encoder.encode(board))
+    expect(back?.shotLetter == "A", "a board keeps its shot letter when saved and read back")
+    let old = try? TeamPack.decoder.decode(Board.self, from: Data(#"{"id":"\#(UUID().uuidString)","scene":"3","created":0}"#.utf8))
+    expect(old?.shotLetter == "", "a board saved before shots existed opens with no shot")
+    let messy = try? TeamPack.decoder.decode(Board.self, from: Data(#"{"id":"\#(UUID().uuidString)","scene":"3","shotLetter":" a-b/c d ","created":0}"#.utf8))
+    expect(messy?.shotLetter == "ABC", "a shot letter read back is cleaned to capitals and digits, three at most")
+    expect(Slate.cleanShot("aa1b") == "AA1", "typed shot letters are capitalised and cut to three")
+    expect(Slate.sceneLabel("12", shot: "A") == "Sc 12 \u{00B7} Shot A" && Slate.sceneLabel("12", shot: "") == "Sc 12", "the slate reads Sc 12 · Shot A, or just Sc 12")
+    var blank = board
+    blank.shotLetter = ""
+    let merged = TeamPack.merged(local: blank, incoming: board, accepted: [])
+    expect(merged.shotLetter == "A", "a teammate's shot letter fills in a blank one")
+    var different = board
+    different.shotLetter = "B"
+    expect(TeamPack.merged(local: board, incoming: different, accepted: []).shotLetter == "A", "a shot letter already set is kept")
+}
+
 // MARK: Smaller photos for Messages and Mail
 
 let big = jpeg(shade: 0.4, private: true, width: 3000, height: 2000)

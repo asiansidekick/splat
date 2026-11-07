@@ -95,6 +95,9 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
 struct Board: Codable, Identifiable, Equatable {
     var id = UUID()
     var scene: String
+    /// QTAKE's middle level: an optional letter between scene and take, for example the "A" in
+    /// Scene 12, Shot A, Take 3. Named so it isn't confused with a photo (`Shot`).
+    var shotLetter = ""
     var subject: String
     var department: Department
     /// The costume change or look, for example "Change 2" or "Look B".
@@ -115,6 +118,7 @@ struct Board: Codable, Identifiable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         scene = (try? c.decode(String.self, forKey: .scene)) ?? ""
+        shotLetter = Slate.cleanShot((try? c.decode(String.self, forKey: .shotLetter)) ?? "")
         subject = (try? c.decode(String.self, forKey: .subject)) ?? ""
         department = (try? c.decode(Department.self, forKey: .department)) ?? .other
         look = (try? c.decode(String.self, forKey: .look)) ?? ""
@@ -148,7 +152,8 @@ struct Board: Codable, Identifiable, Equatable {
 
     func matches(_ search: String) -> Bool {
         guard !search.isEmpty else { return true }
-        let text = ([subject, look, notes, department.name, "scene \(scene)"] + shots.map(\.note)).joined(separator: " ")
+        let text = ([subject, look, notes, department.name, "scene \(scene)", shotLetter.isEmpty ? "" : "shot \(shotLetter)"] + shots.map(\.note))
+            .joined(separator: " ")
         return text.localizedCaseInsensitiveContains(search)
     }
 }
@@ -180,6 +185,21 @@ enum Slate {
     static func fileSafe(_ text: String) -> String {
         let bad = CharacterSet(charactersIn: "/\\:?%*|\"<>")
         return text.components(separatedBy: bad).joined(separator: "-")
+    }
+
+    /// "Sc 12" or "Sc 12 · Shot A", as the slate reads in Reset.
+    static func sceneLabel(_ scene: String, shot: String) -> String {
+        shot.isEmpty ? "Sc \(scene)" : "Sc \(scene) · Shot \(shot)"
+    }
+
+    /// "Scene 12" or "Scene 12 · Shot A", for titles and file names.
+    static func sceneName(_ scene: String, shot: String) -> String {
+        shot.isEmpty ? "Scene \(scene)" : "Scene \(scene) · Shot \(shot)"
+    }
+
+    /// A shot letter as typed: capitals and digits only, at most three.
+    static func cleanShot(_ text: String) -> String {
+        String(text.uppercased().filter { $0.isLetter || $0.isNumber }.prefix(3))
     }
 
     static func takeName(_ take: Int) -> String { take == 0 ? "Prep" : "Take \(take)" }

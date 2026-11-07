@@ -135,6 +135,7 @@ enum TeamPack {
         }
         if board.subject.isEmpty { board.subject = incoming.subject }
         if board.look.isEmpty { board.look = incoming.look }
+        if board.shotLetter.isEmpty { board.shotLetter = incoming.shotLetter }
         board.notes = mergedNotes(board.notes, incoming.notes)
         let have = Set(board.shots.map(\.id))
         for shot in arriving {

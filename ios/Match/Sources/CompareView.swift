@@ -274,9 +274,9 @@ struct CompareView: View {
     private func pairFile() -> URL? {
         guard let before, let after, let board else { return nil }
         let image = PairImage.make(
-            before: before, after: after, title: "Scene \(board.scene) · \(board.title)",
+            before: before, after: after, title: "\(Slate.sceneName(board.scene, shot: board.shotLetter)) · \(board.title)",
             beforeLabel: beforeShot?.label ?? "Before", afterLabel: afterShot?.label ?? "After")
-        let url = FileManager.default.temporaryDirectory.appending(path: Slate.fileSafe("Scene \(board.scene) compare.jpg"))
+        let url = FileManager.default.temporaryDirectory.appending(path: Slate.fileSafe("\(Slate.sceneName(board.scene, shot: board.shotLetter)) compare.jpg"))
         guard let data = image.jpegData(compressionQuality: 0.9), (try? data.write(to: url, options: .atomic)) != nil else { return nil }
         return url
     }
