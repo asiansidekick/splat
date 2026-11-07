@@ -30,7 +30,7 @@ struct ScanScreen: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let session = model.session {
-                ObjectCaptureView(session: session)
+                captureView(session)
                     .ignoresSafeArea()
                     .id(ObjectIdentifier(session))
             }
@@ -41,6 +41,15 @@ struct ScanScreen: View {
         }
         .quickLookPreview($preview)
         .statusBarHidden()
+    }
+
+    /// Area mode has no object to aim at, so Apple's object reticle is hidden (iOS 18+).
+    @ViewBuilder private func captureView(_ session: ObjectCaptureSession) -> some View {
+        if #available(iOS 18.0, *) {
+            ObjectCaptureView(session: session).hideObjectReticle(true)
+        } else {
+            ObjectCaptureView(session: session)
+        }
     }
 
     @ViewBuilder private var overlay: some View {
