@@ -59,6 +59,7 @@ struct CaptureView: View {
     @State private var toast: String?
     @State private var picked: [PhotosPickerItem] = []
     @State private var showingMore = false
+    @State private var showingDaySetup = false
     @State private var moreAtEnd = false
     @State private var showingImport = false
     @State private var previewSize: CGSize = .zero
@@ -192,6 +193,13 @@ struct CaptureView: View {
             BoardEditor(board: board, isNew: false) { store.save($0) }
         }
         .sheet(isPresented: $showingHelp, onDismiss: { seenHelp = true }) { HelpView() }
+        .sheet(isPresented: $showingDaySetup) {
+            DaySetupSheet { first in
+                currentBoard = first.id.uuidString
+                ghostID = nil
+            }
+            .environmentObject(store)
+        }
         .fullScreenCover(isPresented: $showingGallery) {
             if let board {
                 GalleryView(board: board, overlay: ghostID, last: lastShot ?? board.newest) { choice in
@@ -579,6 +587,7 @@ struct CaptureView: View {
                         comparing = ComparePair(before: board.reference(for: latest)?.id, after: latest.id)
                     }
                 }
+                moreRow("Set up the day from a call sheet", "doc.text.viewfinder") { showingDaySetup = true }
                 moreRow("Boards, notes and backup", "square.grid.2x2") { showingLibrary = true }
                 Divider()
                 moreHeader("Settings")

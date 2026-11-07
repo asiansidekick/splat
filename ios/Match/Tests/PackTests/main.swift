@@ -362,4 +362,22 @@ do {
     expect(try JSONDecoder().decode(Shot.self, from: data).against == r1.id, "the checked-against reference survives saving")
 }
 
+do {
+    let lines = ["CALL SHEET", "Day 3 of 20", "CAST", "1. SARAH JONES", "2 Bob", "3) Detective Reyes", "Pages 4 3/8",
+                 "SC 12 INT. KITCHEN - DAY 1, 2", "14A EXT. PARK - NIGHT 1, 3", "15 INT. OFFICE - DAY 3"]
+    let scenes = DaySetup.parse(lines)
+    expect(scenes.map(\.scene) == ["12", "14A", "15"], "call sheet scenes read in order, got \(scenes.map(\.scene))")
+    expect(scenes.first?.characterList == ["Sarah Jones", "Bob"], "cast numbers become names, got \(scenes.first?.characterList ?? [])")
+    expect(scenes[1].characterList == ["Sarah Jones", "Detective Reyes"], "second scene cast")
+    expect(DaySetup.castTable(lines).count == 3, "only the cast rows are cast, got \(DaySetup.castTable(lines))")
+    let existing = Board(scene: "12", subject: "sarah jones", department: .hair, created: .now)
+    let made = DaySetup.boards(for: scenes, department: .hair, existing: [existing])
+    expect(made.count == 4, "four new boards, the existing one skipped, got \(made.count)")
+    expect(made.allSatisfy { $0.department == .hair }, "boards use the chosen department")
+    var off = scenes
+    off[0].include = false
+    expect(DaySetup.boards(for: off, department: .makeup, existing: []).count == 3, "an unticked scene makes no boards")
+    expect(DaySetup.parse(["no scenes here"]).isEmpty, "nothing found on an unrelated page")
+}
+
 exit(failures == 0 ? 0 : 1)
