@@ -24,7 +24,8 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
     /// bottom buttons swap sides.
     @AppStorage("leftHanded") private var leftHanded = false
 
-    static var topHeight: CGFloat { 44 }
+    /// Upright the top is two rows (icons, then the scene line and Next take); on its side one row.
+    static func topHeight(landscape: Bool) -> CGFloat { landscape ? 44 : 88 }
     static var bottomHeight: CGFloat { 100 }
     static var sideWidth: CGFloat { 100 }
 
@@ -35,14 +36,13 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
             let left = leftHanded
             let insets = landscape
                 ? (left
-                    ? EdgeInsets(top: safe.top + Self.topHeight, leading: max(safe.leading, Self.sideWidth), bottom: safe.bottom, trailing: safe.trailing)
-                    : EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom, trailing: max(safe.trailing, Self.sideWidth)))
-                : EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom + Self.bottomHeight, trailing: safe.trailing)
+                    ? EdgeInsets(top: safe.top + Self.topHeight(landscape: landscape), leading: max(safe.leading, Self.sideWidth), bottom: safe.bottom, trailing: safe.trailing)
+                    : EdgeInsets(top: safe.top + Self.topHeight(landscape: landscape), leading: safe.leading, bottom: safe.bottom, trailing: max(safe.trailing, Self.sideWidth)))
+                : EdgeInsets(top: safe.top + Self.topHeight(landscape: landscape), leading: safe.leading, bottom: safe.bottom + Self.bottomHeight, trailing: safe.trailing)
             ZStack {
                 VStack(spacing: 0) {
                     top()
-                        .frame(height: Self.topHeight)
-                        .background(Color.black.opacity(0.35).ignoresSafeArea(edges: .top))
+                        .frame(height: Self.topHeight(landscape: landscape))
                     Spacer(minLength: 0)
                     if !landscape {
                         VStack(spacing: 10) {

@@ -204,25 +204,42 @@ struct CaptureView: View {
     // MARK: Top bar
 
     private var topBar: some View {
-        HStack(spacing: 10) {
-            Button { showingLibrary = true } label: { Image(systemName: "square.grid.2x2").font(.title3) }
-                .accessibilityLabel("Boards and photos")
-            boardMenu
-            nextTakeButton
-            Spacer(minLength: 4)
-            Button {
-                Haptics.tap()
-                guideOn.toggle()
-            } label: {
-                pill(guideOn ? (guide.lockedToActor ? "Actor" : "Guide") : "Guide off",
-                     systemImage: guide.lockedToActor && guideOn ? "person.crop.rectangle" : "arrow.up.and.down.and.arrow.left.and.right",
-                     highlighted: guideOn && ghost != nil)
+        let sideways = previewSize.width > previewSize.height
+        return VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                Button { showingLibrary = true } label: { Image(systemName: "square.grid.2x2").font(.title3) }
+                    .accessibilityLabel("Boards and photos")
+                // On its side there is room for the scene line and Next take in this row.
+                if sideways {
+                    boardMenu
+                    nextTakeButton
+                }
+                Spacer(minLength: 4)
+                Button {
+                    Haptics.tap()
+                    guideOn.toggle()
+                } label: {
+                    pill(guideOn ? (guide.lockedToActor ? "Actor" : "Guide") : "Guide off",
+                         systemImage: guide.lockedToActor && guideOn ? "person.crop.rectangle" : "arrow.up.and.down.and.arrow.left.and.right",
+                         highlighted: guideOn && ghost != nil)
+                }
+                .accessibilityLabel(guideOn ? "Turn the guide off" : "Turn the guide on")
+                if hasLight { lightButton }
+                Button { camera.flip() } label: { Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3) }
+                    .accessibilityLabel("Switch camera")
+                moreMenu
             }
-            .accessibilityLabel(guideOn ? "Turn the guide off" : "Turn the guide on")
-            if hasLight { lightButton }
-            Button { camera.flip() } label: { Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3) }
-                .accessibilityLabel("Switch camera")
-            moreMenu
+            .frame(height: 44)
+            .background(Color.black.opacity(0.35).ignoresSafeArea(edges: .top))
+            // Upright: a second row with the scene, shot, take and character in full, and Next take.
+            if !sideways {
+                HStack(spacing: 8) {
+                    boardMenu
+                    Spacer(minLength: 4)
+                    nextTakeButton
+                }
+                .frame(height: 38)
+            }
         }
         .padding(.horizontal, 12)
         .foregroundStyle(.white)
@@ -243,19 +260,18 @@ struct CaptureView: View {
 
     // MARK: Next take
 
-    /// Next take, in the top row at the same size as the other buttons there. The pill beside it
-    /// shows which take it is on. Touch and hold to go back or to Prep.
+    /// A plain "Next take" button, top right, under the row of icons. Touch and hold to go back or to Prep.
     private var nextTakeButton: some View {
         Button {
             Haptics.tap()
             setTake(take + 1)
         } label: {
-            Image(systemName: "forward.end.fill")
-                .font(.footnote.bold())
-                .foregroundStyle(Color.yellow)
-                .frame(width: 34, height: 34)
-                .background(Color.white.opacity(0.15), in: Circle())
-                .contentShape(Circle())
+            Text("Next take")
+                .font(.subheadline.bold())
+                .foregroundStyle(Color.black)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.yellow, in: Capsule())
         }
         .buttonStyle(PressScale())
         .contextMenu {
@@ -491,7 +507,7 @@ struct CaptureView: View {
                 }
             }
         } label: {
-            pill(board.map { "\(Slate.sceneLabel($0.scene, shot: $0.shotLetter)) · \($0.shortTitle) · \(Slate.shortTake(take))" } ?? "New board")
+            pill(board.map { "\(Slate.sceneName($0.scene, shot: $0.shotLetter)) · \($0.shortTitle) · \(Slate.takeName(take))" } ?? "New board")
         }
         .accessibilityLabel("Choose character")
     }
