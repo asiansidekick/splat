@@ -136,7 +136,7 @@ struct CaptureView: View {
         }
         .modifier(CaptureButtonAction { if paused { resume() } else { pause() } })
         .preferredColorScheme(.dark)
-        .fontDesign(.rounded)
+        .fontDesign(Theme.fontDesign)
         .tint(Theme.accent)
         .statusBarHidden()
         .onAppear {
@@ -223,18 +223,10 @@ struct CaptureView: View {
         return VStack(spacing: 6) {
             // One line: the scene pill (all boards are one tap away on the thumbnail), then the controls.
             HStack(spacing: 10) {
-                boardMenu
+                boardMenu.layoutPriority(1)
                 if sideways { nextTakeButton }
                 Spacer(minLength: 4)
-                Button {
-                    Haptics.tap()
-                    guideOn.toggle()
-                } label: {
-                    pill(guideOn ? (guide.lockedToActor ? "Actor" : "Guide") : "Guide off",
-                         systemImage: guide.lockedToActor && guideOn ? "person.crop.rectangle" : "arrow.up.and.down.and.arrow.left.and.right",
-                         highlighted: guideOn && ghost != nil)
-                }
-                .accessibilityLabel(guideOn ? "Turn the guide off" : "Turn the guide on")
+                if sideways { guideButton }
                 if hasLight { lightButton }
                 Button { camera.flip() } label: { Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3) }
                     .accessibilityLabel("Switch camera")
@@ -245,6 +237,7 @@ struct CaptureView: View {
             .shadow(color: .black.opacity(0.35), radius: 2)
             if !sideways {
                 HStack(spacing: 8) {
+                    guideButton
                     Spacer(minLength: 4)
                     nextTakeButton
                 }
@@ -266,6 +259,28 @@ struct CaptureView: View {
             restoreBrightness()
             Motion.shared.stop()
         }
+    }
+
+    /// The guide's switch, always worded "Guide on" or "Guide off": mint and lit when on, dim and struck through when off.
+    private var guideButton: some View {
+        Button {
+            Haptics.tap()
+            guideOn.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: guideOn ? (guide.lockedToActor ? "person.crop.rectangle" : "scope") : "scope")
+                    .overlay { if !guideOn { Rectangle().fill(Theme.text.opacity(0.7)).frame(width: 22, height: 2).rotationEffect(.degrees(-45)) } }
+                Text(guideOn ? (guide.lockedToActor ? "Actor lock on" : "Guide on") : "Guide off")
+                    .lineLimit(1)
+            }
+            .font(.subheadline.bold())
+            .padding(.horizontal, 12)
+            .frame(minWidth: 112)
+            .frame(height: 34)
+            .background(guideOn ? Theme.accent : Theme.chip, in: Capsule())
+            .foregroundStyle(guideOn ? Theme.onAccent : Theme.text.opacity(0.7))
+        }
+        .accessibilityLabel(guideOn ? "Turn the guide off" : "Turn the guide on")
     }
 
     // MARK: Next take
