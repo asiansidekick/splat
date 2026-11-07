@@ -1247,8 +1247,8 @@ enum CaptureMode: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .snapshot: return "QUICK SCAN"
-        case .walk: return "WALK AROUND"
+        case .snapshot: return "MANUAL SCAN"
+        case .walk: return "AUTO SCAN"
         }
     }
 }
