@@ -35,6 +35,7 @@ struct CaptureView: View {
     @AppStorage("ghostOpacity") private var opacity = 0.5
     @AppStorage("guideOn") private var guideOn = true
     @AppStorage("saveToPhotos") private var saveToPhotos = false
+    @AppStorage(PhotoMetadata.key) private var stampMetadata = true
     @AppStorage("leftHanded") private var leftHanded = false
     @State private var ghostID: UUID?
     @State private var ghost: UIImage?
@@ -586,6 +587,7 @@ struct CaptureView: View {
                 }
                 moreToggle("Left-handed", "hand.raised", $leftHanded)
                 moreToggle("Also save to Photos", "square.and.arrow.down", $saveToPhotos)
+                moreToggle("Put scene and take in photo details", "tag", $stampMetadata)
                 moreRow("Help", "questionmark.circle") { showingHelp = true }
                 Color.clear.frame(height: 1)
                     .onAppear { moreAtEnd = true }
@@ -1121,7 +1123,7 @@ struct CaptureView: View {
                     if shot.isReference, ghostID == nil { ghostID = shot.id }
                     saveError = nil
                     show(shot.isReference ? "Reference" : Slate.takeName(shot.take))
-                    if alsoToPhotos, !(await PhotoLibrary.save([BoardStore.url(of: shot, in: target.id)])) {
+                    if alsoToPhotos, !(await PhotoLibrary.saveStamped([(file: BoardStore.url(of: shot, in: target.id), shot: shot)], board: store.board(target.id) ?? target)) {
                         show(PhotoLibrary.deniedMessage)
                     }
                 } else {
@@ -1338,7 +1340,7 @@ struct GalleryView: View {
             let boardID = boardID
             // With drawing or notes on it, the picture saved is the marked one.
             let file = await Task.detached { BoardStore.hasMarks(shot, in: boardID) ? BoardStore.flattened(shot, in: boardID) : nil }.value
-            let saved = await PhotoLibrary.save([file ?? BoardStore.url(of: shot, in: boardID)])
+            let saved = await PhotoLibrary.saveStamped([(file: file ?? BoardStore.url(of: shot, in: boardID), shot: shot)], board: board)
             flash(saved ? "Saved to Photos" : PhotoLibrary.deniedMessage)
         }
     }

@@ -334,7 +334,7 @@ struct BoardView: View {
                     Button { sharePDF(board) } label: { Label("Share PDF sheet", systemImage: "doc.richtext") }
                     Button {
                         Task {
-                            let saved = await PhotoLibrary.save(board.shots.sorted { $0.taken < $1.taken }.map { BoardStore.url(of: $0, in: board.id) })
+                            let saved = await PhotoLibrary.saveStamped(board.shots.sorted { $0.taken < $1.taken }.map { (file: BoardStore.url(of: $0, in: board.id), shot: $0) }, board: board)
                             message = saved ? "Saved \(board.shots.count) photos to Photos." : PhotoLibrary.deniedMessage
                         }
                     } label: { Label("Save all photos to Photos", systemImage: "square.and.arrow.down.on.square") }
