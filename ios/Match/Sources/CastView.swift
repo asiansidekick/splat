@@ -28,7 +28,7 @@ struct CastListView: View {
                                 Button {
                                     onPick(member.character)
                                     dismiss()
-                                } label: { Image(systemName: "arrow.up.circle").font(Theme.georgia(.title3)) }
+                                } label: { Image(systemName: "arrow.up.circle").font(Theme.font(.title3)) }
                                     .buttonStyle(.borderless)
                                     .accessibilityLabel("Use \(member.character)")
                             }

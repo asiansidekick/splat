@@ -93,7 +93,7 @@ struct DaySetupSheet: View {
                         Label("Pick a photo of one", systemImage: "photo")
                     }
                     if reading { HStack { ProgressView(); Text("Reading…").foregroundStyle(.secondary) } }
-                    if let message { Text(message).font(Theme.georgia(.footnote)).foregroundStyle(.orange) }
+                    if let message { Text(message).font(Theme.font(.footnote)).foregroundStyle(.orange) }
                 }
                 if !found.isEmpty {
                     Section {
@@ -114,7 +114,7 @@ struct DaySetupSheet: View {
                                     TextField("Name", text: $item.title)
                                 }
                                 TextField("Characters, separated by commas", text: $item.characters)
-                                    .font(Theme.georgia(.subheadline))
+                                    .font(Theme.font(.subheadline))
                                     .foregroundStyle(item.characters.isEmpty ? .orange : .primary)
                             }
                         }

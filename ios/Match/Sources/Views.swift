@@ -8,22 +8,22 @@ struct MatchApp: App {
 
     init() {
         // Navigation titles and bar buttons are drawn by UIKit, so they are set here; menus and alerts stay Apple's.
-        let regular = UIFont(name: "Georgia", size: 17) ?? .systemFont(ofSize: 17)
-        let bold = UIFont(name: "Georgia-Bold", size: 17) ?? .boldSystemFont(ofSize: 17)
-        let large = UIFont(name: "Georgia-Bold", size: 34) ?? .boldSystemFont(ofSize: 34)
+        let regular = UIFont(name: "AvenirNextCondensed-Regular", size: 17) ?? .systemFont(ofSize: 17)
+        let bold = UIFont(name: "AvenirNextCondensed-Bold", size: 17) ?? .boldSystemFont(ofSize: 17)
+        let large = UIFont(name: "AvenirNextCondensed-Bold", size: 34) ?? .boldSystemFont(ofSize: 34)
         UINavigationBar.appearance().titleTextAttributes = [.font: bold]
         UINavigationBar.appearance().largeTitleTextAttributes = [.font: large]
         for state in [UIControl.State.normal, .highlighted, .disabled] {
             UIBarButtonItem.appearance().setTitleTextAttributes([.font: regular], for: state)
         }
-        UISegmentedControl.appearance().setTitleTextAttributes([.font: UIFont(name: "Georgia", size: 13) ?? .systemFont(ofSize: 13)], for: .normal)
+        UISegmentedControl.appearance().setTitleTextAttributes([.font: UIFont(name: "AvenirNextCondensed-Regular", size: 13) ?? .systemFont(ofSize: 13)], for: .normal)
     }
 
     var body: some Scene {
         WindowGroup {
             CaptureView().environmentObject(store)
-                // Any text that doesn't choose its own style (list rows, buttons, fields) is Georgia too.
-                .environment(\.font, Theme.georgia(.body))
+                // Any text that doesn't choose its own style (list rows, buttons, fields) is Avenir Next Condensed too.
+                .environment(\.font, Theme.font(.body))
                 // A team pack AirDropped to this phone, or opened from Files.
                 .onOpenURL { TeamReceiver.receive($0, store: store) }
                 .onAppear { CastList.seed(fromNames: store.boards.sorted { $0.created < $1.created }.map(\.subject)) }
@@ -82,7 +82,7 @@ struct HomeView: View {
             .safeAreaInset(edge: .bottom) {
                 // Shows which build is installed, so an old install is easy to spot.
                 Text("Match build \(AppInfo.build)")
-                    .font(Theme.georgia(.caption2))
+                    .font(Theme.font(.caption2))
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 4)
             }
@@ -172,7 +172,7 @@ struct BoardRow: View {
                     Image(uiImage: image).resizable().scaledToFill()
                 } else {
                     Image(systemName: board.department.symbol)
-                        .font(Theme.georgia(.title2))
+                        .font(Theme.font(.title2))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color.secondary.opacity(0.15))
@@ -181,12 +181,12 @@ struct BoardRow: View {
             .frame(width: 56, height: 56)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             VStack(alignment: .leading, spacing: 3) {
-                Text(board.subject.isEmpty ? board.department.name : board.subject).font(Theme.georgia(.headline))
+                Text(board.subject.isEmpty ? board.department.name : board.subject).font(Theme.font(.headline))
                 Label(board.department.name, systemImage: board.department.symbol)
-                    .font(Theme.georgia(.caption))
+                    .font(Theme.font(.caption))
                     .foregroundStyle(.secondary)
                 Text(board.shots.count == 1 ? "1 photo" : "\(board.shots.count) photos")
-                    .font(Theme.georgia(.caption))
+                    .font(Theme.font(.caption))
                     .foregroundStyle(.secondary)
             }
         }
@@ -313,7 +313,7 @@ struct BoardView: View {
             VStack(alignment: .leading, spacing: 16) {
                 if !board.notes.isEmpty {
                     Text(board.notes)
-                        .font(Theme.georgia(.callout))
+                        .font(Theme.font(.callout))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
                         .background(Color.yellow.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
@@ -420,8 +420,8 @@ struct BoardView: View {
 
     private func actionLabel(_ title: String, systemImage: String) -> some View {
         VStack(spacing: 4) {
-            Image(systemName: systemImage).font(Theme.georgia(.title2))
-            Text(title).font(Theme.georgia(.caption).weight(.medium))
+            Image(systemName: systemImage).font(Theme.font(.title2))
+            Text(title).font(Theme.font(.caption).weight(.medium))
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
@@ -430,7 +430,7 @@ struct BoardView: View {
 
     private func section(_ title: String, shots: [Shot], board: Board) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(Theme.georgia(.headline))
+            Text(title).font(Theme.font(.headline))
             LazyVGrid(columns: grid, spacing: 6) {
                 ForEach(shots) { shot in
                     Button {
@@ -537,8 +537,8 @@ struct TakeBar: View {
         let take = store.take(for: scene)
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(scene.isEmpty ? "No scene" : "Scene \(scene)").font(Theme.georgia(.caption)).foregroundStyle(.secondary)
-                Text(Slate.takeName(take)).font(Theme.georgia(.title2).weight(.semibold).monospacedDigit())
+                Text(scene.isEmpty ? "No scene" : "Scene \(scene)").font(Theme.font(.caption)).foregroundStyle(.secondary)
+                Text(Slate.takeName(take)).font(Theme.font(.title2).weight(.semibold).monospacedDigit())
             }
             Spacer()
             Button {
@@ -570,7 +570,7 @@ struct TimeStamp: View {
         Text(Calendar.current.isDateInToday(date)
              ? date.formatted(date: .omitted, time: .shortened)
              : date.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
-            .font(.custom("Georgia-Bold", fixedSize: size).monospacedDigit())
+            .font(.custom("AvenirNextCondensed-Bold", fixedSize: size).monospacedDigit())
             .foregroundStyle(.white)
             .lineLimit(1)
             .minimumScaleFactor(0.7)
@@ -597,7 +597,7 @@ struct ShotThumbnail: View {
             .overlay(alignment: .topLeading) {
                 if shot.isReference {
                     Image(systemName: "star.fill")
-                        .font(Theme.georgia(.caption))
+                        .font(Theme.font(.caption))
                         .foregroundStyle(.yellow)
                         .padding(5)
                         .background(.black.opacity(0.5), in: Circle())
@@ -611,7 +611,7 @@ struct ShotThumbnail: View {
                 let parts = [shot.angle, shot.note.isEmpty ? "" : "✎"].filter { !$0.isEmpty }
                 if !parts.isEmpty {
                     Text(parts.joined(separator: " "))
-                        .font(Theme.georgia(.caption2).weight(.semibold))
+                        .font(Theme.font(.caption2).weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
@@ -662,8 +662,8 @@ struct ShotView: View {
                             Text(shot.label)
                             if shot.source == .imported { Text("· imported").foregroundStyle(.secondary) }
                         }
-                        .font(Theme.georgia(.subheadline).weight(.medium))
-                        if !shot.note.isEmpty { Text(shot.note).font(Theme.georgia(.callout)) }
+                        .font(Theme.font(.subheadline).weight(.medium))
+                        if !shot.note.isEmpty { Text(shot.note).font(Theme.font(.callout)) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()

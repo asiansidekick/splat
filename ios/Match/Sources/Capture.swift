@@ -228,7 +228,7 @@ struct CaptureView: View {
                 Spacer(minLength: 4)
                 if sideways { guideButton }
                 if hasLight { lightButton }
-                Button { camera.flip() } label: { Image(systemName: "arrow.triangle.2.circlepath.camera").font(Theme.georgia(.title3)) }
+                Button { camera.flip() } label: { Image(systemName: "arrow.triangle.2.circlepath.camera").font(Theme.font(.title3)) }
                     .accessibilityLabel("Switch camera")
                 moreMenu
             }
@@ -273,7 +273,7 @@ struct CaptureView: View {
                 Text(guideOn ? (guide.lockedToActor ? "Actor lock on" : "Guide on") : "Guide off")
                     .lineLimit(1)
             }
-            .font(Theme.georgia(.subheadline).bold())
+            .font(Theme.font(.subheadline).bold())
             .padding(.horizontal, 12)
             .frame(minWidth: 112)
             .frame(height: 34)
@@ -292,7 +292,7 @@ struct CaptureView: View {
             setTake(take + 1)
         } label: {
             Text("Next take")
-                .font(Theme.georgia(.subheadline).bold())
+                .font(Theme.font(.subheadline).bold())
                 .foregroundStyle(Theme.onAccent)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
@@ -433,7 +433,7 @@ struct CaptureView: View {
     /// Touch and hold: show the wheel again.
     private var lightButton: some View {
         Image(systemName: lightOn ? "flashlight.on.fill" : "flashlight.off.fill")
-            .font(Theme.georgia(.title3))
+            .font(Theme.font(.title3))
             .foregroundStyle(lightOn ? Theme.onAccent : Theme.text)
             .frame(width: 34, height: 34)
             .background(lightOn ? Theme.accent : Color.clear, in: Circle())
@@ -502,7 +502,7 @@ struct CaptureView: View {
             if let systemImage { Image(systemName: systemImage) }
             Text(text).lineLimit(1)
         }
-        .font(Theme.georgia(.subheadline).bold())
+        .font(Theme.font(.subheadline).bold())
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(highlighted ? Theme.accent : Theme.chip, in: Capsule())
@@ -547,7 +547,7 @@ struct CaptureView: View {
                 Text("New board")
             }
         }
-        .font(Theme.georgia(.caption).bold())
+        .font(Theme.font(.caption).bold())
         .lineLimit(1)
         .minimumScaleFactor(0.8)
         .padding(.horizontal, 12)
@@ -575,7 +575,7 @@ struct CaptureView: View {
 
     private func moreHeader(_ title: String) -> some View {
         Text(title.uppercased())
-            .font(Theme.georgia(.caption2).bold())
+            .font(Theme.font(.caption2).bold())
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
@@ -617,7 +617,7 @@ struct CaptureView: View {
                     .onAppear { moreAtEnd = true }
                     .onDisappear { moreAtEnd = false }
             }
-            .font(Theme.georgia(.body))
+            .font(Theme.font(.body))
             .foregroundStyle(Theme.text)
             .padding(16)
         }
@@ -629,7 +629,7 @@ struct CaptureView: View {
                 ZStack(alignment: .bottom) {
                     LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .top, endPoint: .bottom)
                     Label("Scroll for more", systemImage: "chevron.down")
-                        .font(Theme.georgia(.caption).bold())
+                        .font(Theme.font(.caption).bold())
                         .foregroundStyle(Theme.accent)
                         .padding(.bottom, 6)
                 }
@@ -648,7 +648,7 @@ struct CaptureView: View {
 
     private var moreMenu: some View {
         Button { showingMore = true } label: {
-            Image(systemName: "ellipsis.circle").font(Theme.georgia(.title3))
+            Image(systemName: "ellipsis.circle").font(Theme.font(.title3))
         }
         .accessibilityLabel("More")
         .popover(isPresented: $showingMore) { morePanel }
@@ -705,7 +705,7 @@ struct CaptureView: View {
                         ghostID = last.id
                     } label: {
                         Label("Show overlay", systemImage: "eye")
-                            .font(Theme.georgia(.caption).bold())
+                            .font(Theme.font(.caption).bold())
                             .padding(.horizontal, 12).frame(height: 34)
                             .background(Theme.chip, in: Capsule())
                             .foregroundStyle(Theme.text)
@@ -745,7 +745,7 @@ struct CaptureView: View {
                     }
                     if let toast {
                         Text(toast)
-                            .font(Theme.georgia(.subheadline).bold())
+                            .font(Theme.font(.subheadline).bold())
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .background(.ultraThinMaterial, in: Capsule())
@@ -770,7 +770,7 @@ struct CaptureView: View {
             ghostID = nil
         } label: {
             Label(wide ? "Hide" : "Hide overlay", systemImage: "eye.slash")
-                .font(Theme.georgia(.caption).bold()).lineLimit(1).fixedSize()
+                .font(Theme.font(.caption).bold()).lineLimit(1).fixedSize()
                 .padding(.horizontal, 8).frame(height: 30)
                 .background(.white.opacity(0.18), in: Capsule())
         }
@@ -782,7 +782,7 @@ struct CaptureView: View {
             if wipeStyle { wipePos = opacity; opacity = 1 } else { opacity = wipePos }
         } label: {
             Label(wipeStyle ? "Fade" : "Wipe", systemImage: wipeStyle ? "circle.lefthalf.filled" : "square.split.2x1")
-                .font(Theme.georgia(.caption).bold()).lineLimit(1).fixedSize()
+                .font(Theme.font(.caption).bold()).lineLimit(1).fixedSize()
                 .padding(.horizontal, 8).frame(height: 30)
                 .background(.white.opacity(0.18), in: Capsule())
         }
@@ -794,9 +794,9 @@ struct CaptureView: View {
             .accessibilityValue("\(Int(((1 - opacity) * 100).rounded())) percent now")
         return HStack(spacing: 6) {
             if paused { mode } else { hide }
-            Text("THEN").font(Theme.georgia(.caption2).bold())
+            Text("THEN").font(Theme.font(.caption2).bold())
             slider
-            Text("NOW").font(Theme.georgia(.caption2).bold())
+            Text("NOW").font(Theme.font(.caption2).bold())
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -879,7 +879,7 @@ struct CaptureView: View {
                         withAnimation(.snappy(duration: 0.2)) { lensOpen = false }
                     } label: {
                         Text(Self.zoomText(stop))
-                            .font(Theme.georgia(.footnote).bold())
+                            .font(Theme.font(.footnote).bold())
                             .foregroundStyle(camera.zoom == stop ? Theme.onAccent : Theme.text)
                             .frame(width: 34, height: 34)
                             .background(camera.zoom == stop ? Theme.accent : Theme.chip, in: Circle())
@@ -895,7 +895,7 @@ struct CaptureView: View {
                     FieldOfView(zoom: camera.zoom).frame(width: 22, height: 16)
                     Text("\(Self.zoomText(camera.zoom))×").monospacedDigit()
                 }
-                .font(Theme.georgia(.footnote).bold())
+                .font(Theme.font(.footnote).bold())
                 .foregroundStyle(.white)
                 .padding(.horizontal, 9)
                 .frame(height: 34)
@@ -1008,7 +1008,7 @@ struct CaptureView: View {
                 if let board, let shot, let thumbnail = store.thumbnail(shot, in: board.id) {
                     Image(uiImage: thumbnail).resizable().scaledToFill()
                 } else {
-                    Image(systemName: "photo.on.rectangle").font(Theme.georgia(.title3))
+                    Image(systemName: "photo.on.rectangle").font(Theme.font(.title3))
                 }
             }
             .frame(width: size, height: size)
@@ -1268,7 +1268,7 @@ struct GalleryView: View {
             .overlay(alignment: .top) {
                 if importing > 0 || notice != nil {
                     Text(importing > 0 ? "Importing \(importing)…" : notice ?? "")
-                        .font(Theme.georgia(.subheadline).weight(.semibold))
+                        .font(Theme.font(.subheadline).weight(.semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .background(.ultraThinMaterial, in: Capsule())
@@ -1379,9 +1379,9 @@ struct GalleryView: View {
     private func caption(_ shot: Shot) -> some View {
         VStack(spacing: 2) {
             Text((shot.isReference ? "★ Reference · " : "") + shot.label)
-                .font(Theme.georgia(.subheadline).weight(.semibold))
+                .font(Theme.font(.subheadline).weight(.semibold))
             if !shot.note.isEmpty {
-                Text(shot.note).font(Theme.georgia(.caption)).lineLimit(2)
+                Text(shot.note).font(Theme.font(.caption)).lineLimit(2)
             }
         }
         .foregroundStyle(.white)
@@ -1408,7 +1408,7 @@ struct GalleryView: View {
                             .clipped()
                             .overlay(alignment: .bottom) {
                                 Text(shot.taken.formatted(date: .omitted, time: .shortened))
-                                    .font(.custom("Georgia-Bold", fixedSize: 7).monospacedDigit())
+                                    .font(.custom("AvenirNextCondensed-Bold", fixedSize: 7).monospacedDigit())
                                     .foregroundStyle(.white)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.6)

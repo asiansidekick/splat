@@ -137,7 +137,7 @@ struct ModePicker<Mode: Hashable>: View {
                     choose(mode)
                 } label: {
                     Text(label(mode))
-                        .font(Theme.georgia(.footnote).weight(.semibold))
+                        .font(Theme.font(.footnote).weight(.semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                         .foregroundStyle(selection == mode ? Theme.accent : Theme.text)
@@ -197,10 +197,10 @@ struct SideButton: View {
         Button(action: action) {
             VStack(spacing: 4) {
                 Image(systemName: systemImage)
-                    .font(Theme.georgia(.title3))
+                    .font(Theme.font(.title3))
                     .frame(width: 50, height: 50)
                     .background(Theme.chip, in: Circle())
-                Text(title).font(Theme.georgia(.caption2).bold()).lineLimit(1).minimumScaleFactor(0.7)
+                Text(title).font(Theme.font(.caption2).bold()).lineLimit(1).minimumScaleFactor(0.7)
             }
             .foregroundStyle(tint)
         }
@@ -229,7 +229,7 @@ struct TopPill: View {
                 if let systemImage { Image(systemName: systemImage) }
                 Text(text).lineLimit(1)
             }
-            .font(Theme.georgia(.subheadline).bold())
+            .font(Theme.font(.subheadline).bold())
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(highlighted ? Theme.accent : Theme.chip, in: Capsule())
@@ -250,7 +250,7 @@ struct Banner: View {
 
     var body: some View {
         Text(text)
-            .font(Theme.georgia(.subheadline).bold())
+            .font(Theme.font(.subheadline).bold())
             .multilineTextAlignment(.center)
             .lineLimit(2)
             .minimumScaleFactor(0.8)

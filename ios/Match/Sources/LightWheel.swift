@@ -17,7 +17,7 @@ struct LightWheel: View {
     var body: some View {
         VStack(spacing: 4) {
             Text("\(title) \(Int((level * 100).rounded()))%")
-                .font(Theme.georgia(.caption).bold().monospacedDigit())
+                .font(Theme.font(.caption).bold().monospacedDigit())
                 .foregroundStyle(Theme.accent)
             Canvas { context, size in
                 let mid = size.width / 2

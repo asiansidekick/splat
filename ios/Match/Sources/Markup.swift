@@ -203,10 +203,10 @@ struct MarkupEditor: View {
         Button(action: action) {
             VStack(spacing: 2) {
                 Image(systemName: image)
-                    .font(Theme.georgia(.title3))
+                    .font(Theme.font(.title3))
                     .frame(width: 44, height: 36)
                     .background(on ? Color.white.opacity(0.25) : .clear, in: Capsule())
-                Text(title).font(Theme.georgia(.caption).weight(.semibold)).lineLimit(1)
+                Text(title).font(Theme.font(.caption).weight(.semibold)).lineLimit(1)
             }
             .frame(maxWidth: .infinity)
         }
@@ -299,7 +299,7 @@ struct MarkupLabelView: View {
     var body: some View {
         let scale = factor * Markup.referenceWidth / 390
         Text(label.text)
-            .font(.custom("Georgia-Bold", fixedSize: Self.fontSize * scale))
+            .font(.custom("AvenirNextCondensed-Bold", fixedSize: Self.fontSize * scale))
             .foregroundStyle(label.colour == .black ? Color.black : Color.white)
             .padding(.horizontal, 10 * scale)
             .padding(.vertical, 5 * scale)
@@ -314,7 +314,7 @@ struct MarkupLabelView: View {
     /// The tag is 20 point text on a 390 point wide photo, scaled with the picture.
     static func draw(_ label: MarkupLabel, factor: CGFloat) {
         let scale = factor * Markup.referenceWidth / 390
-        let font = UIFont(name: "Georgia-Bold", size: fontSize * scale) ?? UIFont.systemFont(ofSize: fontSize * scale, weight: .bold)
+        let font = UIFont(name: "AvenirNextCondensed-Bold", size: fontSize * scale) ?? UIFont.systemFont(ofSize: fontSize * scale, weight: .bold)
         let ink: UIColor = label.colour == .black ? .black : .white
         let text = label.text as NSString
         let size = text.size(withAttributes: [.font: font])
