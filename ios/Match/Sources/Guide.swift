@@ -362,11 +362,11 @@ struct EdgeGuide: View {
             ZStack {
                 Brackets(corners: [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0), CGPoint(x: 1, y: 1), CGPoint(x: 0, y: 1)]
                     .map { place($0, in: target) })
-                    .stroke(matched ? Color.green : Color.white.opacity(0.55),
-                            style: StrokeStyle(lineWidth: matched ? 6 : 3, lineCap: .round, lineJoin: .round))
+                    .stroke(matched ? Color.green.opacity(0.8) : Color.white.opacity(0.4),
+                            style: StrokeStyle(lineWidth: matched ? 4 : 2, lineCap: .round, lineJoin: .round))
                 if let reading, !matched {
                     Brackets(corners: reading.corners.map { place($0, in: target) })
-                        .stroke(Color.yellow.opacity(0.85), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                        .stroke(Color.yellow.opacity(0.6), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                         .shadow(color: .black.opacity(0.5), radius: 2)
                 }
                 if !matched, let reading, reading.pitchError != nil || reading.rollError != nil {
@@ -375,19 +375,19 @@ struct EdgeGuide: View {
                 }
                 if matched {
                     badge("LINED UP", systemImage: "checkmark.circle.fill", tint: .green)
-                        .position(x: size.width - 52, y: 52)
+                        .position(x: size.width - 44, y: 44)
                 } else if let cue, !(reading?.drawnAsLines(cue) ?? false) {
                     instruction(cue, in: size)
                         .id(cue.screenID(turns: quarterTurns, mirrored: mirrored))
                         .transition(.opacity)
                 } else if people > 1 {
                     badge("Tap someone to follow them", systemImage: "hand.tap", tint: .yellow)
-                        .opacity(0.8)
-                        .position(x: 52, y: 52)
+                        .opacity(0.6)
+                        .position(x: 44, y: 44)
                 } else if searching {
                     badge("Point at the reference", systemImage: "viewfinder", tint: .yellow)
-                        .opacity(0.8)
-                        .position(x: 52, y: 52)
+                        .opacity(0.6)
+                        .position(x: 44, y: 44)
                 }
             }
             .frame(width: size.width, height: size.height)
@@ -454,7 +454,7 @@ struct EdgeGuide: View {
     /// A big see-through arrow at one edge, drifting slowly the way to go, with its word.
     private func arrow<Glyph: View>(at side: GuideCue.Side, in size: CGSize, word: String, nudges: Bool = true,
                                     @ViewBuilder glyph: () -> Glyph) -> some View {
-        let inset: CGFloat = 62
+        let inset: CGFloat = 48
         let position: CGPoint
         switch side {
         case .left: position = CGPoint(x: inset, y: size.height / 2)
@@ -471,8 +471,9 @@ struct EdgeGuide: View {
             .rotationEffect(.degrees(angle))
             .accessibilityLabel(word)
             .foregroundStyle(Color.yellow)
-        .shadow(color: .black.opacity(0.6), radius: 2)
-        .opacity(0.8)
+        .scaleEffect(0.7)
+        .shadow(color: .black.opacity(0.5), radius: 2)
+        .opacity(0.55)
         .position(position)
     }
 
@@ -505,15 +506,16 @@ struct EdgeGuide: View {
         glyph()
             .accessibilityLabel(word)
             .foregroundStyle(Color.yellow)
-        .shadow(color: .black.opacity(0.6), radius: 2)
-        .opacity(0.8)
-        .position(x: right ? size.width - 56 : 56, y: 56)
+        .scaleEffect(0.7)
+        .shadow(color: .black.opacity(0.5), radius: 2)
+        .opacity(0.55)
+        .position(x: right ? size.width - 46 : 46, y: 46)
     }
 
     /// A symbol alone, so the eyes stay on the picture; the words are for VoiceOver.
     private func badge(_ text: String, systemImage: String, tint: Color) -> some View {
         Image(systemName: systemImage)
-            .font(.system(size: 26, weight: .heavy))
+            .font(.system(size: 20, weight: .heavy))
             .foregroundStyle(tint)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
@@ -544,9 +546,9 @@ struct LevelLines: View {
             let near = abs(pitchError ?? 0) < GuideReading.pitchTolerance && abs(rollError ?? 0) < GuideReading.tiltTolerance
             ZStack {
                 Marks()
-                    .stroke(Color.white.opacity(0.6), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .stroke(Color.white.opacity(0.4), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 Marks()
-                    .stroke(near ? Color.green : Color.yellow, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    .stroke((near ? Color.green : Color.yellow).opacity(0.65), style: StrokeStyle(lineWidth: 3, lineCap: .round))
                     .shadow(color: .black.opacity(0.5), radius: 2)
                     .rotationEffect(.degrees(rollError ?? 0))
                     .offset(y: -aim)
