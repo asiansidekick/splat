@@ -70,6 +70,8 @@ struct HelpView: View {
                 Section("Your work") {
                     step("lock", "Everything stays on this device (unless you sync with your team's phones) and works with no signal. References are also in the Files app, On My iPhone, Reset.")
                     step("square.and.arrow.up", "Press and hold a reference in the gallery for its take log and PDF report.")
+                    step("star", "Press and hold a reference, or the thumbnail bottom left on the camera, and choose Hero to star it. Heroes sit at the top of the gallery grid.")
+                    step("doc.text.viewfinder", "In the gallery grid, tap the call sheet icon, scan a call sheet or pick a photo of one, check the scenes it read and add them. The scenes then name the folders and can be picked when slating.")
                     step("arrow.triangle.2.circlepath", "Sync with your team's phones nearby, with no signal: open the gallery and tap the sync arrows (or ••• then Sync on the reset screen) on each phone, with the same team passcode. References, takes and notes go both ways. Turn off LiDAR and 3D models for a quicker sync.")
                 }
             }

@@ -29,6 +29,8 @@ struct Reference: Codable, Identifiable, Equatable {
     var setup: String  // the take number, "3" (or "3B" for a redo); an old letter-only one reads 12B
     /// QTAKE's middle level: the shot letter, "A", between scene and take. Empty for none.
     var shot = ""
+    /// Starred as a hero reference, like favouriting a photo: the one that is right for the scene.
+    var hero = false
     var name: String  // optional description, "desk"
     /// A sub-group within the scene, such as "Hair" or "Kitchen angle" (Phil, 2026-11-05); empty for none.
     var group = ""
@@ -95,6 +97,7 @@ extension Reference {
         scene = try c.decodeIfPresent(String.self, forKey: .scene) ?? ""
         setup = try c.decodeIfPresent(String.self, forKey: .setup) ?? ""
         shot = try c.decodeIfPresent(String.self, forKey: .shot) ?? ""
+        hero = try c.decodeIfPresent(Bool.self, forKey: .hero) ?? false
         name = try c.decode(String.self, forKey: .name)
         group = try c.decodeIfPresent(String.self, forKey: .group) ?? ""
         created = try c.decode(Date.self, forKey: .created)

@@ -441,8 +441,15 @@ func runFrameTests() {
     }
 }
 
+// Call sheet scenes
+let sheetLines = ["CALL SHEET", "Day 3 of 20", "SC 12 INT. KITCHEN - DAY", "Scene 14A  EXT. PARK - NIGHT", "12A. INT BEDROOM", "5 EXT/INT CAR - DUSK", "Sc 20 – Rooftop", "12 INT. KITCHEN - DAY again", "Crew call 07:30", "2 hours"]
+let parsed = CallSheetParser.parse(sheetLines)
+expect(parsed.map(\.scene) == ["12", "14A", "12A", "5", "20"], "call sheet scene numbers: \(parsed.map(\.scene))")
+expect(parsed.first?.title == "INT. KITCHEN - DAY" && parsed.last?.title == "Rooftop", "call sheet scene names")
+
 try MainActor.assumeIsolated { try runSyncTests() }
 runFrameTests()
 
 print(failures == 0 ? "All sync tests passed" : "\(failures) sync test(s) failed")
 exit(failures == 0 ? 0 : 1)
+

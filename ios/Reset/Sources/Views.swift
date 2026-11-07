@@ -231,6 +231,7 @@ struct CameraHome: View {
             // Hold the thumbnail for the newest reference's options, the same ones the gallery has.
             if let newest = references.first {
                 Button { endNudge(); selectedID = newest.id } label: { Label("Load \(newest.slate.isEmpty ? "it" : newest.slate)", systemImage: "arrow.down.circle") }
+                Button { endNudge(); perform(.hero, newest) } label: { Label(newest.hero ? "Remove hero star" : "Hero", systemImage: newest.hero ? "star.slash" : "star") }
                 Button { endNudge(); perform(.review, newest) } label: { Label("Review frames", systemImage: "rectangle.stack") }
                 Button { endNudge(); perform(.slate, newest) } label: { Label("Edit slate", systemImage: "pencil") }
                 Button { endNudge(); perform(.takeLog, newest) } label: { Label("Take log", systemImage: "list.number") }
@@ -254,12 +255,23 @@ struct CameraHome: View {
         case .pdf: panel = .pdf(reference.id)
         case .delete: deleting = reference
         case .photos: exportPhotos(reference)
+        case .hero: toggleHero(reference)
         case .sketch:
             if let photo = PhotoLibrary.images(of: reference).first {
                 sketching = photo
                 panel = .sketch
             }
         }
+    }
+
+    /// Stars a reference as a hero, or takes the star off.
+    private func toggleHero(_ reference: Reference) {
+        guard let index = references.firstIndex(where: { $0.id == reference.id }) else { return }
+        references[index].hero.toggle()
+        references[index].slateEdited = Date()
+        try? ReferenceStore.save(references[index])
+        Haptics.success()
+        show(references[index].hero ? "Starred as a hero" : "Star removed")
     }
 
     /// Starts the "load me" cue, which stops when tapped or after 20 seconds.
@@ -441,12 +453,26 @@ struct NextSlateSheet: View {
     @Binding var setup: String
     @Binding var name: String
     let references: [Reference]
+    @ObservedObject private var callSheet = CallSheetStore.shared
+    @State private var showingCallSheet = false
 
     var body: some View {
         NavigationStack {
             Form {
                 SlateFields(scene: $scene, shot: $shot, setup: $setup, name: $name)
+                Section {
+                    if !callSheet.scenes.isEmpty {
+                        Picker("From call sheet", selection: $scene) {
+                            ForEach(callSheet.scenes) { item in
+                                Text(item.title.isEmpty ? item.scene : "\(item.scene) · \(item.title)").tag(item.scene)
+                            }
+                            if !callSheet.scenes.contains(where: { $0.scene == scene }) { Text("Pick a scene").tag(scene) }
+                        }
+                    }
+                    Button { showingCallSheet = true } label: { Label("Scan a call sheet", systemImage: "doc.text.viewfinder") }
+                }
             }
+            .sheet(isPresented: $showingCallSheet) { CallSheetSheet() }
             .onChange(of: scene) { _, newScene in
                 setup = Slate.nextSetup(scene: newScene, in: references)
             }
@@ -850,6 +876,15 @@ struct ReferenceThumbnail: View {
             }
         }
         .frame(width: size, height: size)
+        .overlay(alignment: .topLeading) {
+            if reference?.hero == true {
+                Image(systemName: "star.fill")
+                    .font(.system(size: max(11, size * 0.2)))
+                    .foregroundStyle(.yellow)
+                    .shadow(color: .black.opacity(0.8), radius: 2)
+                    .padding(3)
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Color.yellow : Color.white.opacity(0.8), lineWidth: selected ? 3 : 1))
         .task(id: reference?.id) {
@@ -871,7 +906,7 @@ struct ReferenceThumbnail: View {
 /// older ones, tap Load (or double-tap the photo) to bring up its ghost. The grid button shows them
 /// all by scene. Press and hold a photo for its take log, compare, report, slate or delete.
 struct Gallery: View {
-    enum Action { case takeLog, compare, review, explore, slate, pdf, delete, photos, sketch }
+    enum Action { case takeLog, compare, review, explore, slate, pdf, delete, photos, sketch, hero }
 
     @Environment(\.dismiss) private var dismiss
     /// Oldest first, so the newest is the last page, as in Photos.
@@ -888,6 +923,8 @@ struct Gallery: View {
     @State private var selecting = false
     @State private var chosen: Set<UUID> = []
     @State private var naming = false
+    @State private var showingCallSheet = false
+    @ObservedObject private var callSheet = CallSheetStore.shared
     @State private var picked: [PhotosPickerItem] = []
     @State private var query = ""
     @ObservedObject private var search = ImageIndex.shared
@@ -954,6 +991,8 @@ struct Gallery: View {
                     }
                     .accessibilityLabel(showingGrid ? "One at a time" : "All references")
                     if showingGrid {
+                        Button { showingCallSheet = true } label: { Image(systemName: "doc.text.viewfinder") }
+                            .accessibilityLabel("Call sheet")
                         Button(selecting ? "Done" : "Select") {
                             selecting.toggle()
                             chosen = []
@@ -962,6 +1001,7 @@ struct Gallery: View {
                     if let shown, !showingGrid { menu(for: shown) }
                 }
             }
+            .sheet(isPresented: $showingCallSheet) { CallSheetSheet() }
             .onChange(of: picked) { _, items in
                 guard !items.isEmpty else { return }
                 onImport(items)
@@ -1070,9 +1110,17 @@ struct Gallery: View {
                     Label("Looking at your pictures so they can be searched… \(search.remaining) to go", systemImage: "sparkle.magnifyingglass")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                ForEach(Slate.sortedScenes(visible).reversed(), id: \.self) { scene in
-                    Text(scene.isEmpty ? "No scene" : "Scene \(scene)").font(.headline)
+                let heroes = visible.filter(\.hero)
+                if !heroes.isEmpty {
+                    Label("Heroes", systemImage: "star.fill").font(.headline).foregroundStyle(.yellow)
+                    section(title: nil, references: heroes)
+                }
+                ForEach(gridScenes, id: \.self) { scene in
+                    Text(sceneHeading(scene)).font(.headline)
                     let inScene = setups(in: scene)
+                    if inScene.isEmpty {
+                        Text("Nothing recorded yet").font(.footnote).foregroundStyle(.secondary)
+                    }
                     let groups = Array(Set(inScene.map(\.group).filter { !$0.isEmpty }))
                         .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
                     section(title: groups.isEmpty ? nil : "Not grouped", references: inScene.filter { $0.group.isEmpty })
@@ -1156,6 +1204,19 @@ struct Gallery: View {
         }
     }
 
+    /// The scenes shown as folders, newest first: ones with references, and ones a call sheet listed that have none yet.
+    private var gridScenes: [String] {
+        var scenes = Set(visible.map(\.scene))
+        if !searching { callSheet.scenes.forEach { scenes.insert($0.scene) } }
+        return scenes.sorted { $0.localizedStandardCompare($1) == .orderedAscending }.reversed()
+    }
+
+    private func sceneHeading(_ scene: String) -> String {
+        if scene.isEmpty { return "No scene" }
+        if let title = callSheet.title(for: scene) { return "Scene \(scene) · \(title)" }
+        return "Scene \(scene)"
+    }
+
     private func setups(in scene: String) -> [Reference] {
         visible
             .filter { $0.scene == scene }
@@ -1180,6 +1241,7 @@ struct Gallery: View {
     /// Short, one-line rows so the whole menu fits on screen without scrolling (Phil, 2026-11-05).
     @ViewBuilder
     private func menuItems(for reference: Reference) -> some View {
+        Button { dismiss(); action(.hero, reference) } label: { Label(reference.hero ? "Remove hero star" : "Hero", systemImage: reference.hero ? "star.slash" : "star") }
         Button { dismiss(); action(.review, reference) } label: { Label("Review frames", systemImage: "rectangle.stack") }
         Button { dismiss(); action(.sketch, reference) } label: { Label("Sketch", systemImage: "pencil.tip.crop.circle") }
         Button { dismiss(); action(.slate, reference) } label: { Label("Edit slate", systemImage: "pencil") }
