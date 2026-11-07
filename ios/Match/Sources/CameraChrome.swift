@@ -25,7 +25,7 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
     @AppStorage("leftHanded") private var leftHanded = false
 
     static var topHeight: CGFloat { 44 }
-    static var bottomHeight: CGFloat { 140 }
+    static var bottomHeight: CGFloat { 100 }
     static var sideWidth: CGFloat { 100 }
 
     var body: some View {
@@ -56,10 +56,9 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                             }
                             .padding(.horizontal, 16)
                         }
-                        .padding(.top, 12)
-                        .padding(.bottom, 16)
+                        .padding(.top, 4)
+                        .padding(.bottom, 8)
                         .frame(maxWidth: .infinity, minHeight: Self.bottomHeight)
-                        .background(Color.black.opacity(0.35).ignoresSafeArea(edges: .bottom))
                     }
                 }
                 .padding(left ? .leading : .trailing, landscape ? max(0, Self.sideWidth - (left ? safe.leading : safe.trailing)) : 0)
