@@ -64,6 +64,7 @@ struct CaptureView: View {
     /// Paused: the live picture frozen, with the reference over it to fade THEN to NOW at leisure.
     @State private var frozen: UIImage?
     @State private var pausing = false
+    @State private var lensOpen = false
     @State private var scrubStart: Double?
     @State private var opacityBefore: Double?
     /// Paused compare as a wipe, like Reset: the reference left of a line you drag. Off is a fade.
@@ -102,20 +103,20 @@ struct CaptureView: View {
         } leading: {
             referenceButton
         } shutter: {
-            // Pause sits right beside the shutter; the empty twin keeps the shutter in the middle.
+            // Pause sits right beside the shutter, the same size (on the left when left-handed).
             // On its side there is no room across, so it goes under the shutter instead.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) {
-                    Color.clear.frame(width: 44, height: 44)
-                    ShutterButton(style: .photo) { shoot() }
-                        .accessibilityLabel("Take photo")
-                    pauseButton
-                }
+            if previewSize.width > previewSize.height {
                 VStack(spacing: 10) {
                     ShutterButton(style: .photo) { shoot() }
                         .accessibilityLabel("Take photo")
-                    pauseButton
+                    pauseButton(size: 56)
                 }
+            } else {
+                ShutterButton(style: .photo) { shoot() }
+                    .accessibilityLabel("Take photo")
+                    .overlay(alignment: leftHanded ? .leading : .trailing) {
+                        pauseButton(size: 74).offset(x: leftHanded ? -82 : 82)
+                    }
             }
         } trailing: {
             SideButton(title: "Next T\(take + 1)", systemImage: "forward.end.fill", tint: .yellow) {
@@ -244,17 +245,17 @@ struct CaptureView: View {
 
     /// Freezes the picture so the reference can be faded over it: swipe anywhere, or tap to jump
     /// between THEN and NOW. Press again (or take a photo) to go live.
-    private var pauseButton: some View {
+    private func pauseButton(size: CGFloat) -> some View {
         Button {
             Haptics.tap()
             if paused { resume() } else { pause() }
         } label: {
             Image(systemName: paused ? "play.fill" : "pause.fill")
-                .font(.body.bold())
+                .font(.system(size: size * 0.36, weight: .bold))
                 .foregroundStyle(paused ? Color.black : Color.white)
-                .frame(width: 44, height: 44)
-                .background(paused ? Color.orange : Color.black.opacity(0.35), in: Circle())
-                .overlay(Circle().stroke(paused ? Color.orange : Color.white, lineWidth: 2))
+                .frame(width: size, height: size)
+                .background(paused ? Color.orange : Color.white.opacity(0.15), in: Circle())
+                .overlay(Circle().stroke(paused ? Color.orange : Color.white, lineWidth: size > 60 ? 4 : 3))
                 .contentShape(Circle())
         }
         .accessibilityLabel(paused ? "Back to live" : "Pause and compare")
@@ -543,11 +544,10 @@ struct CaptureView: View {
                         .clearOfControls()
                 }
                 if camera.zoomStops.count > 1, !camera.isFront {
-                    zoomBar
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    lensControl
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .padding(.trailing, 8)
-                        // Portrait: above the full-width slider.
-                        .padding(.bottom, ghost != nil && geometry.size.width <= geometry.size.height ? 56 : 12)
+                        .padding(.top, 8)
                         .clearOfControls()
                 }
                 if lightOn, camera.isFront, !showingLibrary { RingLight(level: lightLevel) }
@@ -687,22 +687,41 @@ struct CaptureView: View {
         stop < 1 ? "Ultra wide lens" : "Zoom \(zoomText(stop)) times"
     }
 
-    /// The Camera app's lens buttons: 0.5, 1, 3… The chosen one is yellow.
-    private var zoomBar: some View {
+    /// The lens choice: a small aperture icon with the zoom in use, at the top right. Tap it to open
+    /// the Camera app's stops (0.5, 1, 3...), tap one to switch. The chosen one is yellow.
+    private var lensControl: some View {
         HStack(spacing: 4) {
-            ForEach(camera.zoomStops, id: \.self) { stop in
-                Button {
-                    Haptics.tap()
-                    camera.setZoom(stop)
-                } label: {
-                    Text(Self.zoomText(stop))
-                        .font(.footnote.bold())
-                        .foregroundStyle(camera.zoom == stop ? Color.black : Color.white)
-                        .frame(width: 34, height: 34)
-                        .background(camera.zoom == stop ? Color.yellow : Color.black.opacity(0.35), in: Circle())
+            if lensOpen {
+                ForEach(camera.zoomStops, id: \.self) { stop in
+                    Button {
+                        Haptics.tap()
+                        camera.setZoom(stop)
+                        withAnimation(.snappy(duration: 0.2)) { lensOpen = false }
+                    } label: {
+                        Text(Self.zoomText(stop))
+                            .font(.footnote.bold())
+                            .foregroundStyle(camera.zoom == stop ? Color.black : Color.white)
+                            .frame(width: 34, height: 34)
+                            .background(camera.zoom == stop ? Color.yellow : Color.black.opacity(0.35), in: Circle())
+                    }
+                    .accessibilityLabel(Self.zoomName(stop))
                 }
-                .accessibilityLabel(Self.zoomName(stop))
             }
+            Button {
+                Haptics.tap()
+                withAnimation(.snappy(duration: 0.2)) { lensOpen.toggle() }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "camera.aperture")
+                    Text("\(Self.zoomText(camera.zoom))×").monospacedDigit()
+                }
+                .font(.footnote.bold())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 9)
+                .frame(height: 34)
+                .background(Color.black.opacity(0.35), in: Capsule())
+            }
+            .accessibilityLabel("Lens, \(Self.zoomText(camera.zoom)) times")
         }
     }
 
