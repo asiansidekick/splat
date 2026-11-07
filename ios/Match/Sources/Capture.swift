@@ -496,7 +496,8 @@ struct CaptureView: View {
                     zoomBar
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                         .padding(.trailing, 8)
-                        .padding(.bottom, 12)
+                        // Portrait: above the full-width slider.
+                        .padding(.bottom, ghost != nil && geometry.size.width <= geometry.size.height ? 56 : 12)
                         .clearOfControls()
                 }
                 if lightOn, camera.isFront, !showingLibrary { RingLight(level: lightLevel) }
@@ -547,7 +548,7 @@ struct CaptureView: View {
         }
         .accessibilityLabel("Hide overlay")
         let slider = Slider(value: Binding(get: { 1 - opacity }, set: { opacity = 1 - $0 }), in: 0...1)
-            .frame(width: wide ? 150 : 120)
+            .frame(width: wide ? 150 : nil)
             .accessibilityLabel("Then to now")
             .accessibilityValue("\(Int(((1 - opacity) * 100).rounded())) percent now")
         return HStack(spacing: 6) {
@@ -560,8 +561,10 @@ struct CaptureView: View {
         .padding(.vertical, 4)
         .background(Color.black.opacity(0.35), in: Capsule())
         .foregroundStyle(.white)
+        // Portrait: the whole width of the screen. Landscape: a compact one in the corner.
+        .frame(maxWidth: wide ? nil : .infinity)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-        .padding(.leading, 8)
+        .padding(.horizontal, 8)
         .padding(.bottom, 12)
     }
 
