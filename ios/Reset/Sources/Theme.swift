@@ -70,9 +70,6 @@ enum Theme {
             UIBarButtonItem.appearance().setTitleTextAttributes([.font: button], for: state)
         }
         UISegmentedControl.appearance().setTitleTextAttributes([.font: uiFont(size: 15, weight: .semibold)], for: .normal)
-        UITextField.appearance().font = uiFont(size: 18, weight: .medium)
-        UITextView.appearance().font = uiFont(size: 18, weight: .medium)
-        UILabel.appearance(whenContainedInInstancesOf: [UINavigationBar.self]).font = uiFont(size: 17, weight: .semibold)
     }
 }
 
