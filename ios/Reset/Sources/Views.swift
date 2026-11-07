@@ -863,9 +863,9 @@ struct ReferenceThumbnail: View {
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-                ForEach(Array(reference.captionLines(count: size >= 100 ? 2 : 1).enumerated()), id: \.offset) { _, line in
+                ForEach(Array(reference.captionLines(count: size >= 80 ? 2 : 1).enumerated()), id: \.offset) { _, line in
                     Text(line)
-                        .font(.system(size: size >= 100 ? 12 : 10, weight: .semibold))
+                        .font(.system(size: size >= 100 ? 12 : size >= 80 ? 12 : 10, weight: .semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                         .foregroundStyle(Color.yellow)
@@ -1087,7 +1087,7 @@ struct Gallery: View {
                         Button {
                             withAnimation { current = reference.id }
                         } label: {
-                            ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 58, selected: current == reference.id)
+                            ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 86, selected: current == reference.id)
                         }
                         .id(reference.id)
                     }
@@ -1095,7 +1095,7 @@ struct Gallery: View {
                 .padding(.horizontal)
                 .padding(.vertical, 3)
             }
-            .frame(height: 66)
+            .frame(height: 94)
             .onAppear { if let current { proxy.scrollTo(current, anchor: .center) } }
             .onChange(of: current) { _, id in
                 if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
