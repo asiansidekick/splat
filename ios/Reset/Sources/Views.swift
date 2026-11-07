@@ -1519,7 +1519,7 @@ struct CaptureStage: View {
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: recorder.placer).themed() }
         .fileImporter(isPresented: $importingModels, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { recorder.placer.add(from: urls)
+            if case .success(let urls) = result { recorder.placer.add(from: urls) }
         }
         .overlay { FreeScanOverlay(scanner: freeScanner) { recorder.placer.add(from: [$0]) } }
         .onAppear {
@@ -1720,7 +1720,7 @@ struct ResetStage: View {
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: restorer.placer).themed() }
         .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { restorer.placer.add(from: urls)
+            if case .success(let urls) = result { restorer.placer.add(from: urls) }
         }
         .onReceive(restorer.placer.$models.dropFirst()) { models in
             reference.models = models
