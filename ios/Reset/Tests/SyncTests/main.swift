@@ -447,6 +447,18 @@ let parsed = CallSheetParser.parse(sheetLines)
 expect(parsed.map(\.scene) == ["12", "14A", "12A", "5", "20"], "call sheet scene numbers: \(parsed.map(\.scene))")
 expect(parsed.first?.title == "INT. KITCHEN - DAY" && parsed.last?.title == "Rooftop", "call sheet scene names")
 
+// Scrapbook cut-outs
+let cutId = UUID()
+expect(ReferenceSyncLibrary.kind("model-\(cutId.uuidString).cutout") == .model && ReferenceSyncLibrary.path("model-\(cutId.uuidString).cutout") == "models/\(cutId.uuidString).cutout"
+    && ReferenceSyncLibrary.syncName(modelFile: "models/\(cutId.uuidString).cutout") == "model-\(cutId.uuidString).cutout", "a cut-out travels like a model")
+expect(Cutout.viewAngle(camera: SIMD3(0, 1.5, 3), position: .zero, front: SIMD3(0, 0, 1)) == 0, "in front of it reads 0")
+expect(abs(Cutout.viewAngle(camera: SIMD3(3, 1.5, 0), position: .zero, front: SIMD3(0, 0, 1)) - 90) < 0.01, "on its left reads 90")
+expect(abs(Cutout.viewAngle(camera: SIMD3(-3, 1.5, 0), position: .zero, front: SIMD3(0, 0, 1)) + 90) < 0.01, "on its right reads -90")
+expect(abs(abs(Cutout.viewAngle(camera: SIMD3(0, 1.5, -3), position: .zero, front: SIMD3(0, 0, 1))) - 180) < 0.01, "behind it reads 180")
+expect(Cutout.nearest([0, 90, 180, -90], to: 100) == 1 && Cutout.nearest([0, 90, 180, -90], to: -170) == 2 && Cutout.nearest([0, 180], to: -179) == 1, "the nearest side wins, round the back too")
+let faced = Cutout.frontFacing(camera: SIMD3(3, 1.5, 0), position: SIMD3(0, 0, 0))
+expect(abs(Cutout.viewAngle(camera: SIMD3(3, 1.5, 0), position: .zero, front: faced.columns.2.xyz)) < 0.01, "a new cut-out faces the camera")
+
 try MainActor.assumeIsolated { try runSyncTests() }
 runFrameTests()
 

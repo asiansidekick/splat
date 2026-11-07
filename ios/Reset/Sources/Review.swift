@@ -17,6 +17,7 @@ struct FrameReview: View {
     /// 3D model mode: touches move the models instead of drawing marks.
     @State private var editingModels = false
     @State private var importingModel = false
+    @State private var makingCutout = false
     @State private var exploring = false
     /// Off (the default): pinch to zoom, one finger moves the photo. On: one finger draws dimensions and notes.
     @State private var measuring = false
@@ -72,6 +73,11 @@ struct FrameReview: View {
             guard case .success(let urls) = result, frames.indices.contains(index) else { return }
             let spot = placement(for: frames[index])
             placer.add(from: urls, at: spot.transform, right: spot.right)
+        }
+        .sheet(isPresented: $makingCutout) {
+            if frames.indices.contains(index) {
+                CutoutMaker(placer: placer, base: Cutout.frontFacing(camera: frames[index].position, position: placement(for: frames[index]).transform.columns.3.xyz)).themed()
+            }
         }
         .fullScreenCover(isPresented: $exploring) { ExploreView(reference: reference).themed() }
         .preferredColorScheme(.dark)
@@ -134,8 +140,11 @@ struct FrameReview: View {
                 .tint(editingModels ? Theme.accent : nil)
                 .accessibilityLabel(editingModels ? "Back to dimensions and notes" : "Place 3D models")
                 if editingModels {
-                    Button { importingModel = true } label: { Image(systemName: "plus").frame(width: 40, height: 36) }
-                        .accessibilityLabel("Add a 3D model")
+                    Menu {
+                        Button { importingModel = true } label: { Label("3D model (USDZ file)", systemImage: "cube") }
+                        Button { makingCutout = true } label: { Label("Cut-out from photos", systemImage: "figure.stand") }
+                    } label: { Image(systemName: "plus").frame(width: 40, height: 36) }
+                        .accessibilityLabel("Add a 3D model or cut-out")
                 }
                 Button { measuring.toggle(); if measuring { editingModels = false } } label: {
                     Image(systemName: measuring ? "ruler.fill" : "ruler").frame(width: 40, height: 36)

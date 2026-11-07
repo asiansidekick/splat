@@ -28,12 +28,15 @@ final class ReferenceSyncLibrary: SyncLibrary {
     enum Kind { case photo, depth, map, model }
 
     /// Reset's own file names only: "frame_0001.jpg", "depth_0001.bin", "snap_1A2B3C4D.jpg",
-    /// the room map, and "model-<UUID>.usdz" for a model stored as "models/<UUID>.usdz".
+    /// the room map, and "model-<UUID>.usdz" (or ".cutout") for a model stored as "models/<UUID>.usdz".
     nonisolated static func kind(_ name: String) -> Kind? {
         guard SyncEngine.safe(name) else { return nil }
         if name == mapFile { return .map }
-        if name.hasPrefix("model-"), name.hasSuffix(".usdz") {
-            return UUID(uuidString: String(name.dropFirst(6).dropLast(5))) != nil ? .model : nil
+        if name.hasPrefix("model-") {
+            // A USDZ model, or a scrapbook cut-out (JSON).
+            for ending in [".usdz", ".cutout"] where name.hasSuffix(ending) {
+                return UUID(uuidString: String(name.dropFirst(6).dropLast(ending.count))) != nil ? .model : nil
+            }
         }
         guard let dot = name.lastIndex(of: ".") else { return nil }
         let stem = name[..<dot]
@@ -149,7 +152,9 @@ final class ReferenceSyncLibrary: SyncLibrary {
         switch kind {
         case .depth: return size.int64Value % 4 == 0
         case .map: return start.starts(with: Data("bplist00".utf8))
-        case .model: return start.starts(with: [0x50, 0x4B, 0x03, 0x04])
+        case .model:
+            // A USDZ is a zip; a cut-out is JSON.
+            return start.starts(with: [0x50, 0x4B, 0x03, 0x04]) || start.first == UInt8(ascii: "{")
         case .photo: return true
         }
     }

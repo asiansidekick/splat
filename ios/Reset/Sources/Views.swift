@@ -1395,6 +1395,8 @@ struct CaptureStage: View {
     @Environment(\.verticalSizeClass) private var verticalSize
     @State private var holder = CameraViewHolder()
     @State private var importingModels = false
+    @State private var choosingModel = false
+    @State private var makingCutout = false
     @State private var justSaved = false
     /// The "get its bearings" hint shows for a few seconds, then gives way to the usual line.
     @State private var bearingsHintDone = false
@@ -1500,19 +1502,24 @@ struct CaptureStage: View {
                     ViewsCounter(count: recorder.keyframeCount)
                 } else {
                     // On its side the cube moves to the opposite edge of the screen (see the overlay below).
-                    ModelsBesideScreenshot { importingModels = true }
+                    ModelsBesideScreenshot { choosingModel = true }
                 }
             }
         }
         .overlay(alignment: leftHanded ? .bottomTrailing : .bottomLeading) {
             if verticalSize == .compact, !recorder.capturing {
-                ModelsEdgeButton(measurer: recorder.measurer) { importingModels = true }
+                ModelsEdgeButton(measurer: recorder.measurer) { choosingModel = true }
             }
         }
         .overlay { MeasurePointer(measurer: recorder.measurer) }
         .overlay { MeasureEntry(measurer: recorder.measurer).hiddenInScreenshots() }
+        .confirmationDialog("Add to the room", isPresented: $choosingModel) {
+            Button("3D model (USDZ file)") { importingModels = true }
+            Button("Cut-out from photos") { makingCutout = true }
+        }
+        .sheet(isPresented: $makingCutout) { CutoutMaker(placer: recorder.placer).themed() }
         .fileImporter(isPresented: $importingModels, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { recorder.placer.add(from: urls) }
+            if case .success(let urls) = result { recorder.placer.add(from: urls)
         }
         .overlay { FreeScanOverlay(scanner: freeScanner) { recorder.placer.add(from: [$0]) } }
         .onAppear {
@@ -1654,6 +1661,7 @@ struct ResetStage: View {
     /// While paused: 0 shows the reference, 1 the frozen live picture.
     @State private var toNow = 1.0
     @State private var importingModel = false
+    @State private var makingCutout = false
     @State private var notingTake: Take?
     @State private var holder = CameraViewHolder()
     @State private var tapCatcher = WindowTapCatcher()
@@ -1710,8 +1718,9 @@ struct ResetStage: View {
             }
             .themed()
         }
+        .sheet(isPresented: $makingCutout) { CutoutMaker(placer: restorer.placer).themed() }
         .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { restorer.placer.add(from: urls) }
+            if case .success(let urls) = result { restorer.placer.add(from: urls)
         }
         .onReceive(restorer.placer.$models.dropFirst()) { models in
             reference.models = models
@@ -1844,6 +1853,8 @@ struct ResetStage: View {
             Menu {
                 Button { open(.gallery) } label: { Label("References", systemImage: "photo.on.rectangle") }
                 Button { importingModel = true } label: { Label("Add 3D model", systemImage: "cube") }
+                    .disabled(restorer.status != .ready)
+                Button { makingCutout = true } label: { Label("Add cut-out from photos", systemImage: "figure.stand") }
                     .disabled(restorer.status != .ready)
                 if ExploreView.offered {
                     Button { open(.explore(reference.id)) } label: { Label("Explore in 3D", systemImage: "view.3d") }

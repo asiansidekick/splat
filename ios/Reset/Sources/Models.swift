@@ -25,6 +25,17 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         }
     }
     private var modelNodes: [UUID: SCNNode] = [:]
+    /// Scrapbook cut-outs on show: each turns to the photo that matches the side the camera sees.
+    private struct CutoutState {
+        let plane: SCNNode
+        let height: Float
+        let angles: [Float]
+        let aspects: [Float]
+        let images: [UIImage]
+        var shown: Int
+    }
+    private var cutouts: [UUID: CutoutState] = [:]
+    private var cutoutTimer: Timer?
     /// Each model's box in its own coordinates, measured on loading, before any arrows are hung
     /// on it (they would make it look bigger).
     private var boxes: [UUID: (low: SIMD3<Float>, high: SIMD3<Float>)] = [:]
@@ -111,6 +122,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         modelNodes.values.forEach { $0.removeFromParentNode() }
         modelNodes = [:]
         boxes = [:]
+        cutouts = [:]
+        stopCutoutTimer()
         models = []
         selectedModel = nil
     }
@@ -144,6 +157,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         modelNodes[id]?.removeFromParentNode()
         modelNodes[id] = nil
         boxes[id] = nil
+        cutouts[id] = nil
+        if cutouts.isEmpty { stopCutoutTimer() }
         try? FileManager.default.removeItem(at: folder.appendingPathComponent(models[index].file))
         models.remove(at: index)
         selectedModel = nil
@@ -357,6 +372,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     @discardableResult
     private func loadNode(for model: PlacedModel) -> SCNNode? {
+        if model.file.hasSuffix("." + Cutout.fileExtension) { return loadCutoutNode(for: model) }
         let url = folder.appendingPathComponent(model.file)
         guard let scene = try? SCNScene(url: url, options: nil) else { return nil }
         let node = SCNNode()
@@ -375,6 +391,118 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         modelNodes[model.id] = node
         refreshDimensions(model.id)
         return node
+    }
+
+    // MARK: Scrapbook cut-outs
+
+    /// Saves a cut-out into the reference's models and stands it up where the camera points (or at `base`),
+    /// turned to face the camera. Returns false, with `modelError` set, if it could not.
+    @discardableResult
+    func addCutout(_ package: CutoutPackage, at base: simd_float4x4? = nil) -> Bool {
+        var transform: simd_float4x4
+        if let base {
+            transform = base
+        } else if let frame = session.currentFrame {
+            transform = placementTransform(frame)
+            let facing = Cutout.frontFacing(camera: frame.camera.transform.columns.3.xyz, position: transform.columns.3.xyz)
+            transform.columns.0 = facing.columns.0
+            transform.columns.2 = facing.columns.2
+        } else {
+            modelError = "Point the camera at the set first, then add the cut-out."
+            return false
+        }
+        let id = UUID()
+        let file = "models/\(id.uuidString).\(Cutout.fileExtension)"
+        let destination = folder.appendingPathComponent(file)
+        do {
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(package).write(to: destination, options: .atomic)
+        } catch {
+            modelError = "Could not save the cut-out."
+            return false
+        }
+        let model = PlacedModel(id: id, name: package.name, file: file, transform: flatten(transform))
+        guard loadNode(for: model) != nil else {
+            try? FileManager.default.removeItem(at: destination)
+            modelError = "Could not show the cut-out."
+            return false
+        }
+        models.append(model)
+        selectedModel = id
+        Diagnostics.log("Cut-out added: \(package.views.count) views, \(package.height) m")
+        return true
+    }
+
+    /// A flat card that always turns to face the camera about the vertical axis, standing on the spot,
+    /// showing the photo nearest to the side the camera is on.
+    @discardableResult
+    private func loadCutoutNode(for model: PlacedModel) -> SCNNode? {
+        let url = folder.appendingPathComponent(model.file)
+        guard let data = try? Data(contentsOf: url), let package = try? JSONDecoder().decode(CutoutPackage.self, from: data) else { return nil }
+        var angles: [Float] = [], aspects: [Float] = [], images: [UIImage] = []
+        for view in package.views {
+            guard let image = UIImage(data: view.png) else { continue }
+            angles.append(view.angle)
+            aspects.append(max(view.aspect, 0.05))
+            images.append(image)
+        }
+        guard !images.isEmpty, package.height > 0.01 else { return nil }
+        let first = Cutout.nearest(angles, to: 0) ?? 0
+        let height = package.height
+        let geometry = SCNPlane(width: CGFloat(height * aspects[first]), height: CGFloat(height))
+        let material = SCNMaterial()
+        material.diffuse.contents = images[first]
+        material.lightingModel = .constant
+        material.isDoubleSided = true
+        geometry.materials = [material]
+        let plane = SCNNode(geometry: geometry)
+        plane.name = "cutout-plane"
+        // The card's origin is the middle of its foot.
+        plane.pivot = SCNMatrix4MakeTranslation(0, -Float(height) / 2, 0)
+        let billboard = SCNBillboardConstraint()
+        billboard.freeAxes = .Y
+        plane.constraints = [billboard]
+        let node = SCNNode()
+        node.name = model.id.uuidString
+        node.addChildNode(plane)
+        let widest = (aspects.max() ?? 1) * height
+        boxes[model.id] = (SIMD3(-widest / 2, 0, -0.01), SIMD3(widest / 2, height, 0.01))
+        node.simdTransform = matrix4(model.transform)
+        root.addChildNode(node)
+        modelNodes[model.id] = node
+        cutouts[model.id] = CutoutState(plane: plane, height: height, angles: angles, aspects: aspects, images: images, shown: first)
+        refreshDimensions(model.id)
+        startCutoutTimer()
+        Diagnostics.log(String(format: "Cut-out loaded: %@, %d views, %.2f m tall", model.name, images.count, height))
+        return node
+    }
+
+    private func startCutoutTimer() {
+        guard cutoutTimer == nil else { return }
+        cutoutTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateCutouts() }
+        }
+    }
+
+    private func stopCutoutTimer() {
+        cutoutTimer?.invalidate()
+        cutoutTimer = nil
+    }
+
+    /// Turns each cut-out to the photo for the side the camera sees now.
+    private func updateCutouts() {
+        guard !cutouts.isEmpty, let camera = session.currentFrame?.camera.transform.columns.3.xyz else { return }
+        for (id, state) in cutouts {
+            guard let node = modelNodes[id] else { continue }
+            let transform = node.simdWorldTransform
+            let angle = Cutout.viewAngle(camera: camera, position: transform.columns.3.xyz, front: transform.columns.2.xyz)
+            guard let best = Cutout.nearest(state.angles, to: angle), best != state.shown else { continue }
+            cutouts[id]?.shown = best
+            if let plane = state.plane.geometry as? SCNPlane {
+                plane.width = CGFloat(state.height * state.aspects[best])
+                plane.firstMaterial?.diffuse.contents = state.images[best]
+            }
+        }
     }
 
     /// Hangs fresh arrows on the model for its size now, or takes them off when turned off.
