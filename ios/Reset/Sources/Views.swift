@@ -1083,12 +1083,10 @@ struct Gallery: View {
                         Image(systemName: "ruler").font(Theme.font(size: 22, weight: .semibold)).frame(width: 30, height: 30)
                     }
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("Dimensions and notes")
                     Button { dismiss(); action(.sketch, shown) } label: {
                         Image(systemName: "pencil.tip.crop.circle").font(Theme.font(size: 22, weight: .semibold)).frame(width: 30, height: 30)
                     }
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("Draw")
                     Button {
                         load(shown)
                     } label: {
