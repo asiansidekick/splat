@@ -58,6 +58,7 @@ struct CaptureView: View {
     @State private var toast: String?
     @State private var picked: [PhotosPickerItem] = []
     @State private var showingMore = false
+    @State private var moreAtEnd = false
     @State private var showingImport = false
     @State private var previewSize: CGSize = .zero
     @AppStorage("showChanges") private var showChanges = false
@@ -586,11 +587,32 @@ struct CaptureView: View {
                 moreToggle("Left-handed", "hand.raised", $leftHanded)
                 moreToggle("Also save to Photos", "square.and.arrow.down", $saveToPhotos)
                 moreRow("Help", "questionmark.circle") { showingHelp = true }
+                Color.clear.frame(height: 1)
+                    .onAppear { moreAtEnd = true }
+                    .onDisappear { moreAtEnd = false }
             }
             .font(.body)
             .foregroundStyle(Theme.text)
             .padding(16)
         }
+        .scrollIndicators(.visible)
+        .scrollIndicatorsFlash(onAppear: true)
+        .overlay(alignment: .bottom) {
+            // A fade and an arrow while there is more below.
+            if !moreAtEnd {
+                ZStack(alignment: .bottom) {
+                    LinearGradient(colors: [.clear, Color(red: 0.07, green: 0.09, blue: 0.09)], startPoint: .top, endPoint: .bottom)
+                    Label("Scroll for more", systemImage: "chevron.down")
+                        .font(.caption.bold())
+                        .foregroundStyle(Theme.accent)
+                        .padding(.bottom, 6)
+                }
+                .frame(height: 56)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: moreAtEnd)
         .frame(width: 300)
         .frame(minHeight: 200, maxHeight: 520)
         .presentationCompactAdaptation(.popover)
