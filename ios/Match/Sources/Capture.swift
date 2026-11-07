@@ -57,6 +57,8 @@ struct CaptureView: View {
     @State private var saveError: String?
     @State private var toast: String?
     @State private var picked: [PhotosPickerItem] = []
+    @State private var showingMore = false
+    @State private var showingImport = false
     @State private var previewSize: CGSize = .zero
     @AppStorage("showChanges") private var showChanges = false
     @AppStorage("lightLevel") private var lightLevel = 0.6
@@ -157,6 +159,7 @@ struct CaptureView: View {
         .onChange(of: showChanges) { _, on in guide.showChanges = on }
         .onChange(of: visibleAspect) { _, _ in connectGuide() }
         .onChange(of: picked) { _, items in importPicked(items) }
+        .photosPicker(isPresented: $showingImport, selection: $picked, maxSelectionCount: 50, selectionBehavior: .ordered, matching: .images)
         .task(id: ghostID) { await loadGhost() }
         .fullScreenCover(item: $comparing) { pair in
             if let board {
@@ -528,42 +531,79 @@ struct CaptureView: View {
         .foregroundStyle(Theme.text)
     }
 
-    private var moreMenu: some View {
-        Menu {
-            Section("Overlay") {
-                if ghostID != nil {
-                    Button { ghostID = nil } label: { Label("Hide overlay", systemImage: "eye.slash") }
-                } else if let last = board?.references.last {
-                    Button { ghostID = last.id } label: { Label("Show overlay", systemImage: "eye") }
-                }
-                Toggle(isOn: $outlines) { Label("Show as outlines", systemImage: "square.dashed") }
-                if camera.hasLiDAR {
-                    Toggle(isOn: $showChanges) { Label("Show what changed", systemImage: "square.2.layers.3d") }
-                }
-            }
-            Section("Photos") {
-                PhotosPicker(selection: $picked, maxSelectionCount: 50, selectionBehavior: .ordered, matching: .images) {
-                    Label("Import from Photos", systemImage: "photo.badge.plus")
-                }
-                if let board, board.shots.count > 1, let latest = lastShot ?? board.newest {
-                    Button {
-                        comparing = ComparePair(before: board.reference(for: latest)?.id, after: latest.id)
-                    } label: { Label("Compare latest photo", systemImage: "rectangle.split.2x1") }
-                }
-                Button { showingLibrary = true } label: { Label("Boards, notes and backup", systemImage: "square.grid.2x2") }
-            }
-            Section("Settings") {
-                if camera.hasLiDAR {
-                    Toggle(isOn: $useLiDAR) { Label(camera.isFront ? "Face ID distance" : "LiDAR distance", systemImage: "dot.radiowaves.forward") }
-                }
-                Toggle(isOn: $leftHanded) { Label("Left-handed", systemImage: "hand.raised") }
-                Toggle(isOn: $saveToPhotos) { Label("Also save to Photos", systemImage: "square.and.arrow.down") }
-                Button { showingHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
-            }
+    private func moreRow(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
+        Button {
+            showingMore = false
+            action()
         } label: {
+            Label(title, systemImage: icon)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func moreToggle(_ title: String, _ icon: String, _ isOn: Binding<Bool>) -> some View {
+        Toggle(isOn: isOn) { Label(title, systemImage: icon) }
+            .tint(Theme.accent)
+    }
+
+    private func moreHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption2.bold())
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+    }
+
+    private var morePanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                moreHeader("Overlay")
+                if ghostID != nil {
+                    moreRow("Hide overlay", "eye.slash") { ghostID = nil }
+                } else if let last = board?.references.last {
+                    moreRow("Show overlay", "eye") { ghostID = last.id }
+                }
+                moreToggle("Show as outlines", "square.dashed", $outlines)
+                if camera.hasLiDAR {
+                    moreToggle("Show what changed", "square.2.layers.3d", $showChanges)
+                }
+                Divider()
+                moreHeader("Photos")
+                moreRow("Import from Photos", "photo.badge.plus") { showingImport = true }
+                if let board, board.shots.count > 1, let latest = lastShot ?? board.newest {
+                    moreRow("Compare latest photo", "rectangle.split.2x1") {
+                        comparing = ComparePair(before: board.reference(for: latest)?.id, after: latest.id)
+                    }
+                }
+                moreRow("Boards, notes and backup", "square.grid.2x2") { showingLibrary = true }
+                Divider()
+                moreHeader("Settings")
+                if camera.hasLiDAR {
+                    moreToggle(camera.isFront ? "Face ID distance" : "LiDAR distance", "dot.radiowaves.forward", $useLiDAR)
+                }
+                moreToggle("Left-handed", "hand.raised", $leftHanded)
+                moreToggle("Also save to Photos", "square.and.arrow.down", $saveToPhotos)
+                moreRow("Help", "questionmark.circle") { showingHelp = true }
+            }
+            .font(.body)
+            .foregroundStyle(Theme.text)
+            .padding(16)
+        }
+        .frame(width: 300)
+        .frame(minHeight: 200, maxHeight: 520)
+        .presentationCompactAdaptation(.popover)
+        .presentationBackground(Color(red: 0.07, green: 0.09, blue: 0.09))
+        .preferredColorScheme(.dark)
+    }
+
+    private var moreMenu: some View {
+        Button { showingMore = true } label: {
             Image(systemName: "ellipsis.circle").font(.title3)
         }
         .accessibilityLabel("More")
+        .popover(isPresented: $showingMore) { morePanel }
     }
 
     // MARK: Picture
