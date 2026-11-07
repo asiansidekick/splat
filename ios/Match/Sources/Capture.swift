@@ -60,6 +60,12 @@ struct CaptureView: View {
     @AppStorage("showChanges") private var showChanges = false
     @AppStorage("lightLevel") private var lightLevel = 0.6
     @State private var lightOn = false
+    /// Paused: the live picture frozen, with the reference over it to fade THEN to NOW at leisure.
+    @State private var frozen: UIImage?
+    @State private var pausing = false
+    @State private var scrubStart: Double?
+    @State private var opacityBefore: Double?
+    private var paused: Bool { frozen != nil }
     @State private var wheelShown = false
     @State private var wheelHide: Task<Void, Never>?
     @State private var lightDragStart: Double?
@@ -192,6 +198,7 @@ struct CaptureView: View {
                      highlighted: guideOn && ghost != nil)
             }
             .accessibilityLabel(guideOn ? "Turn the guide off" : "Turn the guide on")
+            pauseButton
             if hasLight { lightButton }
             Button { camera.flip() } label: { Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3) }
                 .accessibilityLabel("Switch camera")
@@ -204,10 +211,103 @@ struct CaptureView: View {
         .onChange(of: lightLevel) { _, _ in updateLight() }
         .onChange(of: camera.isFront) { _, _ in updateLight() }
         .onChange(of: camera.hasTorch) { _, _ in updateLight() }
-        .onChange(of: scenePhase) { _, _ in updateLight() }
+        .onChange(of: scenePhase) { _, phase in
+            updateLight()
+            if phase != .active { resume() }
+        }
         .onDisappear {
             restoreBrightness()
             Motion.shared.stop()
+        }
+    }
+
+    // MARK: Pause
+
+    /// Freezes the picture so the reference can be faded over it: swipe anywhere, or tap to jump
+    /// between THEN and NOW. Press again (or take a photo) to go live.
+    private var pauseButton: some View {
+        Button {
+            Haptics.tap()
+            if paused { resume() } else { pause() }
+        } label: {
+            Image(systemName: paused ? "play.fill" : "pause.fill")
+                .font(.footnote.bold())
+                .foregroundStyle(paused ? Color.black : Color.white)
+                .frame(width: 34, height: 34)
+                .background(paused ? Color.orange : Color.clear, in: Circle())
+                .overlay(Circle().stroke(paused ? Color.orange : Color.white, lineWidth: 2))
+                .contentShape(Circle())
+        }
+        .accessibilityLabel(paused ? "Back to live" : "Pause and compare")
+    }
+
+    private func pause() {
+        guard !pausing else { return }
+        pausing = true
+        camera.grabFrame { image in
+            pausing = false
+            if let image {
+                frozen = image
+                // Compare from THEN, the reference as it was; the swipe moves toward NOW.
+                if ghost != nil {
+                    opacityBefore = opacity
+                    opacity = 1
+                }
+            } else {
+                show("Could not pause. Try again.")
+            }
+        }
+    }
+
+    private func resume() {
+        guard frozen != nil else { return }
+        frozen = nil
+        scrubStart = nil
+        // The strength you had before pausing comes back.
+        if let before = opacityBefore { opacity = before }
+        opacityBefore = nil
+    }
+
+    /// The frozen picture, laid out exactly as the live camera and the reference are.
+    private func frozenLayer(_ image: UIImage) -> some View {
+        GeometryReader { geometry in
+            let size = geometry.size
+            let turn = camera.photoToPreview
+            let sideways = abs(abs(turn) - 90) < 1
+            let box = sideways ? CGSize(width: size.height, height: size.width) : size
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: box.width, height: box.height)
+                .clipped()
+                .rotationEffect(.degrees(turn))
+                .frame(width: size.width, height: size.height)
+                .scaleEffect(x: camera.isFront ? -1 : 1, y: 1)
+                .allowsHitTesting(false)
+        }
+        .ignoresSafeArea()
+    }
+
+    /// While paused the whole screen is the scrubber, like Reset: swipe left for THEN, right for
+    /// NOW, tap to jump to the other end.
+    private var scrubLayer: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard ghost != nil else { return }
+                    Haptics.tap()
+                    withAnimation(.snappy(duration: 0.2)) { opacity = opacity > 0.5 ? 0 : 1 }
+                }
+                .gesture(DragGesture(minimumDistance: 8)
+                    .onChanged { drag in
+                        guard ghost != nil else { return }
+                        let start = scrubStart ?? (1 - opacity)
+                        scrubStart = start
+                        let share = Double(drag.translation.width / max(geometry.size.width, 1))
+                        opacity = 1 - min(1, max(0, start + share))
+                    }
+                    .onEnded { _ in scrubStart = nil })
         }
     }
 
@@ -356,6 +456,7 @@ struct CaptureView: View {
         GeometryReader { geometry in
             ZStack {
                 CameraPreview(camera: camera)
+                if let frozen { frozenLayer(frozen) }
                 ghostLayer
                     .contentShape(Rectangle())
                     .gesture(ghostGesture)
@@ -377,7 +478,8 @@ struct CaptureView: View {
                             .toPhoto(location))
                     }
                 if let changes = guide.changes, showChanges { changeLayer(changes, size: geometry.size) }
-                if guideOn, ghost != nil, !guide.fitting {
+                if paused { scrubLayer }
+                if guideOn, ghost != nil, !guide.fitting, !paused {
                     if guide.people.count > 1 {
                         PeopleRings(people: guide.people, followed: guide.followed,
                                     quarterTurns: quarterTurns, mirrored: camera.isFront, inner: ghostBox)
@@ -734,6 +836,8 @@ struct CaptureView: View {
     }
 
     private func shoot() {
+        // A photo is always of the live view, so pausing ends.
+        resume()
         withAnimation(.easeOut(duration: 0.15)) { flash = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { withAnimation { flash = false } }
         // No board yet: start one, so the first photo is never lost. It can be renamed later.

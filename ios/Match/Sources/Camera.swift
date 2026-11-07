@@ -31,6 +31,9 @@ final class Camera: NSObject, ObservableObject {
         set { frameLock.lock(); frameHandler = newValue; frameLock.unlock() }
     }
     private var frameHandler: ((CIImage, DepthGrid?) -> Void)?
+    /// One-shot request for the next frame as a picture, for pausing. Behind the same lock.
+    private var grabHandler: ((UIImage?) -> Void)?
+    private static let stillContext = CIContext()
     private let frameLock = NSLock()
     private let depthOutput = AVCaptureDepthDataOutput()
     private let depthLock = NSLock()
@@ -449,6 +452,18 @@ extension Camera: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         let now = CACurrentMediaTime()
         lastAnyFrame = now
+        frameLock.lock()
+        let grab = grabHandler
+        grabHandler = nil
+        frameLock.unlock()
+        if let grab {
+            var still: UIImage?
+            if let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+                let image = CIImage(cvPixelBuffer: buffer).oriented(upright)
+                if let cg = Self.stillContext.createCGImage(image, from: image.extent) { still = UIImage(cgImage: cg) }
+            }
+            DispatchQueue.main.async { grab(still) }
+        }
         guard let onFrame else { return }
         // Five checks a second; fewer when the phone is getting hot, so it doesn't overheat on a long day.
         let thermal = ProcessInfo.processInfo.thermalState
@@ -456,14 +471,33 @@ extension Camera: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard now - lastFrame > interval, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         lastFrame = now
         // Frames arrive in the sensor's layout; turn them the way photos are saved.
-        let orientation: CGImagePropertyOrientation
+        onFrame(CIImage(cvPixelBuffer: buffer).oriented(upright), currentDepth())
+    }
+
+    /// How frames are turned to be upright like saved photos.
+    private var upright: CGImagePropertyOrientation {
         switch Int(frameAngle.rounded()) {
-        case 90: orientation = .right
-        case 180: orientation = .down
-        case 270: orientation = .left
-        default: orientation = .up
+        case 90: .right
+        case 180: .down
+        case 270: .left
+        default: .up
         }
-        onFrame(CIImage(cvPixelBuffer: buffer).oriented(orientation), currentDepth())
+    }
+
+    /// The next camera frame as an upright picture (nil if none arrives), to freeze the view.
+    func grabFrame(_ completion: @escaping (UIImage?) -> Void) {
+        frameLock.lock()
+        grabHandler = completion
+        frameLock.unlock()
+        // No frame in a second (camera stopped): give up rather than leave the button waiting.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            self.frameLock.lock()
+            let pending = self.grabHandler
+            self.grabHandler = nil
+            self.frameLock.unlock()
+            pending?(nil)
+        }
     }
 }
 
