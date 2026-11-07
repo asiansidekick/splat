@@ -48,11 +48,11 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         VStack(spacing: 10) {
                             modes(false)
                             HStack {
-                                (left ? trailing() : leading()).frame(width: 84)
+                                if left { trailing().frame(width: 84) } else { leading().frame(width: 84) }
                                 Spacer()
                                 shutter()
                                 Spacer()
-                                (left ? leading() : trailing()).frame(width: 84)
+                                if left { leading().frame(width: 84) } else { trailing().frame(width: 84) }
                             }
                             .padding(.horizontal, 16)
                         }
