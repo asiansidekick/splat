@@ -173,7 +173,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var lastRefine: TimeInterval = 0
     private var refinedAt: Date?
     private static let patchHalf = 12
-    private static let searchRadius = 10
+    private static let searchRadius = 16
     /// Marks only ride on ARKit anchors when this is on; they were seen not to move, so it is off.
     private static let anchoring = false
     private var lastCameraPosition: (time: TimeInterval, position: SIMD3<Float>)?
@@ -325,7 +325,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let mean = patch.reduce(0, +) / Float(patch.count)
             let spread = (patch.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Float(patch.count)).squareRoot()
             // Plain sand or a flat wall has nothing to hold on to.
-            guard spread > 6 else { continue }
+            guard spread > 3.5 else { continue }
             let through = Measurer.ray(through: SIMD2(Float(centre.x * 2) + 1, Float(centre.y * 2) + 1), in: frame)
             let depth = simd_dot(point - through.origin, through.direction)
             guard depth > 0.1 else { continue }
@@ -377,7 +377,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let centre = SIMD2(Int(p.x / 2), Int(p.y / 2))
             guard let window = Measurer.lumaGrid(frame, centre: centre, half: grid / 2),
                   let hit = FeatureTrack.find(patch: track.patch, patchSize: side, in: window, gridSize: grid, radius: Measurer.searchRadius),
-                  hit.score > 0.8 else {
+                  hit.score > 0.72 else {
                 track.misses += 1
                 tracks[key] = track
                 continue
