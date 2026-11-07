@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 import UIKit
 
@@ -19,6 +20,10 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
     @ViewBuilder let shutter: () -> Shutter
     @ViewBuilder let trailing: () -> Trailing
 
+    /// Left-handed: in landscape the controls go down the left edge, and in portrait the two
+    /// bottom buttons swap sides.
+    @AppStorage("leftHanded") private var leftHanded = false
+
     static var topHeight: CGFloat { 44 }
     static var bottomHeight: CGFloat { 140 }
     static var sideWidth: CGFloat { 100 }
@@ -27,8 +32,11 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
         GeometryReader { geometry in
             let landscape = geometry.size.width > geometry.size.height
             let safe = geometry.safeAreaInsets
+            let left = leftHanded
             let insets = landscape
-                ? EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom, trailing: max(safe.trailing, Self.sideWidth))
+                ? (left
+                    ? EdgeInsets(top: safe.top + Self.topHeight, leading: max(safe.leading, Self.sideWidth), bottom: safe.bottom, trailing: safe.trailing)
+                    : EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom, trailing: max(safe.trailing, Self.sideWidth)))
                 : EdgeInsets(top: safe.top + Self.topHeight, leading: safe.leading, bottom: safe.bottom + Self.bottomHeight, trailing: safe.trailing)
             ZStack {
                 VStack(spacing: 0) {
@@ -40,11 +48,11 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         VStack(spacing: 10) {
                             modes(false)
                             HStack {
-                                leading().frame(width: 84)
+                                (left ? trailing() : leading()).frame(width: 84)
                                 Spacer()
                                 shutter()
                                 Spacer()
-                                trailing().frame(width: 84)
+                                (left ? leading() : trailing()).frame(width: 84)
                             }
                             .padding(.horizontal, 16)
                         }
@@ -54,10 +62,10 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .background(Color.black.opacity(0.35).ignoresSafeArea(edges: .bottom))
                     }
                 }
-                .padding(.trailing, landscape ? max(0, Self.sideWidth - safe.trailing) : 0)
+                .padding(left ? .leading : .trailing, landscape ? max(0, Self.sideWidth - (left ? safe.leading : safe.trailing)) : 0)
                 if landscape {
                     HStack(spacing: 0) {
-                        Spacer(minLength: 0)
+                        if !left { Spacer(minLength: 0) }
                         VStack(spacing: 14) {
                             trailing()
                             Spacer(minLength: 0)
@@ -70,10 +78,11 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .frame(width: Self.sideWidth)
                         .frame(maxHeight: .infinity)
                         .background(Color.black.opacity(0.35).ignoresSafeArea(edges: [.top, .bottom]))
+                        if left { Spacer(minLength: 0) }
                     }
                     // Right against the edge of the screen, like the Camera app, not inset by the
                     // safe area, which only leaves an empty strip.
-                    .ignoresSafeArea(edges: .trailing)
+                    .ignoresSafeArea(edges: left ? .leading : .trailing)
                 }
             }
             .background {
@@ -251,5 +260,20 @@ struct Banner: View {
             .frame(maxWidth: 480)
             .background(tint.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
             .foregroundStyle(.white)
+    }
+}
+
+/// The volume buttons (and Camera Control) pause and play, on iOS 18 and later, like Reset.
+struct CaptureButtonAction: ViewModifier {
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onCameraCaptureEvent { event in
+                if event.phase == .ended { action() }
+            }
+        } else {
+            content
+        }
     }
 }

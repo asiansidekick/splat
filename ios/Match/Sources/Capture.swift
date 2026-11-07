@@ -35,6 +35,7 @@ struct CaptureView: View {
     @AppStorage("ghostOpacity") private var opacity = 0.5
     @AppStorage("guideOn") private var guideOn = true
     @AppStorage("saveToPhotos") private var saveToPhotos = false
+    @AppStorage("leftHanded") private var leftHanded = false
     @State private var ghostID: UUID?
     @State private var ghost: UIImage?
     @State private var ghostEdges: UIImage?
@@ -115,6 +116,7 @@ struct CaptureView: View {
             }
             .accessibilityLabel("Next take, \(take + 1). Touch and hold to go back.")
         }
+        .modifier(CaptureButtonAction { if paused { resume() } else { pause() } })
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .onAppear {
@@ -472,6 +474,7 @@ struct CaptureView: View {
             if camera.hasLiDAR {
                 Toggle(isOn: $showChanges) { Label("Show changes (red nearer, blue gone)", systemImage: "square.2.layers.3d") }
             }
+            Toggle(isOn: $leftHanded) { Label("Left-handed", systemImage: "hand.raised") }
             Toggle(isOn: $saveToPhotos) { Label("Also save photos to Photos", systemImage: "square.and.arrow.down") }
             Button { showingLibrary = true } label: { Label("Boards, notes and backup", systemImage: "square.grid.2x2") }
             Button { showingHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
