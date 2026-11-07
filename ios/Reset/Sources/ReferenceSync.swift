@@ -255,6 +255,8 @@ final class ReferenceSyncLibrary: SyncLibrary {
                 result.models.append(model)
             }
         }
+        // Scales set on photos with no depth: ones this phone lacks are added.
+        for (frame, depth) in incoming.planeDepths where result.planeDepths[frame] == nil { result.planeDepths[frame] = depth }
         // Measurements and notes: new ones are added, deleted ones go, typed lengths and edited notes take the newest.
         let unmarked = Set(result.removedMarks)
         result.removedMarks += incoming.removedMarks.filter { !unmarked.contains($0) }.sorted { $0.uuidString < $1.uuidString }

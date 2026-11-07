@@ -50,6 +50,9 @@ struct Reference: Codable, Identifiable, Equatable {
     var removedMarks: [UUID] = []
     /// The torch level it was shot with, nil when the torch was off.
     var torch: Float?
+    /// For a photo with no depth: how far out (metres) a length typed along something known puts the flat
+    /// scene, so lines drawn on it afterwards read true. Keyed by the frame's image file.
+    var planeDepths: [String: Float] = [:]
 
     var hasDepth: Bool { keyframes.contains { $0.depthFile != nil } }
     var slate: String { Reference.label(scene: scene, setup: setup) }
@@ -90,6 +93,7 @@ extension Reference {
         notes = try c.decodeIfPresent([RoomNote].self, forKey: .notes) ?? []
         removedMarks = try c.decodeIfPresent([UUID].self, forKey: .removedMarks) ?? []
         torch = try c.decodeIfPresent(Float.self, forKey: .torch)
+        planeDepths = try c.decodeIfPresent([String: Float].self, forKey: .planeDepths) ?? [:]
     }
 }
 

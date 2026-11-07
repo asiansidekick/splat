@@ -35,6 +35,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         case note(UUID?)
     }
     @Published private(set) var entry: Entry?
+    /// A line drawn on a photo with no depth, waiting for its real length to set the photo's scale.
+    @Published private(set) var scaleRequest: UUID?
+    /// The result: the depth (metres) that makes that line the length typed, and the length.
+    @Published private(set) var scaleResult: (id: UUID, depth: Float, metres: Float)?
     /// Where a new note goes when it was started by holding a finger down; nil = at the crosshair.
     private var noteSpot: SIMD3<Float>?
     /// The note being carried: it follows the crosshair until dropped.
@@ -643,6 +647,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
 
     func dismissEntry() {
         entry = nil
+        scaleRequest = nil
         tapeLine = nil
         noteSpot = nil
     }
@@ -947,6 +952,22 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         Diagnostics.log("Measured in a saved frame: \(Measurer.text(line.measured))")
         changed()
         return line.id
+    }
+
+    /// Asks for the real length of a line drawn 1 m out on a photo with no depth: it sets the photo's scale.
+    func askPlaneScale(_ id: UUID) {
+        scaleRequest = id
+        entry = .length(id)
+    }
+
+    /// The line was drawn 1 m out, so the real length over its length there is how far out the scene really is.
+    func finishPlaneScale(_ id: UUID, metres: Float) -> Bool {
+        guard let line = measurements.first(where: { $0.id == id }), metres > 0.02 else { return false }
+        let raw = simd_distance(line.start, line.end)
+        guard raw > 0.001 else { return false }
+        scaleRequest = nil
+        scaleResult = (id, metres / raw, metres)
+        return true
     }
 
     /// Opens the note window for a note that will go at `spot` in the room.
@@ -1958,7 +1979,12 @@ struct MeasureEntry: View {
     private func lengthCard(_ id: UUID) -> some View {
         let guess = measurer.measurements.first { $0.id == id }?.measured
         let tape = measurer.tapeLine == id
+        let scaling = measurer.scaleRequest == id
         return VStack(spacing: 10) {
+            if scaling {
+                Text("No depth in this photo. How long is this line in real life?")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.green).multilineTextAlignment(.center)
+            }
             if tape {
                 Text("How long is the tape between those points?")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.green)
@@ -1966,7 +1992,7 @@ struct MeasureEntry: View {
             HStack(spacing: 8) {
                 plainButton("Delete", fill: Color.red.opacity(0.85), text: .white) { measurer.deleteMark(id) }
                 plainButton("Cancel", fill: Color.white.opacity(0.15), text: .white) { measurer.dismissEntry() }
-                plainButton("Tape", fill: Color.green.opacity(0.85), text: .black) {
+                if !scaling { plainButton("Tape", fill: Color.green.opacity(0.85), text: .black) {
                     var typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     if let last = typed.last, last.isNumber || last == "." { typed += unit }
                     guard let metres = LengthText.parse(typed) else {
@@ -1981,7 +2007,7 @@ struct MeasureEntry: View {
                         return
                     }
                     measurer.dismissEntry()
-                }
+                } }
                 plainButton("Set", fill: .yellow, text: .black) {
                     var typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     // Nothing typed keeps the phone's guess.
@@ -1997,6 +2023,15 @@ struct MeasureEntry: View {
                         return
                     }
                     Diagnostics.log("Set pressed: '\(typed)' = \(Measurer.text(metres))")
+                    if scaling {
+                        guard measurer.finishPlaneScale(id, metres: metres) else {
+                            problem = "That length is too short. Type the real length of the line."
+                            Haptics.warning()
+                            return
+                        }
+                        measurer.dismissEntry()
+                        return
+                    }
                     measurer.learn(from: id, metres: metres)
                     measurer.setLength(metres, for: id)
                     measurer.dismissEntry()

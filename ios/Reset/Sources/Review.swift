@@ -42,7 +42,13 @@ struct FrameReview: View {
                 if frames.indices.contains(index) {
                     FramePage(frame: frames[index], folder: folder, measurer: measurer,
                               stage: stage, placer: placer, editingModels: editingModels, panMode: !measuring && !editingModels,
-                              onPickMark: { measuring = true })
+                              onPickMark: { measuring = true },
+                              planeDepth: reference.planeDepths[frames[index].imageFile],
+                              onPlaneDepth: { depth in
+                                  guard frames.indices.contains(index) else { return }
+                                  reference.planeDepths[frames[index].imageFile] = depth
+                                  onSave(reference)
+                              })
                         .id(frames[index].id)
                 } else {
                     Spacer()
@@ -286,6 +292,9 @@ struct FramePage: View {
     var panMode = false
     /// Called when a tap in zoom mode lands on a mark: the screen switches to measuring so it can be edited.
     var onPickMark: () -> Void = {}
+    /// For a photo with no depth: how far out the scene is, once a length typed along something known set it.
+    var planeDepth: Float?
+    var onPlaneDepth: (Float) -> Void = { _ in }
 
     private struct Loaded: @unchecked Sendable {
         let image: UIImage
@@ -311,6 +320,8 @@ struct FramePage: View {
     @State private var pan: CGSize = .zero
     @State private var basePan: CGSize = .zero
     @State private var pinching = false
+    /// A line just drawn on a photo with no depth, drawn 1 m out until its real length is typed.
+    @State private var scalePending: (id: UUID, a: SIMD2<Float>, b: SIMD2<Float>)?
 
     private func clamped(_ pan: CGSize, zoom: CGFloat, size: CGSize) -> CGSize {
         let x = size.width * (zoom - 1) / 2, y = size.height * (zoom - 1) / 2
@@ -384,12 +395,30 @@ struct FramePage: View {
             }
         }
         .task(id: frame.id) { await load() }
+        .onReceive(measurer.$scaleResult) { result in
+            guard let result, let pending = scalePending, result.id == pending.id else { return }
+            scalePending = nil
+            onPlaneDepth(result.depth)
+            if let wa = frame.point(atSensor: pending.a, metres: result.depth), let wb = frame.point(atSensor: pending.b, metres: result.depth) {
+                measurer.moveEnd(pending.id, end: 0, to: wa)
+                measurer.moveEnd(pending.id, end: 1, to: wb)
+                measurer.setLength(result.metres, for: pending.id)
+            }
+            say("Scale set. Measure things at the same distance as that line: nearer or farther ones will read wrong.")
+        }
+        .onChange(of: measurer.entry) { _, entry in
+            // The window was closed without a length: the provisional line goes.
+            if entry == nil, let pending = scalePending {
+                scalePending = nil
+                measurer.deleteMark(pending.id)
+            }
+        }
     }
 
     private var hint: String? {
         if let message { return message }
         guard let loaded else { return nil }
-        if loaded.depth == nil { return "No LiDAR depth in this frame: notes go in mid-air, and lines need a frame that has depth (marked in the strip)." }
+        if loaded.depth == nil, planeDepth == nil { return "No depth in this photo: drag a line along something you know the size of and type its real length. Everything else on that flat view is then measured from it. Notes work as normal." }
         return panMode ? "Pinch to zoom, drag to move. Tap the ruler to measure or add notes." : "Drag to measure. Hold to add a note. Hold a line's end, then drag it to move it. Tap a mark to edit."
     }
 
@@ -647,18 +676,26 @@ struct FramePage: View {
 
     /// Metres out to the surface at a place in the photo, from the saved depth.
     private func depth(at n: SIMD2<Float>) -> Float? {
-        guard let values = loaded?.depth, frame.depthWidth > 0, frame.depthHeight > 0 else { return nil }
+        guard let values = loaded?.depth, frame.depthWidth > 0, frame.depthHeight > 0 else { return planeDepth }
         let x = n.x * Float(frame.depthWidth), y = n.y * Float(frame.depthHeight)
         let metres = DepthMap.planeDepth(values, width: frame.depthWidth, height: frame.depthHeight, x: x, y: y, radius: 10)
             ?? DepthMap.planeDepth(values, width: frame.depthWidth, height: frame.depthHeight, x: x, y: y)
             ?? DepthMap.sample(values, width: frame.depthWidth, height: frame.depthHeight, x: Int(x), y: Int(y))
-        return metres.map { $0 * Measurer.depthScale }
+        return metres
     }
 
     private func addLine(from p: CGPoint, to q: CGPoint, size: CGSize) {
-        guard let loaded, loaded.depth != nil else {
-            say("This frame has no LiDAR depth, so lines can't be drawn on it. Try another frame.")
-            Haptics.warning()
+        guard let loaded else { return }
+        if loaded.depth == nil, planeDepth == nil {
+            // No depth anywhere: the first line is drawn 1 m out and its real length, typed next, sets the scale.
+            guard let a = sensorPoint(p, size: size), let b = sensorPoint(q, size: size),
+                  let wa = frame.point(atSensor: a, metres: 1), let wb = frame.point(atSensor: b, metres: 1),
+                  let id = measurer.addLine(from: wa, to: wb) else {
+                say("That line is too short.")
+                return
+            }
+            scalePending = (id, a, b)
+            measurer.askPlaneScale(id)
             return
         }
         guard var a = sensorPoint(p, size: size), var b = sensorPoint(q, size: size) else { return }
