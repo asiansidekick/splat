@@ -27,9 +27,9 @@ enum ScanViews {
     /// (0 front, 90 its left, 180 back, -90 its right). The first frame is the front.
     static func pick(from frames: [Keyframe], within tolerance: Float = 28) -> [(frame: Keyframe, angle: Float)] {
         guard let first = frames.first else { return [] }
-        guard let centre = subject(of: frames) else { return [(first, 0)] }
+        guard let centre = subject(of: frames) else { return [(frame: first, angle: Float(0))] }
         let toFirst = SIMD3<Float>(first.position.x - centre.x, 0, first.position.z - centre.z)
-        guard simd_length(toFirst) > 0.2 else { return [(first, 0)] }
+        guard simd_length(toFirst) > 0.2 else { return [(frame: first, angle: Float(0))] }
         let front = simd_normalize(toFirst)
         let angles = frames.map { Cutout.viewAngle(camera: $0.position, position: centre, front: front) }
         var chosen: [(frame: Keyframe, angle: Float)] = []
@@ -41,7 +41,7 @@ enum ScanViews {
             used.insert(index)
             chosen.append((frames[index], want))
         }
-        return chosen.isEmpty ? [(first, 0)] : chosen
+        return chosen.isEmpty ? [(frame: first, angle: Float(0))] : chosen
     }
 }
 
