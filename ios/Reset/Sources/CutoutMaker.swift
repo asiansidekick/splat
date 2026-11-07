@@ -34,6 +34,45 @@ enum CutoutLift {
     }
 }
 
+/// Every cut-out made on this phone, kept so it can be stood in any reference later (Phil, 2026-11-07).
+enum CutoutLibrary {
+    struct Entry: Identifiable {
+        let id: UUID
+        let package: CutoutPackage
+    }
+
+    private static var folder: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("CutoutLibrary", isDirectory: true)
+    }
+
+    static func save(_ package: CutoutPackage) {
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try JSONEncoder().encode(package).write(to: folder.appendingPathComponent("\(UUID().uuidString).\(Cutout.fileExtension)"), options: .atomic)
+        } catch {
+            Diagnostics.log("Could not keep the cut-out in the library: \(error)")
+        }
+    }
+
+    /// Newest first.
+    static func all() -> [Entry] {
+        let keys: [URLResourceKey] = [.contentModificationDateKey]
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys)) ?? []
+        let dated = files.filter { $0.pathExtension == Cutout.fileExtension }.map { url -> (URL, Date) in
+            (url, (try? url.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast)
+        }.sorted { $0.1 > $1.1 }
+        return dated.compactMap { url, _ in
+            guard let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
+                  let data = try? Data(contentsOf: url), let package = try? JSONDecoder().decode(CutoutPackage.self, from: data) else { return nil }
+            return Entry(id: id, package: package)
+        }
+    }
+
+    static func delete(_ id: UUID) {
+        try? FileManager.default.removeItem(at: folder.appendingPathComponent("\(id.uuidString).\(Cutout.fileExtension)"))
+    }
+}
+
 /// Make a scrapbook cut-out: pick photos of a person or thing from different sides, say which side each
 /// shows, give the real height, and stand it in the room. As you walk round it, the cut-out shows the
 /// photo that matches your side.
@@ -66,6 +105,7 @@ struct CutoutMaker: View {
     @State private var name = ""
     @State private var heightText = "170"
     @State private var message: String?
+    @State private var saved: [CutoutLibrary.Entry] = []
 
     private var heightMetres: Float? {
         guard let value = Float(heightText.replacingOccurrences(of: ",", with: ".")), value >= 2, value <= 500 else { return nil }
@@ -75,6 +115,32 @@ struct CutoutMaker: View {
     var body: some View {
         NavigationStack {
             List {
+                if !saved.isEmpty {
+                    Section("Saved cut-outs") {
+                        ForEach(saved) { entry in
+                            Button { stand(entry.package) } label: {
+                                HStack(spacing: 12) {
+                                    if let png = (entry.package.views.first { $0.angle == 0 } ?? entry.package.views.first)?.png, let image = UIImage(data: png) {
+                                        Image(uiImage: image).resizable().scaledToFit().frame(width: 48, height: 64)
+                                            .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+                                    }
+                                    VStack(alignment: .leading) {
+                                        Text(entry.package.name).font(Theme.headline)
+                                        Text("\(Int((entry.package.height * 100).rounded())) cm · \(entry.package.views.count) photo\(entry.package.views.count == 1 ? "" : "s")")
+                                            .font(Theme.footnote).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text("Stand it").font(Theme.subheadline).foregroundStyle(Theme.accent)
+                                }
+                            }
+                            .tint(.primary)
+                        }
+                        .onDelete { offsets in
+                            for index in offsets { CutoutLibrary.delete(saved[index].id) }
+                            saved.remove(atOffsets: offsets)
+                        }
+                    }
+                }
                 Section {
                     PhotosPicker(selection: $picked, maxSelectionCount: 8, matching: .images) {
                         Label(items.isEmpty ? "Pick photos from different sides" : "Add more photos", systemImage: "photo.stack")
@@ -121,6 +187,7 @@ struct CutoutMaker: View {
             .navigationTitle("Cut-out")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .onAppear { saved = CutoutLibrary.all() }
             .onChange(of: picked) { _, chosen in
                 guard !chosen.isEmpty else { return }
                 picked = []
@@ -157,12 +224,19 @@ struct CutoutMaker: View {
             name: name.trimmingCharacters(in: .whitespaces).isEmpty ? "Cut-out" : name.trimmingCharacters(in: .whitespaces),
             height: height,
             views: items.map { CutoutPackage.View(angle: $0.angle, png: $0.png, aspect: $0.aspect) })
+        if stand(package) { CutoutLibrary.save(package) }
+    }
+
+    /// Puts a cut-out in the room; true when it worked.
+    @discardableResult
+    private func stand(_ package: CutoutPackage) -> Bool {
         if placer.addCutout(package, at: base) {
             Haptics.success()
             dismiss()
-        } else {
-            message = placer.modelError ?? "Could not place the cut-out."
-            Haptics.warning()
+            return true
         }
+        message = placer.modelError ?? "Could not place the cut-out."
+        Haptics.warning()
+        return false
     }
 }
