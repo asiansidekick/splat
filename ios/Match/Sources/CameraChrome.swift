@@ -78,7 +78,6 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         .padding(.vertical, 8)
                         .frame(width: Self.sideWidth)
                         .frame(maxHeight: .infinity)
-                        .background(Theme.band.ignoresSafeArea(edges: [.top, .bottom]))
                         if left { Spacer(minLength: 0) }
                     }
                     // Right against the edge of the screen, like the Camera app, not inset by the

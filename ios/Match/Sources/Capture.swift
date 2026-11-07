@@ -102,17 +102,17 @@ struct CaptureView: View {
             referenceStrip(vertical: vertical)
         } leading: {
             if previewSize.width > previewSize.height {
-                referenceButton(size: 52)
+                referenceButton(size: 60)
             } else {
                 Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
             }
         } shutter: {
             if previewSize.width > previewSize.height {
                 // On its side there is no room across, so pause goes under the shutter.
-                VStack(spacing: 10) {
+                VStack(spacing: 14) {
                     ShutterButton(style: .photo) { shoot() }
                         .accessibilityLabel("Take photo")
-                    pauseButton(size: 56)
+                    pauseButton(size: 74)
                 }
             } else {
                 // Upright: the reference thumbnail, the shutter dead centre and pause, the same size,
