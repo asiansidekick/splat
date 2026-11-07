@@ -33,7 +33,6 @@ targets:
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Reset finds your teammates' phones nearby to sync references directly, with no internet."
         INFOPLIST_KEY_NSCameraUsageDescription: "The camera records the set and shows the reference overlay."
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Shutter photos and references are saved to Photos so you can send them."
-        INFOPLIST_KEY_UIRequiredDeviceCapabilities: arkit
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
