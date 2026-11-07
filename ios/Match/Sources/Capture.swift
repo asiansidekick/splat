@@ -101,7 +101,6 @@ struct CaptureView: View {
         } modes: { vertical in
             referenceStrip(vertical: vertical)
         } leading: {
-            // Upright, the whole bottom row is laid out in the shutter's slot, in four equal cells.
             if previewSize.width > previewSize.height {
                 referenceButton(size: 52)
             } else {
@@ -116,31 +115,19 @@ struct CaptureView: View {
                     pauseButton(size: 56)
                 }
             } else {
-                // Four buttons the same size in evenly spaced cells: reference, next take, shutter, pause
-                // (the other way round when left-handed).
+                // Upright: the reference thumbnail, the shutter dead centre and pause, the same size,
+                // with equal room each side (swapped when left-handed).
                 HStack(spacing: 0) {
-                    ForEach(leftHanded ? [3, 2, 1, 0] : [0, 1, 2, 3], id: \.self) { slot in
-                        Group {
-                            switch slot {
-                            case 0: referenceButton(size: 74)
-                            case 1: nextTakeButton(size: 74)
-                            case 2:
-                                ShutterButton(style: .photo) { shoot() }
-                                    .accessibilityLabel("Take photo")
-                            default: pauseButton(size: 74)
-                            }
-                        }
+                    (leftHanded ? AnyView(pauseButton(size: 74)) : AnyView(referenceButton(size: 74)))
                         .frame(maxWidth: .infinity)
-                    }
+                    ShutterButton(style: .photo) { shoot() }
+                        .accessibilityLabel("Take photo")
+                    (leftHanded ? AnyView(referenceButton(size: 74)) : AnyView(pauseButton(size: 74)))
+                        .frame(maxWidth: .infinity)
                 }
             }
         } trailing: {
-            // On its side, Next take sits at the top of the column.
-            if previewSize.width > previewSize.height {
-                nextTakeButton(size: 56)
-            } else {
-                Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
-            }
+            Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
         }
         .modifier(CaptureButtonAction { if paused { resume() } else { pause() } })
         .preferredColorScheme(.dark)
@@ -221,6 +208,7 @@ struct CaptureView: View {
             Button { showingLibrary = true } label: { Image(systemName: "square.grid.2x2").font(.title3) }
                 .accessibilityLabel("Boards and photos")
             boardMenu
+            nextTakeButton
             Spacer(minLength: 4)
             Button {
                 Haptics.tap()
@@ -255,21 +243,19 @@ struct CaptureView: View {
 
     // MARK: Next take
 
-    /// Next take, in the same ring style as the shutter and pause.
-    private func nextTakeButton(size: CGFloat) -> some View {
+    /// Next take, in the top row at the same size as the other buttons there. The pill beside it
+    /// shows which take it is on. Touch and hold to go back or to Prep.
+    private var nextTakeButton: some View {
         Button {
             Haptics.tap()
             setTake(take + 1)
         } label: {
-            VStack(spacing: 1) {
-                Image(systemName: "forward.end.fill").font(.system(size: size * 0.28, weight: .bold))
-                Text("T\(take + 1)").font(.system(size: size * 0.2, weight: .bold)).monospacedDigit()
-            }
-            .foregroundStyle(Color.yellow)
-            .frame(width: size, height: size)
-            .background(Color.white.opacity(0.15), in: Circle())
-            .overlay(Circle().stroke(Color.white, lineWidth: size > 60 ? 4 : 3))
-            .contentShape(Circle())
+            Image(systemName: "forward.end.fill")
+                .font(.footnote.bold())
+                .foregroundStyle(Color.yellow)
+                .frame(width: 34, height: 34)
+                .background(Color.white.opacity(0.15), in: Circle())
+                .contentShape(Circle())
         }
         .buttonStyle(PressScale())
         .contextMenu {
@@ -752,7 +738,7 @@ struct CaptureView: View {
                 withAnimation(.snappy(duration: 0.2)) { lensOpen.toggle() }
             } label: {
                 HStack(spacing: 3) {
-                    Image(systemName: "camera.aperture")
+                    FieldOfView(zoom: camera.zoom).frame(width: 22, height: 16)
                     Text("\(Self.zoomText(camera.zoom))×").monospacedDigit()
                 }
                 .font(.footnote.bold())
@@ -1328,5 +1314,31 @@ private struct GalleryPage: View {
                 offset = CGSize(width: start.width + value.translation.width, height: start.height + value.translation.height)
             }
             .onEnded { _ in dragStart = nil }
+    }
+}
+
+/// A field-of-view wedge: a camera point with two lines opening out, wider on the ultra wide lens
+/// and narrower the more it zooms.
+struct FieldOfView: View {
+    var zoom: Double
+
+    var body: some View {
+        Canvas { context, size in
+            // Half the angle of view: about 42 degrees at .5, 24 at 1, 8.5 at 3.
+            let half = atan(0.45 / max(zoom, 0.3))
+            let height = size.height - 3
+            let spread = min(size.width / 2 - 1, CGFloat(tan(half)) * height)
+            let apex = CGPoint(x: size.width / 2, y: size.height - 2)
+            var wedge = Path()
+            wedge.move(to: apex)
+            wedge.addLine(to: CGPoint(x: apex.x - spread, y: apex.y - height))
+            wedge.move(to: apex)
+            wedge.addLine(to: CGPoint(x: apex.x + spread, y: apex.y - height))
+            wedge.move(to: CGPoint(x: apex.x - spread, y: apex.y - height))
+            wedge.addLine(to: CGPoint(x: apex.x + spread, y: apex.y - height))
+            context.stroke(wedge, with: .foreground, style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+            context.fill(Path(ellipseIn: CGRect(x: apex.x - 2, y: apex.y - 2, width: 4, height: 4)), with: .foreground)
+        }
+        .accessibilityHidden(true)
     }
 }
