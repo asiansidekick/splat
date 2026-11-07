@@ -152,6 +152,25 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         refreshDimensions(id)
     }
 
+    /// Brings the selected model (or the newest, when none is selected) back to the middle of the view at its
+    /// normal size, for when it has been lost off screen, very far away, or scaled tiny or huge.
+    func bringToView() {
+        guard let id = selectedModel ?? models.last?.id, let node = modelNodes[id] else { return }
+        guard let frame = session.currentFrame else {
+            modelError = "Point the camera at the set first."
+            return
+        }
+        node.simdScale = SIMD3(repeating: 1)
+        var spot = placementTransform(frame).columns.3.xyz
+        spot.y -= boxes[id]?.low.y ?? 0
+        node.simdWorldPosition = spot
+        selectedModel = id
+        Haptics.success()
+        commit(id)
+        updateSize()
+        refreshDimensions(id)
+    }
+
     func deleteSelectedModel() {
         guard let id = selectedModel, let index = models.firstIndex(where: { $0.id == id }) else { return }
         modelNodes[id]?.removeFromParentNode()
@@ -535,7 +554,15 @@ struct ModelOverlay: View {
 
     var body: some View {
         Group {
-            if let name = placer.selectedModelName {
+            if placer.selectedModelName == nil, !placer.models.isEmpty {
+                Button("Find model") { placer.bringToView() }
+                    .buttonStyle(.bordered)
+                    .font(Theme.headline)
+                    .controlSize(.small)
+                    .padding(6)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            else if let name = placer.selectedModelName {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(placer.lifting ? "\(name): drag up or down to lift it" : "\(name): drag to move (it stands on surfaces), pinch to scale, twist to turn").font(Theme.caption)
                     Text("W × D × H  \(placer.sizeText)").font(Theme.caption.bold().monospacedDigit())
@@ -554,6 +581,7 @@ struct ModelOverlay: View {
                         .tint(placer.lifting ? Theme.accent : nil)
                         .accessibilityLabel(placer.lifting ? "Drag moves it across again" : "Drag lifts it up and down")
                         if showsFloor { Button("Floor") { placer.dropToFloor() } }
+                        Button("Bring here") { placer.bringToView() }
                         Button("True size") { placer.resetSelectedModelSize() }
                         Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
                         Spacer()
