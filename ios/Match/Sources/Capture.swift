@@ -530,25 +530,36 @@ struct CaptureView: View {
 
     private var moreMenu: some View {
         Menu {
-            PhotosPicker(selection: $picked, maxSelectionCount: 50, selectionBehavior: .ordered, matching: .images) {
-                Label("Import from Photos", systemImage: "photo.badge.plus")
+            Section("Overlay") {
+                if ghostID != nil {
+                    Button { ghostID = nil } label: { Label("Hide overlay", systemImage: "eye.slash") }
+                } else if let last = board?.references.last {
+                    Button { ghostID = last.id } label: { Label("Show overlay", systemImage: "eye") }
+                }
+                Toggle(isOn: $outlines) { Label("Show as outlines", systemImage: "square.dashed") }
+                if camera.hasLiDAR {
+                    Toggle(isOn: $showChanges) { Label("Show what changed", systemImage: "square.2.layers.3d") }
+                }
             }
-            if let board, board.shots.count > 1, let latest = lastShot ?? board.newest {
-                Button {
-                    comparing = ComparePair(before: board.reference(for: latest)?.id, after: latest.id)
-                } label: { Label("Compare latest photo", systemImage: "rectangle.split.2x1") }
+            Section("Photos") {
+                PhotosPicker(selection: $picked, maxSelectionCount: 50, selectionBehavior: .ordered, matching: .images) {
+                    Label("Import from Photos", systemImage: "photo.badge.plus")
+                }
+                if let board, board.shots.count > 1, let latest = lastShot ?? board.newest {
+                    Button {
+                        comparing = ComparePair(before: board.reference(for: latest)?.id, after: latest.id)
+                    } label: { Label("Compare latest photo", systemImage: "rectangle.split.2x1") }
+                }
+                Button { showingLibrary = true } label: { Label("Boards, notes and backup", systemImage: "square.grid.2x2") }
             }
-            Toggle(isOn: $outlines) { Label("Overlay as outlines", systemImage: "square.dashed") }
-            if camera.hasLiDAR {
-                Toggle(isOn: $useLiDAR) { Label(camera.isFront ? "Face ID camera distance" : "LiDAR distance", systemImage: "dot.radiowaves.forward") }
+            Section("Settings") {
+                if camera.hasLiDAR {
+                    Toggle(isOn: $useLiDAR) { Label(camera.isFront ? "Face ID distance" : "LiDAR distance", systemImage: "dot.radiowaves.forward") }
+                }
+                Toggle(isOn: $leftHanded) { Label("Left-handed", systemImage: "hand.raised") }
+                Toggle(isOn: $saveToPhotos) { Label("Also save to Photos", systemImage: "square.and.arrow.down") }
+                Button { showingHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
             }
-            if camera.hasLiDAR {
-                Toggle(isOn: $showChanges) { Label("Show changes (red nearer, blue gone)", systemImage: "square.2.layers.3d") }
-            }
-            Toggle(isOn: $leftHanded) { Label("Left-handed", systemImage: "hand.raised") }
-            Toggle(isOn: $saveToPhotos) { Label("Also save photos to Photos", systemImage: "square.and.arrow.down") }
-            Button { showingLibrary = true } label: { Label("Boards, notes and backup", systemImage: "square.grid.2x2") }
-            Button { showingHelp = true } label: { Label("Help", systemImage: "questionmark.circle") }
         } label: {
             Image(systemName: "ellipsis.circle").font(.title3)
         }
@@ -600,6 +611,21 @@ struct CaptureView: View {
                 if ghost != nil {
                     strengthControl(wide: geometry.size.width > geometry.size.height)
                         .clearOfControls()
+                } else if let last = board?.references.last, !paused {
+                    Button {
+                        Haptics.tap()
+                        ghostID = last.id
+                    } label: {
+                        Label("Show overlay", systemImage: "eye")
+                            .font(.caption.bold())
+                            .padding(.horizontal, 12).frame(height: 34)
+                            .background(Theme.chip, in: Capsule())
+                            .foregroundStyle(Theme.text)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 12)
+                    .clearOfControls()
                 }
                 if camera.zoomStops.count > 1, !camera.isFront {
                     lensControl
@@ -652,26 +678,34 @@ struct CaptureView: View {
     /// way right is the live camera alone. Tucked into the bottom left corner so the guide's arrows stay clear.
     private func strengthControl(wide: Bool) -> some View {
         let hide = Button {
-            if paused {
-                // Paused: switch between a wipe and a fade, as Reset's Fade does.
-                Haptics.tap()
-                wipeStyle.toggle()
-                if wipeStyle { wipePos = opacity; opacity = 1 } else { opacity = wipePos }
-            } else {
-                ghostID = nil
-            }
+            Haptics.tap()
+            ghostID = nil
         } label: {
-            Image(systemName: paused ? (wipeStyle ? "circle.lefthalf.filled" : "square.split.2x1") : "eye.slash")
-                .font(.footnote).frame(width: 30, height: 30)
+            Label(wide ? "Hide" : "Hide overlay", systemImage: "eye.slash")
+                .font(.caption.bold()).lineLimit(1).fixedSize()
+                .padding(.horizontal, 8).frame(height: 30)
+                .background(.white.opacity(0.18), in: Capsule())
         }
-        .accessibilityLabel(paused ? (wipeStyle ? "Switch to fade" : "Switch to wipe") : "Hide overlay")
+        .accessibilityLabel("Hide overlay")
+        let mode = Button {
+            // Paused: switch between a wipe and a fade, as Reset's Fade does.
+            Haptics.tap()
+            wipeStyle.toggle()
+            if wipeStyle { wipePos = opacity; opacity = 1 } else { opacity = wipePos }
+        } label: {
+            Label(wipeStyle ? "Fade" : "Wipe", systemImage: wipeStyle ? "circle.lefthalf.filled" : "square.split.2x1")
+                .font(.caption.bold()).lineLimit(1).fixedSize()
+                .padding(.horizontal, 8).frame(height: 30)
+                .background(.white.opacity(0.18), in: Capsule())
+        }
+        .accessibilityLabel(wipeStyle ? "Switch to fade" : "Switch to wipe")
         let slider = Slider(value: Binding(get: { wiping ? 1 - wipePos : 1 - opacity },
                                            set: { if wiping { wipePos = 1 - $0 } else { opacity = 1 - $0 } }), in: 0...1)
             .frame(width: wide ? 150 : nil)
             .accessibilityLabel("Then to now")
             .accessibilityValue("\(Int(((1 - opacity) * 100).rounded())) percent now")
         return HStack(spacing: 6) {
-            hide
+            if paused { mode } else { hide }
             Text("THEN").font(.caption2.bold())
             slider
             Text("NOW").font(.caption2.bold())
