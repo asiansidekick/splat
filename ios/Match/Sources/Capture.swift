@@ -65,6 +65,11 @@ struct CaptureView: View {
     @State private var pausing = false
     @State private var scrubStart: Double?
     @State private var opacityBefore: Double?
+    /// Paused compare as a wipe, like Reset: the reference left of a line you drag. Off is a fade.
+    @AppStorage("pauseWipe") private var wipeStyle = true
+    /// How much of the screen, from the left, shows the reference in a wipe.
+    @State private var wipePos = 0.5
+    private var wiping: Bool { paused && wipeStyle && ghost != nil }
     private var paused: Bool { frozen != nil }
     @State private var wheelShown = false
     @State private var wheelHide: Task<Void, Never>?
@@ -252,6 +257,7 @@ struct CaptureView: View {
                 if ghost != nil {
                     opacityBefore = opacity
                     opacity = 1
+                    wipePos = 0.5
                 }
             } else {
                 show("Could not pause. Try again.")
@@ -288,6 +294,22 @@ struct CaptureView: View {
         .ignoresSafeArea()
     }
 
+    /// The wipe's line and handle. The reference is left of it, the live picture right.
+    private func wipeLine(width: CGFloat, height: CGFloat) -> some View {
+        ZStack {
+            Rectangle().fill(Color.white).frame(width: 2, height: height)
+                .shadow(color: .black.opacity(0.8), radius: 2)
+            Image(systemName: "arrow.left.and.right")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.black)
+                .frame(width: 34, height: 34)
+                .background(Color.white, in: Circle())
+                .shadow(color: .black.opacity(0.5), radius: 3)
+        }
+        .position(x: width * wipePos, y: height / 2)
+        .allowsHitTesting(false)
+    }
+
     /// While paused the whole screen is the scrubber, like Reset: swipe left for THEN, right for
     /// NOW, tap to jump to the other end.
     private var scrubLayer: some View {
@@ -297,15 +319,24 @@ struct CaptureView: View {
                 .onTapGesture {
                     guard ghost != nil else { return }
                     Haptics.tap()
-                    withAnimation(.snappy(duration: 0.2)) { opacity = opacity > 0.5 ? 0 : 1 }
+                    withAnimation(.snappy(duration: 0.2)) {
+                        if wipeStyle { wipePos = wipePos > 0.5 ? 0 : 1 } else { opacity = opacity > 0.5 ? 0 : 1 }
+                    }
                 }
                 .gesture(DragGesture(minimumDistance: 8)
                     .onChanged { drag in
                         guard ghost != nil else { return }
-                        let start = scrubStart ?? (1 - opacity)
-                        scrubStart = start
                         let share = Double(drag.translation.width / max(geometry.size.width, 1))
-                        opacity = 1 - min(1, max(0, start + share))
+                        if wipeStyle {
+                            // The line follows the finger.
+                            let start = scrubStart ?? wipePos
+                            scrubStart = start
+                            wipePos = min(1, max(0, start + share))
+                        } else {
+                            let start = scrubStart ?? (1 - opacity)
+                            scrubStart = start
+                            opacity = 1 - min(1, max(0, start + share))
+                        }
                     }
                     .onEnded { _ in scrubStart = nil })
         }
@@ -458,6 +489,9 @@ struct CaptureView: View {
                 CameraPreview(camera: camera)
                 if let frozen { frozenLayer(frozen) }
                 ghostLayer
+                    .mask(alignment: .leading) {
+                        Rectangle().frame(width: wiping ? geometry.size.width * wipePos : geometry.size.width)
+                    }
                     .contentShape(Rectangle())
                     .gesture(ghostGesture)
                     .onTapGesture(count: 2) {
@@ -479,6 +513,7 @@ struct CaptureView: View {
                     }
                 if let changes = guide.changes, showChanges { changeLayer(changes, size: geometry.size) }
                 if paused { scrubLayer }
+                if wiping { wipeLine(width: geometry.size.width, height: geometry.size.height) }
                 if guideOn, ghost != nil, !guide.fitting, !paused {
                     if guide.people.count > 1 {
                         PeopleRings(people: guide.people, followed: guide.followed,
@@ -543,11 +578,22 @@ struct CaptureView: View {
     /// Overlay strength as THEN to NOW, like Reset: all the way left is the reference at full strength, all the
     /// way right is the live camera alone. Tucked into the bottom left corner so the guide's arrows stay clear.
     private func strengthControl(wide: Bool) -> some View {
-        let hide = Button { ghostID = nil } label: {
-            Image(systemName: "eye.slash").font(.footnote).frame(width: 30, height: 30)
+        let hide = Button {
+            if paused {
+                // Paused: switch between a wipe and a fade, as Reset's Fade does.
+                Haptics.tap()
+                wipeStyle.toggle()
+                if wipeStyle { wipePos = opacity; opacity = 1 } else { opacity = wipePos }
+            } else {
+                ghostID = nil
+            }
+        } label: {
+            Image(systemName: paused ? (wipeStyle ? "circle.lefthalf.filled" : "square.split.2x1") : "eye.slash")
+                .font(.footnote).frame(width: 30, height: 30)
         }
-        .accessibilityLabel("Hide overlay")
-        let slider = Slider(value: Binding(get: { 1 - opacity }, set: { opacity = 1 - $0 }), in: 0...1)
+        .accessibilityLabel(paused ? (wipeStyle ? "Switch to fade" : "Switch to wipe") : "Hide overlay")
+        let slider = Slider(value: Binding(get: { wiping ? 1 - wipePos : 1 - opacity },
+                                           set: { if wiping { wipePos = 1 - $0 } else { opacity = 1 - $0 } }), in: 0...1)
             .frame(width: wide ? 150 : nil)
             .accessibilityLabel("Then to now")
             .accessibilityValue("\(Int(((1 - opacity) * 100).rounded())) percent now")
