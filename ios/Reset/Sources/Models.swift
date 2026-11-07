@@ -46,6 +46,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private var dragOffset: SIMD3<Float>?
     /// One-finger drags move the selected model up and down instead of across (Phil, 2026-10-31).
     @Published var lifting = false
+    /// The room is dim enough that the phone may lose its place, so cut-outs can drift (Phil, 2026-11-07).
+    @Published private(set) var dimLight = false
     private weak var cameraView: SCNView?
     private var depthCache: (time: TimeInterval, depth: Measurer.Depth)?
     /// True while something else (measuring) uses one-finger drags on the camera view.
@@ -553,7 +555,13 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     /// Turns each cut-out to the photo for the side the camera sees now.
     private func updateCutouts() {
-        guard !cutouts.isEmpty, let camera = session.currentFrame?.camera.transform.columns.3.xyz else { return }
+        guard !cutouts.isEmpty, let camera = session.currentFrame?.camera.transform.columns.3.xyz else {
+            if dimLight { dimLight = false }
+            return
+        }
+        // ARKit's ambient light reading is about 1000 in a lit room; under 250 is dim.
+        let dim = (session.currentFrame?.lightEstimate?.ambientIntensity ?? 1000) < 250
+        if dim != dimLight { dimLight = dim }
         for (id, state) in cutouts {
             guard let node = modelNodes[id] else { continue }
             let transform = node.simdWorldTransform
@@ -596,7 +604,14 @@ struct ModelOverlay: View {
     var showsFloor = true
 
     var body: some View {
-        Group {
+        VStack(spacing: 6) {
+            if placer.dimLight {
+                Text("Dim light: cut-outs may drift. Try the torch.")
+                    .font(Theme.footnote)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .allowsHitTesting(false)
+            }
             if placer.selectedModelName == nil, !placer.models.isEmpty {
                 Button("Find model") { placer.bringToView() }
                     .buttonStyle(.bordered)
