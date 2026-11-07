@@ -45,6 +45,12 @@ struct CameraView: UIViewRepresentable {
     func updateUIView(_ view: ARSCNView, context: Context) {}
 }
 
+/// A photo to sketch on. The sheet is opened with the photo inside it, so it can never open empty (grey).
+struct SketchPhoto: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
 enum Screen {
     /// The current interface orientation of the app's window.
     @MainActor static var orientation: UIInterfaceOrientation {
@@ -79,7 +85,7 @@ struct CameraHome: View {
     @State private var lastPhoto: UIImage?
     @State private var lastPhotoTask: Task<Void, Never>?
     @State private var sharingPhoto: UIImage?
-    @State private var sketching: UIImage?
+    @State private var sketching: SketchPhoto?
     @AppStorage("saveToPhotos") private var saveToPhotos = true
     /// The newest reference jiggles after it is recorded, to say "load me" (Phil, 2026-11-05).
     @State private var nudgeLoad = false
@@ -143,8 +149,7 @@ struct CameraHome: View {
             if lastPhoto != nil {
                 HStack(spacing: 8) {
                     Button {
-                        sketching = lastPhoto
-                        panel = .sketch
+                        if let lastPhoto { sketching = SketchPhoto(image: lastPhoto) }
                     } label: {
                         Label("Sketch", systemImage: "pencil.tip")
                             .font(Theme.subheadline.bold())
@@ -172,6 +177,7 @@ struct CameraHome: View {
             }
         }
         .sheet(item: $panel, onDismiss: { reviewMeasuring = false }) { panel in sheet(for: panel).themed() }
+        .sheet(item: $sketching) { SketchEditor(photo: $0.image).themed() }
         .confirmationDialog(
             "Delete \(deleting?.title ?? "reference")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
             titleVisibility: .visible
@@ -270,8 +276,7 @@ struct CameraHome: View {
         case .hero: toggleHero(reference)
         case .sketch:
             if let photo = PhotoLibrary.images(of: reference).first {
-                sketching = photo
-                panel = .sketch
+                sketching = SketchPhoto(image: photo)
             }
         }
     }
@@ -455,7 +460,7 @@ struct CameraHome: View {
         case .sync:
             ReferenceSyncView()
         case .sketch:
-            if let sketching { SketchEditor(photo: sketching) }
+            EmptyView()  // the sketch has its own sheet, which carries the photo with it
         }
     }
 }
