@@ -27,7 +27,7 @@ enum ReportPDF {
 
             func text(_ string: String, size: CGFloat, bold: Bool = false, color: UIColor = .black, after: CGFloat = 6) {
                 let attributed = NSAttributedString(string: string, attributes: [
-                    .font: bold ? UIFont.boldSystemFont(ofSize: size) : UIFont.systemFont(ofSize: size),
+                    .font: bold ? Theme.uiFont(size: size + 1, weight: .bold) : Theme.uiFont(size: size + 1, weight: .medium),
                     .foregroundColor: color,
                 ])
                 let options: NSStringDrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]

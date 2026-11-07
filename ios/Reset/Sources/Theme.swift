@@ -41,6 +41,19 @@ enum Theme {
     static var caption: Font { styled(.medium, 14, .caption) }
     static var caption2: Font { styled(.medium, 13, .caption2) }
 
+    /// A UIFont in the same family, for text drawn into pictures and PDFs.
+    static func uiFont(size: CGFloat, weight: UIFont.Weight = .regular) -> UIFont {
+        let name: String
+        switch weight {
+        case .heavy, .black: name = "AvenirNextCondensed-Heavy"
+        case .bold: name = "AvenirNextCondensed-Bold"
+        case .semibold: name = "AvenirNextCondensed-DemiBold"
+        case .medium: name = "AvenirNextCondensed-Medium"
+        default: name = "AvenirNextCondensed-Regular"
+        }
+        return UIFont(name: name, size: size) ?? UIFont.systemFont(ofSize: size, weight: weight)
+    }
+
     /// Navigation bars and other UIKit text, once at launch.
     @MainActor static func installAppearance() {
         let bar = UINavigationBarAppearance()
@@ -52,8 +65,19 @@ enum Theme {
         UINavigationBar.appearance().standardAppearance = bar
         UINavigationBar.appearance().scrollEdgeAppearance = bar
         UINavigationBar.appearance().tintColor = accentUI
-        if let font = UIFont(name: "AvenirNextCondensed-Medium", size: 15) {
-            UIBarButtonItem.appearance().setTitleTextAttributes([.font: font], for: .normal)
+        let button = uiFont(size: 17, weight: .medium)
+        for state in [UIControl.State.normal, .highlighted, .disabled, .focused] {
+            UIBarButtonItem.appearance().setTitleTextAttributes([.font: button], for: state)
         }
+        UISegmentedControl.appearance().setTitleTextAttributes([.font: uiFont(size: 15, weight: .semibold)], for: .normal)
+        UITextField.appearance().font = uiFont(size: 18, weight: .medium)
+        UITextView.appearance().font = uiFont(size: 18, weight: .medium)
+        UILabel.appearance(whenContainedInInstancesOf: [UINavigationBar.self]).font = uiFont(size: 17, weight: .semibold)
     }
+}
+
+extension View {
+    /// The look every screen and sheet carries: the font and the mint accent. Sheets are given it again
+    /// because some do not take it from the screen that opened them.
+    func themed() -> some View { font(Theme.body).tint(Theme.accent) }
 }

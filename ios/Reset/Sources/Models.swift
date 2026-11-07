@@ -432,6 +432,7 @@ struct ModelOverlay: View {
                         Button("Done") { placer.selectedModel = nil }
                     }
                     .buttonStyle(.bordered)
+                    .font(Theme.headline)
                     .controlSize(.small)
                 }
                 .padding(8)

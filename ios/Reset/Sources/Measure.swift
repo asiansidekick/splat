@@ -1775,7 +1775,7 @@ struct MeasureBar: View {
             .confirmationDialog("Delete every dimension and note?", isPresented: $confirmingClear, titleVisibility: .visible) {
                 Button("Delete all", role: .destructive) { measurer.clear() }
             }
-            .sheet(isPresented: $showingGuide) { MeasureGuideSheet() }
+            .sheet(isPresented: $showingGuide) { MeasureGuideSheet().themed() }
         }
     }
 

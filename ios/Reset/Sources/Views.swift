@@ -169,7 +169,7 @@ struct CameraHome: View {
                 .hiddenInScreenshots()
             }
         }
-        .sheet(item: $panel) { panel in sheet(for: panel) }
+        .sheet(item: $panel) { panel in sheet(for: panel).themed() }
         .confirmationDialog(
             "Delete \(deleting?.title ?? "reference")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
             titleVisibility: .visible
@@ -480,7 +480,7 @@ struct NextSlateSheet: View {
                 }
                 SlateFields(scene: $scene, shot: $shot, setup: $setup, name: $name)
             }
-            .sheet(isPresented: $showingCallSheet) { CallSheetSheet() }
+            .sheet(isPresented: $showingCallSheet) { CallSheetSheet().themed() }
             .onChange(of: scene) { _, newScene in
                 setup = Slate.nextSetup(scene: newScene, in: references)
             }
@@ -1009,7 +1009,7 @@ struct Gallery: View {
                     if let shown, !showingGrid { menu(for: shown) }
                 }
             }
-            .sheet(isPresented: $showingCallSheet) { CallSheetSheet() }
+            .sheet(isPresented: $showingCallSheet) { CallSheetSheet().themed() }
             .onChange(of: picked) { _, items in
                 guard !items.isEmpty else { return }
                 onImport(items)
@@ -1075,6 +1075,7 @@ struct Gallery: View {
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
+                .font(Theme.headline)
                 .tint(Theme.accent)
                 .foregroundStyle(.black)
                 .padding(.horizontal)
@@ -1146,6 +1147,7 @@ struct Gallery: View {
                         Label("Group \(chosen.count)", systemImage: "rectangle.stack.badge.plus").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
+                    .font(Theme.headline)
                     .tint(Theme.accent)
                     .foregroundStyle(.black)
                     .disabled(chosen.isEmpty)
@@ -1155,6 +1157,7 @@ struct Gallery: View {
                         selecting = false
                     } label: { Text("Ungroup").frame(maxWidth: .infinity) }
                         .buttonStyle(.bordered)
+                        .font(Theme.headline)
                         .disabled(chosen.isEmpty)
                 }
                 .padding()
@@ -1167,6 +1170,7 @@ struct Gallery: View {
                 chosen = []
                 selecting = false
             }
+            .themed()
             .presentationDetents([.medium])
         }
     }
@@ -1689,6 +1693,7 @@ struct ResetStage: View {
                 reference.takes.append(logged)
                 save()
             }
+            .themed()
         }
         .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { restorer.placer.add(from: urls) }
@@ -2147,7 +2152,7 @@ struct ScanProgressOverlay: View {
             .opacity(saved ? 0 : 1)
             brackets
             VStack(alignment: .leading, spacing: 3) {
-                Text(saved ? "MAP SAVED" : "SCANNING ROOM").font(.system(.title3, design: .monospaced).bold())
+                Text(saved ? "MAP SAVED" : "SCANNING ROOM").font(Theme.title3)
                 Text("STATUS   \(statusText)")
                 Text("POINTS   \(points)")
                 Text("PROGRESS \(Int(progress * 100))%")
@@ -2159,7 +2164,7 @@ struct ScanProgressOverlay: View {
                     Text("MOVE GENTLY SIDE TO SIDE").padding(.top, 4)
                 }
             }
-            .font(.system(.caption, design: .monospaced).bold())
+            .font(Theme.caption.weight(.bold))
             .foregroundStyle(.white)
             .shadow(color: tint, radius: 4)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

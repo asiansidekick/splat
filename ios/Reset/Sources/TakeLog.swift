@@ -255,6 +255,7 @@ struct TakeLogView: View {
                         save()
                     }
                 }
+                .themed()
             }
             .sheet(item: $sharing) { file in
                 ShareSheet(items: [file.url])
@@ -269,6 +270,7 @@ struct TakeLogView: View {
                     reference = updated
                     save()
                 }
+                .themed()
             }
         }
     }

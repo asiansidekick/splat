@@ -72,7 +72,7 @@ struct FrameReview: View {
             let spot = placement(for: frames[index])
             placer.add(from: urls, at: spot.transform, right: spot.right)
         }
-        .fullScreenCover(isPresented: $exploring) { ExploreView(reference: reference) }
+        .fullScreenCover(isPresented: $exploring) { ExploreView(reference: reference).themed() }
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled()
         .onAppear {

@@ -129,10 +129,10 @@ struct SketchEditor: View {
         Button(action: action) {
             VStack(spacing: 2) {
                 Image(systemName: image)
-                    .font(.title3)
+                    .font(Theme.title3)
                     .frame(width: 44, height: 36)
                     .background(on ? Color.white.opacity(0.25) : .clear, in: Capsule())
-                Text(title).font(.caption.weight(.semibold)).lineLimit(1)
+                Text(title).font(Theme.caption.weight(.semibold)).lineLimit(1)
             }
             .frame(maxWidth: .infinity)
         }
@@ -225,7 +225,7 @@ struct SketchLabelView: View {
 
     var body: some View {
         Text(label.text)
-            .font(.system(size: SketchLabelView.fontSize, weight: .bold))
+            .font(Theme.font(size: SketchLabelView.fontSize, weight: .bold))
             .foregroundStyle(label.colour == .black ? Color.black : Color.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
@@ -238,7 +238,7 @@ struct SketchLabelView: View {
 
     /// The same tag drawn into the full-size picture, `scale` times bigger than on screen.
     static func draw(_ label: SketchLabel, scale: CGFloat) {
-        let font = UIFont.systemFont(ofSize: fontSize * scale, weight: .bold)
+        let font = Theme.uiFont(size: fontSize * scale, weight: .bold)
         let ink: UIColor = label.colour == .black ? .black : .white
         let text = label.text as NSString
         let size = text.size(withAttributes: [.font: font])
