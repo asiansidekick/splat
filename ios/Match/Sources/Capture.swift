@@ -208,14 +208,10 @@ struct CaptureView: View {
     private var topBar: some View {
         let sideways = previewSize.width > previewSize.height
         return VStack(spacing: 6) {
+            // One line: the scene pill (all boards are one tap away on the thumbnail), then the controls.
             HStack(spacing: 10) {
-                Button { showingLibrary = true } label: { Image(systemName: "square.grid.2x2").font(.title3) }
-                    .accessibilityLabel("Boards and photos")
-                // On its side there is room for the scene line and Next take in this row.
-                if sideways {
-                    boardMenu
-                    nextTakeButton
-                }
+                boardMenu
+                if sideways { nextTakeButton }
                 Spacer(minLength: 4)
                 Button {
                     Haptics.tap()
@@ -232,11 +228,10 @@ struct CaptureView: View {
                 moreMenu
             }
             .frame(height: 44)
-            .background(Theme.band.ignoresSafeArea(edges: .top))
-            // Upright: a second row with the scene, shot, take and character in full, and Next take.
+            // No band behind the row, so the picture runs to the top; a faint shadow keeps icons legible.
+            .shadow(color: .black.opacity(0.35), radius: 2)
             if !sideways {
                 HStack(spacing: 8) {
-                    boardMenu
                     Spacer(minLength: 4)
                     nextTakeButton
                 }
@@ -509,9 +504,28 @@ struct CaptureView: View {
                 }
             }
         } label: {
-            pill(board.map { "\(Slate.sceneName($0.scene, shot: $0.shotLetter)) · \($0.shortTitle) · \(Slate.takeName(take))" } ?? "New board")
+            scenePill
         }
         .accessibilityLabel("Choose character")
+    }
+
+    /// Scene and shot on the first line, character and take on the second, in full.
+    private var scenePill: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let board {
+                Text(Slate.sceneName(board.scene, shot: board.shotLetter))
+                Text("\(board.shortTitle) · \(Slate.takeName(take))")
+            } else {
+                Text("New board")
+            }
+        }
+        .font(.caption.bold())
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(Theme.chip, in: RoundedRectangle(cornerRadius: 16))
+        .foregroundStyle(Theme.text)
     }
 
     private var moreMenu: some View {
@@ -884,6 +898,21 @@ struct CaptureView: View {
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(shown != nil ? Theme.accent : Theme.text, lineWidth: 2))
         }
         .accessibilityLabel("Reference photos")
+        // All boards and photos, as a small grid badge on the thumbnail instead of its own button.
+        .overlay(alignment: .topLeading) {
+            Button {
+                Haptics.tap()
+                showingLibrary = true
+            } label: {
+                Image(systemName: "square.grid.2x2")
+                    .font(.system(size: size > 60 ? 12 : 10, weight: .bold))
+                    .foregroundStyle(Theme.text)
+                    .frame(width: size > 60 ? 26 : 22, height: size > 60 ? 26 : 22)
+                    .background(Theme.chip, in: Circle())
+            }
+            .padding(4)
+            .accessibilityLabel("All boards and photos")
+        }
     }
 
     // MARK: Actions
