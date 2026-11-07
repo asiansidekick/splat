@@ -3,6 +3,10 @@ import UIKit
 
 /// Reset's look: Night and mint colours with Avenir Next Condensed (Phil, 2026-11-07), shared with Match.
 enum Theme {
+    /// Phil, 2026-11-07: Reset hung and crashed after the Avenir change and no log said why, so the typeface is
+    /// switched off (system font, same sizes) until it is proven safe. Turn on to bring Avenir back.
+    static let useAvenir = false
+
     /// Mint, the one accent colour (#5EEAD4), and the dark text that sits on it.
     static let accent = Color(red: 0.369, green: 0.918, blue: 0.831)
     static let onAccent = Color(red: 0.016, green: 0.125, blue: 0.11)
@@ -20,11 +24,11 @@ enum Theme {
 
     /// A fixed-size font, for places that were `.system(size:)`. `design` is ignored: one family everywhere.
     static func font(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
-        .custom(name(weight), fixedSize: size)
+        useAvenir ? .custom(name(weight), fixedSize: size) : .system(size: size, weight: weight)
     }
 
     private static func styled(_ weight: Font.Weight, _ size: CGFloat, _ style: Font.TextStyle) -> Font {
-        .custom(name(weight), size: size, relativeTo: style)
+        useAvenir ? .custom(name(weight), size: size, relativeTo: style) : .system(style).weight(weight)
     }
 
     // The same names as the system text styles, so `.font(.footnote)` becomes `.font(Theme.footnote)`.
@@ -51,6 +55,7 @@ enum Theme {
         case .medium: name = "AvenirNextCondensed-Medium"
         default: name = "AvenirNextCondensed-Regular"
         }
+        if !useAvenir { return UIFont.systemFont(ofSize: size, weight: weight) }
         return UIFont(name: name, size: size) ?? UIFont.systemFont(ofSize: size, weight: weight)
     }
 
@@ -58,18 +63,9 @@ enum Theme {
     @MainActor static func installAppearance() {
         let bar = UINavigationBarAppearance()
         bar.configureWithDefaultBackground()
-        if let title = UIFont(name: "AvenirNextCondensed-DemiBold", size: 20), let large = UIFont(name: "AvenirNextCondensed-Bold", size: 34) {
-            bar.titleTextAttributes = [.font: title]
-            bar.largeTitleTextAttributes = [.font: large]
-        }
         UINavigationBar.appearance().standardAppearance = bar
         UINavigationBar.appearance().scrollEdgeAppearance = bar
         UINavigationBar.appearance().tintColor = accentUI
-        let button = uiFont(size: 17, weight: .medium)
-        for state in [UIControl.State.normal, .highlighted, .disabled, .focused] {
-            UIBarButtonItem.appearance().setTitleTextAttributes([.font: button], for: state)
-        }
-        UISegmentedControl.appearance().setTitleTextAttributes([.font: uiFont(size: 15, weight: .semibold)], for: .normal)
     }
 }
 
