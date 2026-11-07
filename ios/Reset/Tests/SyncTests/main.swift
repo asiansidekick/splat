@@ -78,6 +78,7 @@ let ab = ReferenceSyncLibrary.merged(local: mine, incoming: theirs, has: everyth
 let ba = ReferenceSyncLibrary.merged(local: theirs, incoming: mine, has: everything)!
 expect(Reference.label(scene: "1", setup: "3") == "Sc 1 · Tk 3" && Reference.label(scene: "12", setup: "B") == "12B" && Reference.label(scene: "", setup: "2") == "Tk 2" && Reference.label(scene: "1", setup: "2C") == "Sc 1 · Tk 2C",
     "numbered takes read Sc 1 · Tk 3, old letters still read 12B")
+expect(Reference.label(scene: "12", setup: "3", shot: "A") == "Sc 12 · Shot A · Tk 3" && Reference.label(scene: "", setup: "3", shot: "A") == "Shot A · Tk 3" && Reference.label(scene: "12", setup: "3", shot: "") == "Sc 12 · Tk 3", "the slate reads Scene, Shot, Take")
 expect(ab.slate == ba.slate && ab.name == "kitchen" && ab.setup == "A", "the newest slate edit wins on both phones")
 var grouped = one, plain = one
 grouped.group = "Hair"; grouped.slateEdited = base.addingTimeInterval(30)

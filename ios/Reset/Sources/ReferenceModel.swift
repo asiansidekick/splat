@@ -26,7 +26,9 @@ struct Keyframe: Codable, Identifiable, Equatable {
 struct Reference: Codable, Identifiable, Equatable {
     let id: UUID
     var scene: String  // "12"
-    var setup: String  // "B", so the slate reads 12B
+    var setup: String  // the take number, "3" (or "3B" for a redo); an old letter-only one reads 12B
+    /// QTAKE's middle level: the shot letter, "A", between scene and take. Empty for none.
+    var shot = ""
     var name: String  // optional description, "desk"
     /// A sub-group within the scene, such as "Hair" or "Kitchen angle" (Phil, 2026-11-05); empty for none.
     var group = ""
@@ -55,14 +57,17 @@ struct Reference: Codable, Identifiable, Equatable {
     var planeDepths: [String: Float] = [:]
 
     var hasDepth: Bool { keyframes.contains { $0.depthFile != nil } }
-    var slate: String { Reference.label(scene: scene, setup: setup) }
+    var slate: String { Reference.label(scene: scene, setup: setup, shot: shot) }
     /// Just the take number for small thumbnails: "18", "3B", or "12B" for an old letter-only setup.
     var number: String { setup.first?.isNumber == true ? setup : scene + setup }
 
     /// How a scene and setup read: "Sc 1 · Tk 3", or "Sc 1 · Tk 3B" with a letter after the
     /// number; a setup that is only a letter reads the way old ones were slated, "12B".
-    static func label(scene: String, setup: String) -> String {
-        guard setup.first?.isNumber == true else { return scene + setup }
+    static func label(scene: String, setup: String, shot: String = "") -> String {
+        guard setup.first?.isNumber == true else { return scene + shot + setup }
+        if !shot.isEmpty {
+            return scene.isEmpty ? "Shot \(shot) · Tk \(setup)" : "Sc \(scene) · Shot \(shot) · Tk \(setup)"
+        }
         return scene.isEmpty ? "Tk \(setup)" : "Sc \(scene) · Tk \(setup)"
     }
     var title: String {
@@ -79,6 +84,7 @@ extension Reference {
         id = try c.decode(UUID.self, forKey: .id)
         scene = try c.decodeIfPresent(String.self, forKey: .scene) ?? ""
         setup = try c.decodeIfPresent(String.self, forKey: .setup) ?? ""
+        shot = try c.decodeIfPresent(String.self, forKey: .shot) ?? ""
         name = try c.decode(String.self, forKey: .name)
         group = try c.decodeIfPresent(String.self, forKey: .group) ?? ""
         created = try c.decode(Date.self, forKey: .created)

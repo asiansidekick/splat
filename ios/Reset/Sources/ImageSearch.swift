@@ -173,7 +173,7 @@ enum SearchIndexer {
 
     /// Whether every word typed is found in the reference's labels, text, slate, name, group or notes.
     static func matches(_ query: String, reference: Reference, entry: SearchEntry?) -> Bool {
-        var hay = [reference.scene, reference.setup, reference.name, reference.group, reference.title]
+        var hay = [reference.scene, reference.shot, reference.setup, reference.name, reference.group, reference.title]
         hay += reference.takes.map(\.note)
         hay += reference.notes.map(\.text)
         if let entry { hay += entry.labels; hay.append(entry.text) }

@@ -65,6 +65,7 @@ struct CameraHome: View {
     @State private var loaded = false
     // The slate the next reference gets, carried on from the existing references.
     @State private var nextScene = "1"
+    @State private var nextShot = ""
     @State private var nextSetup = "1"
     @State private var nextName = ""
     /// The last shutter photo, offered for sending straight away.
@@ -109,7 +110,7 @@ struct CameraHome: View {
                     .id(id)
             } else {
                 CaptureStage(
-                    scene: nextScene, setup: nextSetup, name: nextName, thumbnail: thumbnail,
+                    scene: nextScene, shot: nextShot, setup: nextSetup, name: nextName, thumbnail: thumbnail,
                     open: { panel = $0 }, onSaved: saved, onPhoto: took, showToast: show)
             }
         }
@@ -381,7 +382,7 @@ struct CameraHome: View {
                 }
             }
         case .nextSlate:
-            NextSlateSheet(scene: $nextScene, setup: $nextSetup, name: $nextName, references: references)
+            NextSlateSheet(scene: $nextScene, shot: $nextShot, setup: $nextSetup, name: $nextName, references: references)
         case .help:
             HelpView().onDisappear { seenHelp = true }
         case .gallery:
@@ -423,6 +424,7 @@ struct CameraHome: View {
 struct NextSlateSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var scene: String
+    @Binding var shot: String
     @Binding var setup: String
     @Binding var name: String
     let references: [Reference]
@@ -430,7 +432,7 @@ struct NextSlateSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                SlateFields(scene: $scene, setup: $setup, name: $name)
+                SlateFields(scene: $scene, shot: $shot, setup: $setup, name: $name)
             }
             .onChange(of: scene) { _, newScene in
                 setup = Slate.nextSetup(scene: newScene, in: references)
@@ -1264,6 +1266,7 @@ struct CaptureStage: View {
     @StateObject private var freeScanner = FreeScanner()
     @StateObject private var recorder = Recorder()
     let scene: String
+    var shot = ""
     let setup: String
     let name: String
     let thumbnail: AnyView
@@ -1282,7 +1285,7 @@ struct CaptureStage: View {
     @State private var bearingsHintDone = false
     @State private var bearingsTask: Task<Void, Never>?
 
-    private var slate: String { Reference.label(scene: scene, setup: setup) }
+    private var slate: String { Reference.label(scene: scene, setup: setup, shot: shot) }
 
     var body: some View {
         CameraLayout(evenRow: true) {
@@ -1453,7 +1456,7 @@ struct CaptureStage: View {
             // Another tap while waiting for the map adds a second view to the same reference.
             if !recorder.capturing {
                 recorder.autoCapture = false
-                recorder.begin(scene: scene, setup: setup, name: name)
+                recorder.begin(scene: scene, setup: setup, name: name, shot: shot)
             }
             recorder.captureNow()
             recorder.saveWhenReady()
@@ -1462,7 +1465,7 @@ struct CaptureStage: View {
                 recorder.saveWhenReady()
             } else {
                 recorder.autoCapture = true
-                recorder.begin(scene: scene, setup: setup, name: name)
+                recorder.begin(scene: scene, setup: setup, name: name, shot: shot)
             }
         }
     }

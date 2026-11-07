@@ -135,7 +135,7 @@ struct SlateEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                SlateFields(scene: $reference.scene, setup: $reference.setup, name: $reference.name)
+                SlateFields(scene: $reference.scene, shot: $reference.shot, setup: $reference.setup, name: $reference.name)
             }
             .navigationTitle("Edit slate")
             .navigationBarTitleDisplayMode(.inline)
@@ -158,6 +158,7 @@ struct SlateEditor: View {
 /// Scene, setup and description fields, shared by recording and editing.
 struct SlateFields: View {
     @Binding var scene: String
+    @Binding var shot: String
     @Binding var setup: String
     @Binding var name: String
 
@@ -165,6 +166,13 @@ struct SlateFields: View {
         LabeledContent("Scene") {
             TextField("12", text: $scene)
                 .keyboardType(.numbersAndPunctuation)
+                .multilineTextAlignment(.trailing)
+        }
+        LabeledContent("Shot") {
+            // Optional, the way QTAKE has it: a letter, A, B, C.
+            TextField("A", text: $shot)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
                 .multilineTextAlignment(.trailing)
         }
         LabeledContent("Take") {

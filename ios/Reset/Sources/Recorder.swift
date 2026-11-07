@@ -101,7 +101,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     /// Starts a new reference in the running session.
-    func begin(scene: String, setup: String, name: String) {
+    func begin(scene: String, setup: String, name: String, shot: String = "") {
         guard reference == nil else { return }
         let id = UUID()
         do {
@@ -111,6 +111,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
         reference = Reference(id: id, scene: scene, setup: setup, name: name, created: Date(), keyframes: [])
+        reference?.shot = shot
         lastSaved = nil
         keyframeCount = 0
         capturing = true
