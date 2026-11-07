@@ -257,8 +257,12 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
+    /// When the camera was last taken away (the app in the background, a call), to tell a blink from a long absence.
+    private var interruptedAt: Date?
+
     nonisolated func sessionWasInterrupted(_ session: ARSession) {
         Diagnostics.log("Record interrupted")
+        Task { @MainActor in self.interruptedAt = Date() }
     }
 
     nonisolated func sessionInterruptionEnded(_ session: ARSession) {
@@ -267,6 +271,18 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         // somewhere new, never does: the camera shows "Finding the room again" and measuring is
         // dead. With no reference being recorded there is nothing to get back to, so start fresh.
         Task { @MainActor in
+            let away = self.interruptedAt.map { Date().timeIntervalSince($0) } ?? 0
+            self.interruptedAt = nil
+            // A recording that was running when the phone went away (and was not just waiting to save)
+            // cannot carry on: the room map before and after would not line up, and ARKit sat on
+            // "Finding the room again" for good. A short blink is fine; a long one starts over.
+            if self.capturing, !self.pendingSave, !self.saving, away > 2.5 {
+                Diagnostics.log("Record: thrown away after \(Int(away)) s away, starting the camera afresh")
+                self.stop()
+                self.prepare(useLiDAR: self.lastUseLiDAR)
+                self.error = "The recording was interrupted, so it was stopped. Tap the shutter to start again."
+                return
+            }
             guard !self.capturing, !self.pendingSave, !self.saving else { return }
             Diagnostics.log("Record: starting the camera afresh after the interruption")
             self.prepare(useLiDAR: self.lastUseLiDAR)
