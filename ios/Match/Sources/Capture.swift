@@ -103,8 +103,9 @@ struct CaptureView: View {
         } leading: {
             referenceButton
         } shutter: {
-            // Pause sits right beside the shutter, the same size (on the left when left-handed).
-            // On its side there is no room across, so it goes under the shutter instead.
+            // Upright: Next take and pause flank the shutter, each in a cell as wide as the shutter's, so
+            // the shutter stays dead centre. Pause is on the shutter's right, Next take on its left
+            // (swapped when left-handed). On its side there is no room across, so pause goes under it.
             if previewSize.width > previewSize.height {
                 VStack(spacing: 10) {
                     ShutterButton(style: .photo) { shoot() }
@@ -112,23 +113,20 @@ struct CaptureView: View {
                     pauseButton(size: 56)
                 }
             } else {
-                ShutterButton(style: .photo) { shoot() }
-                    .accessibilityLabel("Take photo")
-                    .overlay(alignment: leftHanded ? .leading : .trailing) {
-                        pauseButton(size: 74).offset(x: leftHanded ? -82 : 82)
-                    }
-            }
-        } trailing: {
-            SideButton(title: "Next T\(take + 1)", systemImage: "forward.end.fill", tint: .yellow) {
-                setTake(take + 1)
-            }
-            .contextMenu {
-                if take > 0 {
-                    Button("Back to \(Slate.takeName(take - 1))") { setTake(take - 1) }
-                    Button("Prep") { setTake(0) }
+                HStack(spacing: 8) {
+                    if leftHanded { pauseButton(size: 74).frame(width: 74) } else { nextTakeButton.frame(width: 74) }
+                    ShutterButton(style: .photo) { shoot() }
+                        .accessibilityLabel("Take photo")
+                    if leftHanded { nextTakeButton.frame(width: 74) } else { pauseButton(size: 74).frame(width: 74) }
                 }
             }
-            .accessibilityLabel("Next take, \(take + 1). Touch and hold to go back.")
+        } trailing: {
+            // Upright, Next take is beside the shutter instead; on its side it sits at the top of the column.
+            if previewSize.width > previewSize.height {
+                nextTakeButton
+            } else {
+                Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
+            }
         }
         .modifier(CaptureButtonAction { if paused { resume() } else { pause() } })
         .preferredColorScheme(.dark)
@@ -239,6 +237,21 @@ struct CaptureView: View {
             restoreBrightness()
             Motion.shared.stop()
         }
+    }
+
+    // MARK: Next take
+
+    private var nextTakeButton: some View {
+        SideButton(title: "Next T\(take + 1)", systemImage: "forward.end.fill", tint: .yellow) {
+            setTake(take + 1)
+        }
+        .contextMenu {
+            if take > 0 {
+                Button("Back to \(Slate.takeName(take - 1))") { setTake(take - 1) }
+                Button("Prep") { setTake(0) }
+            }
+        }
+        .accessibilityLabel("Next take, \(take + 1). Touch and hold to go back.")
     }
 
     // MARK: Pause
