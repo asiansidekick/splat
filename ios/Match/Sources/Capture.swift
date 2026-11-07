@@ -612,7 +612,7 @@ struct CaptureView: View {
             // A fade and an arrow while there is more below.
             if !moreAtEnd {
                 ZStack(alignment: .bottom) {
-                    LinearGradient(colors: [.clear, Color(red: 0.07, green: 0.09, blue: 0.09)], startPoint: .top, endPoint: .bottom)
+                    LinearGradient(colors: [.clear, .black.opacity(0.45)], startPoint: .top, endPoint: .bottom)
                     Label("Scroll for more", systemImage: "chevron.down")
                         .font(.caption.bold())
                         .foregroundStyle(Theme.accent)
@@ -627,7 +627,7 @@ struct CaptureView: View {
         .frame(width: 300)
         .frame(minHeight: 200, maxHeight: 520)
         .presentationCompactAdaptation(.popover)
-        .presentationBackground(Color(red: 0.07, green: 0.09, blue: 0.09))
+        .presentationBackground(.ultraThinMaterial)
         .preferredColorScheme(.dark)
     }
 
