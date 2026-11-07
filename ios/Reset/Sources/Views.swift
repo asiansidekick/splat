@@ -462,8 +462,8 @@ struct NextSlateSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                SlateFields(scene: $scene, shot: $shot, setup: $setup, name: $name)
                 Section {
+                    Button { showingCallSheet = true } label: { Label("Scan a call sheet", systemImage: "doc.text.viewfinder") }
                     if !callSheet.scenes.isEmpty {
                         Picker("From call sheet", selection: $scene) {
                             ForEach(callSheet.scenes) { item in
@@ -472,8 +472,8 @@ struct NextSlateSheet: View {
                             if !callSheet.scenes.contains(where: { $0.scene == scene }) { Text("Pick a scene").tag(scene) }
                         }
                     }
-                    Button { showingCallSheet = true } label: { Label("Scan a call sheet", systemImage: "doc.text.viewfinder") }
                 }
+                SlateFields(scene: $scene, shot: $shot, setup: $setup, name: $name)
             }
             .sheet(isPresented: $showingCallSheet) { CallSheetSheet() }
             .onChange(of: scene) { _, newScene in
@@ -976,6 +976,8 @@ struct Gallery: View {
                     Button("Close") { dismiss() }
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
+                    Button { showingCallSheet = true } label: { Image(systemName: "doc.text.viewfinder") }
+                        .accessibilityLabel("Call sheet")
                     PhotosPicker(selection: $picked, matching: .images) {
                         Image(systemName: "square.and.arrow.down")
                     }
@@ -994,8 +996,6 @@ struct Gallery: View {
                     }
                     .accessibilityLabel(showingGrid ? "One at a time" : "All references")
                     if showingGrid {
-                        Button { showingCallSheet = true } label: { Image(systemName: "doc.text.viewfinder") }
-                            .accessibilityLabel("Call sheet")
                         Button(selecting ? "Done" : "Select") {
                             selecting.toggle()
                             chosen = []
