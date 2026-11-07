@@ -101,5 +101,21 @@ do {
     check(CropMath.thin(Array(repeating: SIMD3<Float>(0, 0, 0), count: 1000), limit: 100).count == 100, "thin to limit")
 }
 
+// 6. Mapping between the loaded model and the session's space.
+do {
+    let model = CropBox(min: [-0.5, 0, -0.5], max: [0.5, 1, 0.5])
+    check(CropMath.mapping(model: model, session: nil) == CropMath.Mapping(), "mapping: none without session bounds")
+    let same = CropBox(min: [-0.51, 0.01, -0.49], max: [0.5, 1.01, 0.52])
+    check(CropMath.mapping(model: model, session: same) == CropMath.Mapping(), "mapping: identity when they nearly match")
+    let moved = CropBox(min: [1.5, -1, 2.5], max: [2.5, 0, 3.5])
+    let m = CropMath.mapping(model: model, session: moved)
+    check(m.scale == 1 && simd_length(m.offset - SIMD3(2, -1, 3)) < 0.001, "mapping: offset when recentred (\(m))")
+    let b = m.toSession(CropBox(min: [0, 0, 0], max: [0.1, 0.1, 0.1]))
+    check(simd_length(b.min - SIMD3(2, -1, 3)) < 0.001, "mapping: box moved into session space")
+    let cm = CropBox(min: [-50, 0, -50], max: [50, 100, 50])
+    let s = CropMath.mapping(model: cm, session: model)
+    check(abs(s.scale - 0.01) < 0.0001, "mapping: centimetres to metres scale (\(s.scale))")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

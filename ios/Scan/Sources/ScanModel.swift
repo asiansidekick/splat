@@ -11,6 +11,18 @@ struct ScanFolder: Identifiable, Hashable {
     var checkpoint: URL { url.appendingPathComponent("Checkpoint", isDirectory: true) }
     var model: URL { url.appendingPathComponent("\(name).usdz") }
     var hasModel: Bool { FileManager.default.fileExists(atPath: model.path) }
+    /// The first build: everything the pictures saw, before cropping.
+    var full: URL { url.appendingPathComponent("\(name) full.usdz") }
+    var hasFull: Bool { FileManager.default.fileExists(atPath: full.path) }
+    private var boundsFile: URL { url.appendingPathComponent("session-bounds.json") }
+
+    func saveSessionBounds(_ box: CropBox) {
+        try? JSONEncoder().encode(box).write(to: boundsFile)
+    }
+
+    var sessionBounds: CropBox? {
+        (try? Data(contentsOf: boundsFile)).flatMap { try? JSONDecoder().decode(CropBox.self, from: $0) }
+    }
     var created: Date {
         (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
     }
@@ -73,6 +85,7 @@ final class ScanModel: ObservableObject {
         case passDone       // a full turn is done: another pass, flip, or finish
         case finishing      // session writing its last pictures
         case building(Double) // photogrammetry progress 0...1
+        case cropping(ScanFolder) // whole area built; choose what to keep
         case done(ScanFolder)
         case failed(String)
     }
@@ -106,7 +119,7 @@ final class ScanModel: ObservableObject {
         }
         stopSession()
         // Scans started and abandoned before any picture leave empty folders; tidy them away.
-        for old in ScanFolder.all() where old.imageCount == 0 && !old.hasModel {
+        for old in ScanFolder.all() where old.imageCount == 0 && !old.hasModel && !old.hasFull {
             try? FileManager.default.removeItem(at: old.url)
         }
         library = ScanFolder.all()
@@ -243,7 +256,10 @@ final class ScanModel: ObservableObject {
         build(folder)
     }
 
-    func build(_ folder: ScanFolder) {
+    /// Builds a model from a scan's pictures. Without a crop, the whole area is built into
+    /// `full` and the crop screen opens; with one, Apple rebuilds just what is inside the box
+    /// (reusing the first build's checkpoint) into the final model.
+    func build(_ folder: ScanFolder, crop: CropBox? = nil) {
         if session != nil {
             // Started from the library: drop the live capture and its empty folder first.
             session?.cancel()
@@ -253,7 +269,13 @@ final class ScanModel: ObservableObject {
         self.folder = folder
         phase = .building(0)
         hint = ""
-        ScanLog.add("Build start: \(folder.name), \(folder.imageCount) pictures")
+        let out = crop == nil ? folder.full : folder.model
+        try? FileManager.default.removeItem(at: out)
+        if let crop {
+            ScanLog.add("Crop build start: \(folder.name), box \(crop.min) to \(crop.max)")
+        } else {
+            ScanLog.add("Build start: \(folder.name), \(folder.imageCount) pictures")
+        }
         buildTask = Task { [weak self] in
             // Let the capture session release the camera and memory before photogrammetry starts.
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -264,17 +286,28 @@ final class ScanModel: ObservableObject {
                 var config = PhotogrammetrySession.Configuration()
                 config.checkpointDirectory = folder.checkpoint
                 let session = try PhotogrammetrySession(input: folder.images, configuration: config)
-                try session.process(requests: [.modelFile(url: folder.model)])
+                if let crop {
+                    let geometry = PhotogrammetrySession.Request.Geometry(bounds: BoundingBox(min: crop.min, max: crop.max))
+                    try session.process(requests: [.modelFile(url: out, detail: .reduced, geometry: geometry)])
+                } else {
+                    // Bounds come back in the session's own space, which the crop box must be in.
+                    try session.process(requests: [.modelFile(url: out), .bounds])
+                }
                 for try await output in session.outputs {
                     switch output {
                     case .requestProgress(_, let fraction):
                         self?.phase = .building(fraction)
-                    case .requestComplete(_, _):
-                        ScanLog.add("Model saved: \(folder.model.lastPathComponent)")
+                    case .requestComplete(_, let result):
+                        if case .bounds(let b) = result {
+                            ScanLog.add("Session bounds: \(b.min) to \(b.max)")
+                            folder.saveSessionBounds(CropBox(min: b.min, max: b.max))
+                        } else {
+                            ScanLog.add("Model saved: \(out.lastPathComponent)")
+                        }
                     case .requestError(_, let error):
                         throw error
                     case .processingComplete:
-                        self?.built(folder)
+                        self?.built(folder, cropped: crop != nil)
                         return
                     case .processingCancelled:
                         self?.phase = .failed("Building was cancelled.")
@@ -283,7 +316,7 @@ final class ScanModel: ObservableObject {
                         break
                     }
                 }
-                self?.built(folder)
+                self?.built(folder, cropped: crop != nil)
             } catch {
                 ScanLog.add("Build failed: \(error)")
                 self?.phase = .failed("Couldn't build the model: \(error.localizedDescription). The pictures are kept; try Build again from the library.")
@@ -292,13 +325,39 @@ final class ScanModel: ObservableObject {
         }
     }
 
-    private func built(_ folder: ScanFolder) {
+    private func built(_ folder: ScanFolder, cropped: Bool) {
         library = ScanFolder.all()
-        if folder.hasModel {
-            phase = .done(folder)
+        if cropped {
+            phase = folder.hasModel ? .done(folder) : .failed("The cropped model wasn't written. Try Crop again from the library.")
+        } else if folder.hasFull {
+            phase = .cropping(folder)
         } else {
             phase = .failed("The model file wasn't written. The pictures are kept; try Build again from the library.")
         }
+    }
+
+    /// Crop screen: keep the whole area as it is.
+    func keepAll(_ folder: ScanFolder) {
+        try? FileManager.default.removeItem(at: folder.model)
+        do {
+            try FileManager.default.copyItem(at: folder.full, to: folder.model)
+            ScanLog.add("Kept the whole area: \(folder.name)")
+            library = ScanFolder.all()
+            phase = .done(folder)
+        } catch {
+            phase = .failed("Couldn't save the model: \(error.localizedDescription)")
+        }
+    }
+
+    func openCrop(_ folder: ScanFolder) {
+        guard folder.hasFull else { return }
+        if session != nil {
+            session?.cancel()
+            stopSession()
+            if let live = self.folder, live != folder, live.imageCount == 0 { try? FileManager.default.removeItem(at: live.url) }
+        }
+        self.folder = folder
+        phase = .cropping(folder)
     }
 
     func delete(_ folder: ScanFolder) {

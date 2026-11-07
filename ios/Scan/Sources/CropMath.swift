@@ -134,6 +134,31 @@ enum CropMath {
         return Result(box: box, floorY: floor)
     }
 
+    /// How the loaded model's coordinates line up with the photogrammetry session's (the crop
+    /// box must be given in the session's). Usually identical; if the saved model was moved or
+    /// rescaled, the session's own bounds tell by how much. Small differences are noise.
+    struct Mapping: Equatable {
+        var scale: Float = 1
+        var offset = SIMD3<Float>(repeating: 0)
+
+        func toSession(_ box: CropBox) -> CropBox {
+            CropBox(min: box.min * scale + offset, max: box.max * scale + offset)
+        }
+    }
+
+    static func mapping(model: CropBox, session: CropBox?) -> Mapping {
+        guard let session else { return Mapping() }
+        var ratios: [Float] = []
+        for i in 0..<3 where model.size[i] > 0.01 && session.size[i] > 0.01 {
+            ratios.append(session.size[i] / model.size[i])
+        }
+        var scale = ratios.isEmpty ? 1 : ratios.reduce(0, +) / Float(ratios.count)
+        if abs(scale - 1) < 0.05 { scale = 1 }
+        var offset = session.centre - model.centre * scale
+        if simd_length(offset) < 0.05 { offset = .zero }
+        return Mapping(scale: scale, offset: offset)
+    }
+
     /// Evenly thins points to at most `limit` (for drawing and for speed).
     static func thin(_ points: [SIMD3<Float>], limit: Int) -> [SIMD3<Float>] {
         guard points.count > limit, limit > 0 else { return points }

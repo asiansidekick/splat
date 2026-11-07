@@ -47,6 +47,8 @@ struct ScanScreen: View {
         switch model.phase {
         case .building(let fraction):
             BuildingView(fraction: fraction)
+        case .cropping(let folder):
+            CropScreen(folder: folder)
         case .done(let folder):
             DoneView(folder: folder, preview: $preview)
         case .unsupported(let text), .failed(let text):
@@ -286,15 +288,19 @@ struct LibraryView: View {
                         LibraryThumb(folder: folder)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(folder.name).font(.subheadline.weight(.semibold))
-                            Text(folder.hasModel ? "Model ready · \(folder.imageCount) pictures" : "\(folder.imageCount) pictures, no model yet")
+                            Text(folder.hasModel ? "Model ready · \(folder.imageCount) pictures" : folder.hasFull ? "Built, not cropped yet" : "\(folder.imageCount) pictures, no model yet")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
+                        if folder.hasFull {
+                            Button { dismiss(); model.openCrop(folder) } label: { Image(systemName: "crop") }
+                                .buttonStyle(.bordered)
+                        }
                         if folder.hasModel {
                             Button("View") { dismiss(); preview = folder.model }.buttonStyle(.bordered)
                             ShareLink(item: folder.model) { Image(systemName: "square.and.arrow.up") }
                                 .buttonStyle(.bordered)
-                        } else if folder.imageCount >= 10 {
+                        } else if !folder.hasFull && folder.imageCount >= 10 {
                             Button("Build") { dismiss(); model.build(folder) }.buttonStyle(.bordered)
                         }
                     }
