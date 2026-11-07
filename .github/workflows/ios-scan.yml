@@ -9,7 +9,31 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Auto-crop maths (floor and object finding) on synthetic scans.
+  test:
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Crop tests
+        working-directory: ios/Scan
+        run: |
+          if ! swiftc -O Sources/CropMath.swift Tests/CropTests/main.swift -o crop-tests > compile.log 2>&1; then
+            grep -E ": error: " compile.log | sort -u | head -10 \
+              | sed -E 's#^(.*/)?((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Scan/\2,line=\4,col=\5::\6#'
+            tail -40 compile.log
+            exit 1
+          fi
+          set +e
+          ./crop-tests > results.txt 2>&1
+          status=$?
+          set -e
+          cat results.txt
+          sed -nE 's/^FAIL  (.*)$/::error::\1/p; s/^PASS  (.*)$/::notice::\1/p' results.txt
+          exit $status
+
   build:
+    needs: test
     runs-on: macos-15-intel
     timeout-minutes: 45
     steps:
