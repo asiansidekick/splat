@@ -473,7 +473,11 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             speed = simd_distance(SIMD3(position.x, position.y, position.z), last.position) / Float(frame.timestamp - last.time) * 100
         }
         lastCameraPosition = (frame.timestamp, SIMD3(position.x, position.y, position.z))
-        Diagnostics.log("Mark check: \(parts.joined(separator: "; ")), \(anchoredNow ? "anchored" : "not anchored") (moved \(String(format: "%.1f", moved)) cm), tracking \(Measurer.reason(frame.camera.trackingState).isEmpty ? "normal" : Measurer.reason(frame.camera.trackingState)), phone \(String(format: "%.0f", speed)) cm/s, age \(Int(Date().timeIntervalSince(mark.created))) s")
+        let held = [0, 1].map { end -> String in
+            guard let t = tracks["\(mark.id.uuidString):\(end)"] else { return "no track" }
+            return "\(t.matches) matched/\(t.misses) missed\(t.plane != nil ? "" : ", free")"
+        }.joined(separator: " | ")
+        Diagnostics.log("Mark check: held to the picture: \(held); \(parts.joined(separator: "; ")), \(anchoredNow ? "anchored" : "not anchored") (moved \(String(format: "%.1f", moved)) cm), tracking \(Measurer.reason(frame.camera.trackingState).isEmpty ? "normal" : Measurer.reason(frame.camera.trackingState)), phone \(String(format: "%.0f", speed)) cm/s, age \(Int(Date().timeIntervalSince(mark.created))) s")
     }
 
     /// While measuring, a tap on a line, its length or a note picks it; a tap elsewhere lets go.
