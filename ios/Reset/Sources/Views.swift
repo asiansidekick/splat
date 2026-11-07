@@ -226,11 +226,40 @@ struct CameraHome: View {
                 }
         }
         .buttonStyle(PressScale())
-        .holdHint("captureThumb", "Hold: all references", above: true, delay: 4)
+        .holdHint("captureThumb", "Hold: options", above: true, delay: 4)
         .contextMenu {
+            // Hold the thumbnail for the newest reference's options, the same ones the gallery has.
+            if let newest = references.first {
+                Button { endNudge(); selectedID = newest.id } label: { Label("Load \(newest.slate.isEmpty ? "it" : newest.slate)", systemImage: "arrow.down.circle") }
+                Button { endNudge(); perform(.review, newest) } label: { Label("Review frames", systemImage: "rectangle.stack") }
+                Button { endNudge(); perform(.slate, newest) } label: { Label("Edit slate", systemImage: "pencil") }
+                Button { endNudge(); perform(.takeLog, newest) } label: { Label("Take log", systemImage: "list.number") }
+                Button { endNudge(); perform(.compare, newest) } label: { Label("Compare", systemImage: "rectangle.split.2x1") }
+                Button { endNudge(); perform(.pdf, newest) } label: { Label("PDF report", systemImage: "doc.richtext") }
+                Button(role: .destructive) { endNudge(); perform(.delete, newest) } label: { Label("Delete", systemImage: "trash") }
+            }
             Button { endNudge(); panel = .gallery } label: { Label("All references", systemImage: "square.grid.2x2") }
         }
         .accessibilityLabel(nudgeLoad ? "Load the reference you just recorded" : "References"))
+    }
+
+    /// What the gallery's and the thumbnail's option menus do.
+    private func perform(_ action: Gallery.Action, _ reference: Reference) {
+        switch action {
+        case .takeLog: panel = .takeLog(reference.id)
+        case .compare: panel = .compare(reference.id)
+        case .review: panel = .review(reference.id)
+        case .explore: panel = .explore(reference.id)
+        case .slate: panel = .slate(reference.id)
+        case .pdf: panel = .pdf(reference.id)
+        case .delete: deleting = reference
+        case .photos: exportPhotos(reference)
+        case .sketch:
+            if let photo = PhotoLibrary.images(of: reference).first {
+                sketching = photo
+                panel = .sketch
+            }
+        }
     }
 
     /// Starts the "load me" cue, which stops when tapped or after 20 seconds.
@@ -392,23 +421,7 @@ struct CameraHome: View {
                 onGroup: group
             ) { action, reference in
                 // Let the gallery close before the next sheet opens.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    switch action {
-                    case .takeLog: self.panel = .takeLog(reference.id)
-                    case .compare: self.panel = .compare(reference.id)
-                    case .review: self.panel = .review(reference.id)
-                    case .explore: self.panel = .explore(reference.id)
-                    case .slate: self.panel = .slate(reference.id)
-                    case .pdf: self.panel = .pdf(reference.id)
-                    case .delete: deleting = reference
-                    case .photos: exportPhotos(reference)
-                    case .sketch:
-                        if let photo = PhotoLibrary.images(of: reference).first {
-                            sketching = photo
-                            self.panel = .sketch
-                        }
-                    }
-                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { perform(action, reference) }
             }
         case .sharePhoto:
             if let sharingPhoto { ShareSheet(items: [sharingPhoto]) }
@@ -808,7 +821,9 @@ struct ReferenceThumbnail: View {
             .frame(width: size, height: size)
             .clipped()
             if let reference {
-                // The take number, big enough to read at a glance (Phil, 2026-11-05).
+                // The take number, big enough to read at a glance (Phil, 2026-11-05), with what the photo
+                // is called and any note under it, since the photo itself is already showing (Phil, 2026-11-07).
+                VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .lastTextBaseline, spacing: 3) {
                     Text(reference.number)
                         .font(.system(size: max(14, size * (size >= 100 ? 0.2 : 0.32)), weight: .heavy).monospacedDigit())
@@ -819,6 +834,14 @@ struct ReferenceThumbnail: View {
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
+                ForEach(Array(reference.captionLines(count: size >= 100 ? 2 : 1).enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.system(size: size >= 100 ? 12 : 10, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .foregroundStyle(Color.yellow)
+                }
+                }
                 .padding(.horizontal, 4)
                 .padding(.vertical, 1)
                 .frame(width: size)

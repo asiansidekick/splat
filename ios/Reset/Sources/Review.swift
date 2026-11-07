@@ -48,7 +48,8 @@ struct FrameReview: View {
                                   guard frames.indices.contains(index) else { return }
                                   reference.planeDepths[frames[index].imageFile] = depth
                                   onSave(reference)
-                              })
+                              },
+                              onSwipe: { move($0) })
                         .id(frames[index].id)
                 } else {
                     Spacer()
@@ -295,6 +296,8 @@ struct FramePage: View {
     /// For a photo with no depth: how far out the scene is, once a length typed along something known set it.
     var planeDepth: Float?
     var onPlaneDepth: (Float) -> Void = { _ in }
+    /// A quick sideways swipe on the whole photo (not zoomed in): -1 for the previous frame, 1 for the next.
+    var onSwipe: (Int) -> Void = { _ in }
 
     private struct Loaded: @unchecked Sendable {
         let image: UIImage
@@ -363,6 +366,11 @@ struct FramePage: View {
                     }
                     .onEnded { value in
                         basePan = pan
+                        let across = value.translation.width, down = value.translation.height
+                        if zoom <= 1.02, abs(across) > 70, abs(across) > abs(down) * 1.6 {
+                            onSwipe(across < 0 ? 1 : -1)
+                            return
+                        }
                         // A tap, not a drag: if it lands on a mark, switch to measuring and open the mark.
                         if hypot(value.translation.width, value.translation.height) < 6 {
                             let centre = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
@@ -419,7 +427,7 @@ struct FramePage: View {
         if let message { return message }
         guard let loaded else { return nil }
         if loaded.depth == nil, planeDepth == nil { return "No depth in this photo: drag a line along something you know the size of and type its real length. Everything else on that flat view is then measured from it. Notes work as normal." }
-        return panMode ? "Pinch to zoom, drag to move. Tap the ruler to measure or add notes." : "Drag to measure. Hold to add a note. Hold a line's end, then drag it to move it. Tap a mark to edit."
+        return panMode ? "Swipe for the next frame. Pinch to zoom, drag to move. Tap the ruler to measure or add notes." : "Drag to measure. Hold to add a note. Hold a line's end, then drag it to move it. Tap a mark to edit."
     }
 
     private static func fit(aspect: CGFloat, in box: CGSize) -> CGSize {

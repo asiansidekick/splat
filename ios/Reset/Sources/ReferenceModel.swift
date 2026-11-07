@@ -74,6 +74,16 @@ struct Reference: Codable, Identifiable, Equatable {
         if slate.isEmpty { return name }
         return name.isEmpty ? slate : "\(slate) · \(name)"
     }
+    /// Words for a thumbnail, most useful first: its description, then the latest take note, then a note
+    /// pinned in the room, then its group. Empty ones are skipped.
+    func captionLines(count: Int) -> [String] {
+        let trim = { (text: String) in text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let takeNote = takes.sorted { $0.logged > $1.logged }.map { trim($0.note) }.first { !$0.isEmpty }
+        let roomNote = notes.map { trim($0.text) }.first { !$0.isEmpty }
+        let all = [trim(name), takeNote ?? "", roomNote ?? "", trim(group)].filter { !$0.isEmpty }
+        var seen = Set<String>()
+        return Array(all.filter { seen.insert($0).inserted }.prefix(count))
+    }
     var nextTakeNumber: Int { (takes.map(\.number).max() ?? 0) + 1 }
 }
 
