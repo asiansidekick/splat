@@ -1546,6 +1546,8 @@ struct ResetStage: View {
     @State private var holder = CameraViewHolder()
     @State private var tapCatcher = WindowTapCatcher()
     @State private var lastPauseToggle = LastTime()
+    @State private var lastShutter = LastTime()
+    @State private var lastLog = LastTime()
 
     init(
         reference: Binding<Reference>, thumbnails: Thumbnails,
@@ -1575,8 +1577,8 @@ struct ResetStage: View {
         } leading: {
             if leftHanded { pauseButton } else { logButton }
         } shutter: {
-            ShutterButton(style: .photo, ring: restorer.matched ? .green : .white) { snapshot() }
-                .modifier(WindowFrame { frame in tapCatcher.targets["Shutter"] = (frame, nil) })
+            ShutterButton(style: .photo, ring: restorer.matched ? .green : .white) { snapshotOnce() }
+                .modifier(WindowFrame { frame in tapCatcher.targets["Shutter"] = (frame, { snapshotOnce() }) })
                 .disabled(restorer.status != .ready || restorer.paused)
                 .opacity(restorer.paused ? 0 : restorer.status == .ready ? 1 : 0.5)
                 .shadow(color: .black.opacity(0.5), radius: 3)
@@ -1655,9 +1657,9 @@ struct ResetStage: View {
 
     private var logButton: some View {
         SideButton(title: "Log T\(reference.nextTakeNumber)", systemImage: "checkmark.circle", tint: .yellow) {
-            logTake()
+            logTakeOnce()
         }
-        .modifier(WindowFrame { frame in tapCatcher.targets["Log"] = (frame, nil) })
+        .modifier(WindowFrame { frame in tapCatcher.targets["Log"] = (frame, { logTakeOnce() }) })
         .shadow(color: .black.opacity(0.6), radius: 3)
         .holdHint("logNote", "Hold: add a note", above: true, delay: 9)
         .contextMenu {
@@ -1977,6 +1979,23 @@ struct ResetStage: View {
         save()
         Haptics.success()
         showToast("Logged \(reference.slate) take \(take.number)")
+    }
+
+    /// The button and the window's tap watcher can both fire for one tap (the button alone never gets it in
+    /// landscape on some phones), so these act once per tap, and not while paused or still finding the room.
+    private func snapshotOnce() {
+        let now = Date()
+        guard !restorer.paused, restorer.status == .ready, now.timeIntervalSince(lastShutter.date) > 0.6 else { return }
+        lastShutter.date = now
+        Diagnostics.log("Snapshot pressed (\(Screen.orientation.isLandscape ? "landscape" : "portrait"))")
+        snapshot()
+    }
+
+    private func logTakeOnce() {
+        let now = Date()
+        guard !restorer.paused, now.timeIntervalSince(lastLog.date) > 0.6 else { return }
+        lastLog.date = now
+        logTake()
     }
 
     /// Saves the set as it looks now, labelled for the take it comes before, to compare later.
