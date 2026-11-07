@@ -326,7 +326,10 @@ struct CameraHome: View {
     private func took(_ image: UIImage) {
         if saveToPhotos {
             Task {
-                let saved = await PhotoLibrary.save([image])
+                // On the reset screen the photo belongs to the reference open there; otherwise to the next slate.
+                let stamp = selectedID.flatMap { id in references.first { $0.id == id } }.map { PhotoStamp($0) }
+                    ?? PhotoStamp(scene: nextScene, shot: nextShot, take: nextSetup, name: nextName)
+                let saved = await PhotoLibrary.save([image], stamp: stamp)
                 if !saved { show("Allow Photos in Settings, Reset, Photos to save there") }
             }
         }
@@ -367,7 +370,7 @@ struct CameraHome: View {
     private func exportPhotos(_ reference: Reference) {
         Task {
             let images = PhotoLibrary.images(of: reference)
-            let saved = await PhotoLibrary.save(images)
+            let saved = await PhotoLibrary.save(images, stamp: PhotoStamp(reference))
             show(saved ? "Saved \(images.count) \(images.count == 1 ? "photo" : "photos") to Photos" : "Allow Photos in Settings, Reset, Photos")
         }
     }

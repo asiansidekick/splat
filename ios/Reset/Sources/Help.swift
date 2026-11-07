@@ -5,6 +5,7 @@ struct HelpView: View {
     @State private var tipsReset = false
     @Environment(\.dismiss) private var dismiss
     @AppStorage("saveToPhotos") private var saveToPhotos = true
+    @AppStorage(PhotoMetadata.key) private var stampMetadata = true
     @AppStorage("leftHanded") private var leftHanded = false
     @AppStorage("measureRaycast") private var measureRaycast = true
 
@@ -64,8 +65,10 @@ struct HelpView: View {
                 }
                 Section("Photos") {
                     Toggle("Save shutter photos to Photos", isOn: $saveToPhotos)
+                    Toggle("Put scene and take in photo details", isOn: $stampMetadata)
                     step("square.and.arrow.down", "To use photos as ghosts, open the gallery and tap the import arrow. Pick as many as you like; each becomes its own reference.")
                     step("photo.on.rectangle.angled", "Press and hold a reference in the gallery and choose Save photos to Photos.")
+                    step("tag", "Photos saved to Photos carry the scene, shot, take, description and notes in their details (title, caption and keywords), so you can search for them there. Pictures are not changed and no location is added. Screenshots and sketches are saved plain.")
                 }
                 Section("Your work") {
                     step("lock", "Everything stays on this device (unless you sync with your team's phones) and works with no signal. References are also in the Files app, On My iPhone, Reset.")

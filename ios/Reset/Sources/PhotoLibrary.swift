@@ -7,7 +7,8 @@ import simd
 /// Saving to and importing from the iPhone's Photos library.
 enum PhotoLibrary {
     /// Adds the images to Photos. Asks for permission the first time; returns false if refused.
-    static func save(_ images: [UIImage]) async -> Bool {
+    /// With `stamp`, and the Help switch on, each photo carries the slate details in its metadata.
+    static func save(_ images: [UIImage], stamp: PhotoStamp? = nil) async -> Bool {
         guard !images.isEmpty else { return true }
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else {
@@ -17,7 +18,14 @@ enum PhotoLibrary {
         }
         do {
             try await PHPhotoLibrary.shared().performChanges {
-                for image in images { PHAssetChangeRequest.creationRequestForAsset(from: image) }
+                for image in images {
+                    if let stamp, PhotoMetadata.enabled, let data = PhotoMetadata.stamped(image, with: stamp) {
+                        let request = PHAssetCreationRequest.forAsset()
+                        request.addResource(with: .photo, data: data, options: nil)
+                    } else {
+                        PHAssetChangeRequest.creationRequestForAsset(from: image)
+                    }
+                }
             }
             return true
         } catch {
