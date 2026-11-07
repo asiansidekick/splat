@@ -6,9 +6,24 @@ import UniformTypeIdentifiers
 struct MatchApp: App {
     @StateObject private var store = BoardStore()
 
+    init() {
+        // Navigation titles and bar buttons are drawn by UIKit, so they are set here; menus and alerts stay Apple's.
+        let regular = UIFont(name: "Georgia", size: 17) ?? .systemFont(ofSize: 17)
+        let bold = UIFont(name: "Georgia-Bold", size: 17) ?? .boldSystemFont(ofSize: 17)
+        let large = UIFont(name: "Georgia-Bold", size: 34) ?? .boldSystemFont(ofSize: 34)
+        UINavigationBar.appearance().titleTextAttributes = [.font: bold]
+        UINavigationBar.appearance().largeTitleTextAttributes = [.font: large]
+        for state in [UIControl.State.normal, .highlighted, .disabled] {
+            UIBarButtonItem.appearance().setTitleTextAttributes([.font: regular], for: state)
+        }
+        UISegmentedControl.appearance().setTitleTextAttributes([.font: UIFont(name: "Georgia", size: 13) ?? .systemFont(ofSize: 13)], for: .normal)
+    }
+
     var body: some Scene {
         WindowGroup {
             CaptureView().environmentObject(store)
+                // Any text that doesn't choose its own style (list rows, buttons, fields) is Georgia too.
+                .environment(\.font, Theme.georgia(.body))
                 // A team pack AirDropped to this phone, or opened from Files.
                 .onOpenURL { TeamReceiver.receive($0, store: store) }
                 .onAppear { CastList.seed(fromNames: store.boards.sorted { $0.created < $1.created }.map(\.subject)) }
@@ -555,7 +570,7 @@ struct TimeStamp: View {
         Text(Calendar.current.isDateInToday(date)
              ? date.formatted(date: .omitted, time: .shortened)
              : date.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
-            .font(.system(size: size, weight: .semibold).monospacedDigit())
+            .font(.custom("Georgia-Bold", fixedSize: size).monospacedDigit())
             .foregroundStyle(.white)
             .lineLimit(1)
             .minimumScaleFactor(0.7)

@@ -1408,7 +1408,7 @@ struct GalleryView: View {
                             .clipped()
                             .overlay(alignment: .bottom) {
                                 Text(shot.taken.formatted(date: .omitted, time: .shortened))
-                                    .font(.system(size: 7, weight: .semibold).monospacedDigit())
+                                    .font(.custom("Georgia-Bold", fixedSize: 7).monospacedDigit())
                                     .foregroundStyle(.white)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.6)
