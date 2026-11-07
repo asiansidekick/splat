@@ -23,8 +23,9 @@ struct FrameReview: View {
     @State private var index = 0
     @Environment(\.dismiss) private var dismiss
 
-    init(reference: Reference, onSave: @escaping (Reference) -> Void) {
+    init(reference: Reference, startMeasuring: Bool = false, onSave: @escaping (Reference) -> Void) {
         _reference = State(initialValue: reference)
+        _measuring = State(initialValue: startMeasuring)
         self.onSave = onSave
         let root = SCNNode()
         _placer = StateObject(wrappedValue: ModelPlacer(session: ARSession(), root: root, folder: ReferenceStore.folder(for: reference.id)))

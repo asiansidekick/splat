@@ -71,6 +71,8 @@ struct CameraHome: View {
     // The slate the next reference gets, carried on from the existing references.
     @State private var nextScene = "1"
     @State private var nextShot = ""
+    /// Review opened from the gallery's Dimensions and notes button starts with the ruler on.
+    @State private var reviewMeasuring = false
     @State private var nextSetup = "1"
     @State private var nextName = ""
     /// The last shutter photo, offered for sending straight away.
@@ -169,7 +171,7 @@ struct CameraHome: View {
                 .hiddenInScreenshots()
             }
         }
-        .sheet(item: $panel) { panel in sheet(for: panel).themed() }
+        .sheet(item: $panel, onDismiss: { reviewMeasuring = false }) { panel in sheet(for: panel).themed() }
         .confirmationDialog(
             "Delete \(deleting?.title ?? "reference")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
             titleVisibility: .visible
@@ -254,7 +256,12 @@ struct CameraHome: View {
         switch action {
         case .takeLog: panel = .takeLog(reference.id)
         case .compare: panel = .compare(reference.id)
-        case .review: panel = .review(reference.id)
+        case .review:
+            reviewMeasuring = false
+            panel = .review(reference.id)
+        case .measure:
+            reviewMeasuring = true
+            panel = .review(reference.id)
         case .explore: panel = .explore(reference.id)
         case .slate: panel = .slate(reference.id)
         case .pdf: panel = .pdf(reference.id)
@@ -408,7 +415,7 @@ struct CameraHome: View {
             if let reference = references.first(where: { $0.id == id }) { CompareView(reference: reference) }
         case .review(let id):
             if let reference = references.first(where: { $0.id == id }) {
-                FrameReview(reference: reference) { updated in
+                FrameReview(reference: reference, startMeasuring: reviewMeasuring) { updated in
                     if let saved = binding(for: id) { saved.wrappedValue = updated }
                     try? ReferenceStore.save(updated)
                 }
@@ -914,7 +921,7 @@ struct ReferenceThumbnail: View {
 /// older ones, tap Load (or double-tap the photo) to bring up its ghost. The grid button shows them
 /// all by scene. Press and hold a photo for its take log, compare, report, slate or delete.
 struct Gallery: View {
-    enum Action { case takeLog, compare, review, explore, slate, pdf, delete, photos, sketch, hero }
+    enum Action { case takeLog, compare, review, measure, explore, slate, pdf, delete, photos, sketch, hero }
 
     @Environment(\.dismiss) private var dismiss
     /// Oldest first, so the newest is the last page, as in Photos.
@@ -1066,6 +1073,17 @@ struct Gallery: View {
             .overlay(alignment: .center) { Color.clear.frame(width: 1, height: 1).holdHint("galleryPhoto2", "Hold the photo for options", above: true, delay: 0.8) }
             filmstrip
             if let shown {
+                HStack(spacing: 10) {
+                    Button { dismiss(); action(.measure, shown) } label: {
+                        Label("Dimensions & notes", systemImage: "ruler").font(Theme.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    Button { dismiss(); action(.sketch, shown) } label: {
+                        Label("Draw", systemImage: "pencil.tip.crop.circle").font(Theme.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .frame(maxWidth: 360)
                 Button {
                     load(shown)
                 } label: {
@@ -1479,10 +1497,7 @@ struct CaptureStage: View {
         } trailing: {
             WithScreenshot(camera: { holder.view }, toast: showToast, size: 74, evenCells: true) {
                 if recorder.capturing {
-                    Text("\(recorder.keyframeCount)\n\(recorder.keyframeCount == 1 ? "view" : "views")")
-                        .font(Theme.caption.bold().monospacedDigit())
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.white)
+                    ViewsCounter(count: recorder.keyframeCount)
                 } else {
                     // On its side the cube moves to the opposite edge of the screen (see the overlay below).
                     ModelsBesideScreenshot { importingModels = true }
