@@ -87,6 +87,9 @@ struct Shot: Codable, Identifiable, Equatable, Hashable {
     var thumbnailFile: String { "\(id.uuidString)-thumb.jpg" }
     /// The LiDAR depth when the photo was taken, on phones and iPads with LiDAR.
     var depthFile: String { "\(id.uuidString)-depth.bin" }
+    /// Drawing and notes written on the photo: the editable marks and a clear picture of them.
+    var markupFile: String { "\(id.uuidString)-marks.json" }
+    var marksFile: String { "\(id.uuidString)-marks.png" }
 
     var label: String {
         [Slate.takeName(take), angle.isEmpty ? nil : angle, taken.formatted(date: .omitted, time: .shortened)]

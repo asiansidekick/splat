@@ -128,6 +128,8 @@ final class BoardStore: ObservableObject {
         try? FileManager.default.removeItem(at: folder.appending(path: shot.file))
         try? FileManager.default.removeItem(at: folder.appending(path: shot.thumbnailFile))
         try? FileManager.default.removeItem(at: folder.appending(path: shot.depthFile))
+        try? FileManager.default.removeItem(at: folder.appending(path: shot.markupFile))
+        try? FileManager.default.removeItem(at: folder.appending(path: shot.marksFile))
         thumbnails.removeObject(forKey: shot.id.uuidString as NSString)
         board.shots.removeAll { $0.id == shot.id }
         save(board)

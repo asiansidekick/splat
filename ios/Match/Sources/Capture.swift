@@ -1188,6 +1188,9 @@ struct GalleryView: View {
     @State private var picked: [PhotosPickerItem] = []
     @State private var importing = 0
     @State private var notice: String?
+    @State private var marking: Shot?
+    /// Bumped when marks are saved, so the pages reload them.
+    @State private var marksVersion = 0
     /// iPhone on its side: the caption sits over the photo, leaving it as much height as possible.
     @Environment(\.verticalSizeClass) private var verticalSize
 
@@ -1220,7 +1223,7 @@ struct GalleryView: View {
                 }
                 TabView(selection: $selection) {
                     ForEach(shots) { shot in
-                        GalleryPage(shot: shot, boardID: board.id)
+                        GalleryPage(shot: shot, boardID: board.id, marksVersion: marksVersion)
                             .tag(Optional(shot.id))
                     }
                 }
@@ -1269,6 +1272,12 @@ struct GalleryView: View {
                         .disabled(board.shots.count < 2)
                         Spacer()
                         Button {
+                            marking = current
+                        } label: {
+                            Label("Draw & write", systemImage: "pencil.tip")
+                        }
+                        Spacer()
+                        Button {
                             save(current)
                         } label: {
                             Label("Save to Photos", systemImage: "square.and.arrow.down")
@@ -1284,6 +1293,9 @@ struct GalleryView: View {
             }
         }
         .environment(\.colorScheme, .dark)
+        .fullScreenCover(item: $marking) { shot in
+            MarkupEditor(shot: shot, boardID: boardID) { marksVersion += 1 }
+        }
     }
 
     /// Several photos at once from the Photos library, in the order picked.
@@ -1323,7 +1335,10 @@ struct GalleryView: View {
 
     private func save(_ shot: Shot) {
         Task {
-            let saved = await PhotoLibrary.save([BoardStore.url(of: shot, in: boardID)])
+            let boardID = boardID
+            // With drawing or notes on it, the picture saved is the marked one.
+            let file = await Task.detached { BoardStore.hasMarks(shot, in: boardID) ? BoardStore.flattened(shot, in: boardID) : nil }.value
+            let saved = await PhotoLibrary.save([file ?? BoardStore.url(of: shot, in: boardID)])
             flash(saved ? "Saved to Photos" : PhotoLibrary.deniedMessage)
         }
     }
@@ -1399,7 +1414,9 @@ struct GalleryView: View {
 private struct GalleryPage: View {
     let shot: Shot
     let boardID: UUID
+    var marksVersion = 0
     @State private var image: UIImage?
+    @State private var marks: UIImage?
     @State private var scale: CGFloat = 1
     @State private var offset: CGSize = .zero
     @State private var pinchStart: CGFloat?
@@ -1412,6 +1429,7 @@ private struct GalleryPage: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
+                    .overlay { if let marks { Image(uiImage: marks).resizable().scaledToFit() } }
                     .scaleEffect(scale)
                     .offset(offset)
             } else {
@@ -1446,6 +1464,11 @@ private struct GalleryPage: View {
             let shot = shot
             let boardID = boardID
             image = await Task.detached(priority: .userInitiated) { BoardStore.image(shot, in: boardID, maxPixels: 2048) }.value
+        }
+        .task(id: marksVersion) {
+            let shot = shot
+            let boardID = boardID
+            marks = await Task.detached { BoardStore.marksImage(of: shot, in: boardID) }.value
         }
     }
 
