@@ -156,7 +156,7 @@ struct SendToTeamView: View {
                             Button(ids.isSubset(of: chosen) ? "None" : "All") {
                                 if ids.isSubset(of: chosen) { chosen.subtract(ids) } else { chosen.formUnion(ids) }
                             }
-                            .font(.caption.bold())
+                            .font(Theme.georgia(.caption).bold())
                         }
                     }
                 }
@@ -178,7 +178,7 @@ struct SendToTeamView: View {
                 }
                 Section {
                     Text("On the AirDrop sheet, pick your teammate's phone. They tap Open in Match. Setting AirDrop to Contacts Only (Settings, General, AirDrop) stops strangers seeing your phone.")
-                        .font(.footnote)
+                        .font(Theme.georgia(.footnote))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -442,8 +442,8 @@ private struct SyncStatus: View {
                     .foregroundStyle(sync.state == .upToDate ? Color.green : Color.accentColor)
                     .symbolEffect(.pulse, isActive: sync.state == .looking || sync.state == .syncing)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(headline).font(.headline)
-                    Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                    Text(headline).font(Theme.georgia(.headline))
+                    Text(detail).font(Theme.georgia(.subheadline)).foregroundStyle(.secondary)
                 }
             }
             .padding(.vertical, 6)
@@ -464,7 +464,7 @@ private struct SyncStatus: View {
         if sync.strangerNearby {
             Section {
                 Label("A phone nearby is using a different team passcode, so it can't sync with this one.", systemImage: "lock")
-                    .font(.footnote)
+                    .font(Theme.georgia(.footnote))
             }
         }
     }

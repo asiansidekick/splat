@@ -67,7 +67,7 @@ struct HomeView: View {
             .safeAreaInset(edge: .bottom) {
                 // Shows which build is installed, so an old install is easy to spot.
                 Text("Match build \(AppInfo.build)")
-                    .font(.caption2)
+                    .font(Theme.georgia(.caption2))
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 4)
             }
@@ -157,7 +157,7 @@ struct BoardRow: View {
                     Image(uiImage: image).resizable().scaledToFill()
                 } else {
                     Image(systemName: board.department.symbol)
-                        .font(.title2)
+                        .font(Theme.georgia(.title2))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Color.secondary.opacity(0.15))
@@ -166,12 +166,12 @@ struct BoardRow: View {
             .frame(width: 56, height: 56)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             VStack(alignment: .leading, spacing: 3) {
-                Text(board.subject.isEmpty ? board.department.name : board.subject).font(.headline)
+                Text(board.subject.isEmpty ? board.department.name : board.subject).font(Theme.georgia(.headline))
                 Label(board.department.name, systemImage: board.department.symbol)
-                    .font(.caption)
+                    .font(Theme.georgia(.caption))
                     .foregroundStyle(.secondary)
                 Text(board.shots.count == 1 ? "1 photo" : "\(board.shots.count) photos")
-                    .font(.caption)
+                    .font(Theme.georgia(.caption))
                     .foregroundStyle(.secondary)
             }
         }
@@ -298,7 +298,7 @@ struct BoardView: View {
             VStack(alignment: .leading, spacing: 16) {
                 if !board.notes.isEmpty {
                     Text(board.notes)
-                        .font(.callout)
+                        .font(Theme.georgia(.callout))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
                         .background(Color.yellow.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
@@ -405,8 +405,8 @@ struct BoardView: View {
 
     private func actionLabel(_ title: String, systemImage: String) -> some View {
         VStack(spacing: 4) {
-            Image(systemName: systemImage).font(.title2)
-            Text(title).font(.caption.weight(.medium))
+            Image(systemName: systemImage).font(Theme.georgia(.title2))
+            Text(title).font(Theme.georgia(.caption).weight(.medium))
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
@@ -415,7 +415,7 @@ struct BoardView: View {
 
     private func section(_ title: String, shots: [Shot], board: Board) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.headline)
+            Text(title).font(Theme.georgia(.headline))
             LazyVGrid(columns: grid, spacing: 6) {
                 ForEach(shots) { shot in
                     Button {
@@ -522,8 +522,8 @@ struct TakeBar: View {
         let take = store.take(for: scene)
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(scene.isEmpty ? "No scene" : "Scene \(scene)").font(.caption).foregroundStyle(.secondary)
-                Text(Slate.takeName(take)).font(.title2.weight(.semibold).monospacedDigit())
+                Text(scene.isEmpty ? "No scene" : "Scene \(scene)").font(Theme.georgia(.caption)).foregroundStyle(.secondary)
+                Text(Slate.takeName(take)).font(Theme.georgia(.title2).weight(.semibold).monospacedDigit())
             }
             Spacer()
             Button {
@@ -582,7 +582,7 @@ struct ShotThumbnail: View {
             .overlay(alignment: .topLeading) {
                 if shot.isReference {
                     Image(systemName: "star.fill")
-                        .font(.caption)
+                        .font(Theme.georgia(.caption))
                         .foregroundStyle(.yellow)
                         .padding(5)
                         .background(.black.opacity(0.5), in: Circle())
@@ -596,7 +596,7 @@ struct ShotThumbnail: View {
                 let parts = [shot.angle, shot.note.isEmpty ? "" : "✎"].filter { !$0.isEmpty }
                 if !parts.isEmpty {
                     Text(parts.joined(separator: " "))
-                        .font(.caption2.weight(.semibold))
+                        .font(Theme.georgia(.caption2).weight(.semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
@@ -647,8 +647,8 @@ struct ShotView: View {
                             Text(shot.label)
                             if shot.source == .imported { Text("· imported").foregroundStyle(.secondary) }
                         }
-                        .font(.subheadline.weight(.medium))
-                        if !shot.note.isEmpty { Text(shot.note).font(.callout) }
+                        .font(Theme.georgia(.subheadline).weight(.medium))
+                        if !shot.note.isEmpty { Text(shot.note).font(Theme.georgia(.callout)) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()

@@ -203,10 +203,10 @@ struct MarkupEditor: View {
         Button(action: action) {
             VStack(spacing: 2) {
                 Image(systemName: image)
-                    .font(.title3)
+                    .font(Theme.georgia(.title3))
                     .frame(width: 44, height: 36)
                     .background(on ? Color.white.opacity(0.25) : .clear, in: Capsule())
-                Text(title).font(.caption.weight(.semibold)).lineLimit(1)
+                Text(title).font(Theme.georgia(.caption).weight(.semibold)).lineLimit(1)
             }
             .frame(maxWidth: .infinity)
         }

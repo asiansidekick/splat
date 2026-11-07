@@ -156,7 +156,7 @@ struct TesterNotesView: View {
                     ForEach(notes.reversed()) { note in
                         VStack(alignment: .leading, spacing: 3) {
                             Text(note.date.formatted(date: .abbreviated, time: .shortened))
-                                .font(.caption)
+                                .font(Theme.georgia(.caption))
                                 .foregroundStyle(.secondary)
                             Text(note.text)
                         }

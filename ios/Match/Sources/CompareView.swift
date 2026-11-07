@@ -75,7 +75,7 @@ struct CompareView: View {
             .overlay(alignment: .top) {
                 if let notice {
                     Text(notice)
-                        .font(.subheadline.weight(.semibold))
+                        .font(Theme.georgia(.subheadline).weight(.semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .background(.ultraThinMaterial, in: Capsule())
@@ -151,9 +151,9 @@ struct CompareView: View {
             }
         } label: {
             VStack(spacing: 2) {
-                Text(title).font(.caption2).foregroundStyle(.secondary)
+                Text(title).font(Theme.georgia(.caption2)).foregroundStyle(.secondary)
                 Text(board?.shots.first { $0.id == selection.wrappedValue }?.label ?? "Choose")
-                    .font(.subheadline.weight(.medium))
+                    .font(Theme.georgia(.subheadline).weight(.medium))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity)
@@ -207,16 +207,16 @@ struct CompareView: View {
         case .side:
             hint("Pinch to zoom both photos together. Double tap to reset.")
         case .wipe:
-            Slider(value: $wipe, in: 0...1) { Text("Wipe") } minimumValueLabel: { Text("After").font(.caption) } maximumValueLabel: { Text("Before").font(.caption) }
+            Slider(value: $wipe, in: 0...1) { Text("Wipe") } minimumValueLabel: { Text("After").font(Theme.georgia(.caption)) } maximumValueLabel: { Text("Before").font(Theme.georgia(.caption)) }
             lineUpToggle
         case .blend:
-            Slider(value: $blend, in: 0...1) { Text("Blend") } minimumValueLabel: { Text("After").font(.caption) } maximumValueLabel: { Text("Before").font(.caption) }
+            Slider(value: $blend, in: 0...1) { Text("Blend") } minimumValueLabel: { Text("After").font(Theme.georgia(.caption)) } maximumValueLabel: { Text("Before").font(Theme.georgia(.caption)) }
             lineUpToggle
         case .flicker:
             hint("Switches between the two photos; anything that changed jumps.")
             lineUpToggle
         case .changes:
-            Slider(value: $sensitivity, in: 0...1) { Text("Sensitivity") } minimumValueLabel: { Text("Less").font(.caption) } maximumValueLabel: { Text("More").font(.caption) }
+            Slider(value: $sensitivity, in: 0...1) { Text("Sensitivity") } minimumValueLabel: { Text("Less").font(Theme.georgia(.caption)) } maximumValueLabel: { Text("More").font(Theme.georgia(.caption)) }
             hint(aligned.map { $0.lined
                 ? "Red marks what looks different. Photos were lined up automatically; this works best from about the same spot."
                 : "Could not line up these photos (framing too different), so red may include things that only look shifted."
@@ -226,12 +226,12 @@ struct CompareView: View {
 
     private var lineUpToggle: some View {
         Toggle("Line up automatically", isOn: $lineUp)
-            .font(.subheadline)
+            .font(Theme.georgia(.subheadline))
             .disabled(aligned == nil)
     }
 
     private func hint(_ text: String) -> some View {
-        Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+        Text(text).font(Theme.georgia(.caption)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Work
@@ -332,7 +332,7 @@ private struct SideBySide: View {
             .clipped()
             .overlay(alignment: .topLeading) {
                 Text(label)
-                    .font(.caption.weight(.semibold))
+                    .font(Theme.georgia(.caption).weight(.semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
@@ -368,7 +368,7 @@ private struct Stacked: View {
                         Image(uiImage: before).resizable().opacity(showBefore ? 1 : 0)
                             .overlay(alignment: .topLeading) {
                                 Text(showBefore ? "Before" : "After")
-                                    .font(.caption.weight(.semibold))
+                                    .font(Theme.georgia(.caption).weight(.semibold))
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 3)
