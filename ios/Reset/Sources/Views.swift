@@ -94,7 +94,7 @@ struct CameraHome: View {
     @State private var nudgeTask: Task<Void, Never>?
 
     enum Panel: Identifiable {
-        case takeLog(UUID), compare(UUID), review(UUID), explore(UUID), slate(UUID), pdf(UUID), nextSlate, help, gallery, sharePhoto, sync, sketch
+        case takeLog(UUID), compare(UUID), review(UUID), explore(UUID), slate(UUID), pdf(UUID), cutoutScan(UUID), nextSlate, help, gallery, sharePhoto, sync, sketch
 
         var id: String {
             switch self {
@@ -102,6 +102,7 @@ struct CameraHome: View {
             case .compare(let id): return "compare-\(id)"
             case .review(let id): return "review-\(id)"
             case .explore(let id): return "explore-\(id)"
+            case .cutoutScan(let id): return "cutscan-\(id)"
             case .slate(let id): return "slate-\(id)"
             case .pdf(let id): return "pdf-\(id)"
             case .nextSlate: return "next"
@@ -269,6 +270,7 @@ struct CameraHome: View {
             reviewMeasuring = true
             panel = .review(reference.id)
         case .explore: panel = .explore(reference.id)
+        case .cutout: panel = .cutoutScan(reference.id)
         case .slate: panel = .slate(reference.id)
         case .pdf: panel = .pdf(reference.id)
         case .delete: deleting = reference
@@ -427,6 +429,8 @@ struct CameraHome: View {
             }
         case .explore(let id):
             if let reference = references.first(where: { $0.id == id }) { ExploreView(reference: reference) }
+        case .cutoutScan(let id):
+            if let reference = references.first(where: { $0.id == id }) { CutoutFromScan(reference: reference) }
         case .slate(let id):
             if let reference = references.first(where: { $0.id == id }) {
                 SlateEditor(reference: reference) { updated in
@@ -926,7 +930,7 @@ struct ReferenceThumbnail: View {
 /// older ones, tap Load (or double-tap the photo) to bring up its ghost. The grid button shows them
 /// all by scene. Press and hold a photo for its take log, compare, report, slate or delete.
 struct Gallery: View {
-    enum Action { case takeLog, compare, review, measure, explore, slate, pdf, delete, photos, sketch, hero }
+    enum Action { case takeLog, compare, review, measure, explore, slate, pdf, delete, photos, sketch, hero, cutout }
 
     @Environment(\.dismiss) private var dismiss
     /// Oldest first, so the newest is the last page, as in Photos.
@@ -1285,6 +1289,9 @@ struct Gallery: View {
         Button { dismiss(); action(.compare, reference) } label: { Label("Compare", systemImage: "rectangle.split.2x1") }
         if ExploreView.offered {
             Button { dismiss(); action(.explore, reference) } label: { Label("Explore in 3D", systemImage: "view.3d") }
+        }
+        if reference.keyframes.count > 1, !reference.photoOnly {
+            Button { dismiss(); action(.cutout, reference) } label: { Label("Make a cut-out from this scan", systemImage: "person.crop.rectangle.stack") }
         }
         Menu {
             Button { dismiss(); action(.pdf, reference) } label: { Label("PDF report", systemImage: "doc.richtext") }
