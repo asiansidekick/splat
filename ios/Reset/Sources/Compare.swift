@@ -37,19 +37,19 @@ struct CompareView: View {
                         Slider(value: $wipe, in: 0...1) {
                             Text("Wipe")
                         } minimumValueLabel: {
-                            Text("Before").font(.caption)
+                            Text("Before").font(Theme.caption)
                         } maximumValueLabel: {
-                            Text("After").font(.caption)
+                            Text("After").font(Theme.caption)
                         }
                         if result.changes != nil {
                             Toggle("Highlight changes", isOn: $showChanges)
                             if showChanges {
                                 Text("Red: something is in front of where it was. Blue: something is missing.")
-                                    .font(.caption)
+                                    .font(Theme.caption)
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        Text(result.note).font(.caption).foregroundStyle(.secondary)
+                        Text(result.note).font(Theme.caption).foregroundStyle(.secondary)
                     } else {
                         ProgressView().frame(maxHeight: .infinity)
                     }

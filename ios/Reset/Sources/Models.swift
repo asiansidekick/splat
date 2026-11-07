@@ -409,8 +409,8 @@ struct ModelOverlay: View {
         Group {
             if let name = placer.selectedModelName {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(placer.lifting ? "\(name): drag up or down to lift it" : "\(name): drag to move (it stands on surfaces), pinch to scale, twist to turn").font(.caption)
-                    Text("W × D × H  \(placer.sizeText)").font(.caption.bold().monospacedDigit())
+                    Text(placer.lifting ? "\(name): drag up or down to lift it" : "\(name): drag to move (it stands on surfaces), pinch to scale, twist to turn").font(Theme.caption)
+                    Text("W × D × H  \(placer.sizeText)").font(Theme.caption.bold().monospacedDigit())
                     HStack {
                         Button {
                             placer.showDimensions.toggle()
@@ -423,7 +423,7 @@ struct ModelOverlay: View {
                         } label: {
                             Image(systemName: "arrow.up.and.down")
                         }
-                        .tint(placer.lifting ? .yellow : nil)
+                        .tint(placer.lifting ? Theme.accent : nil)
                         .accessibilityLabel(placer.lifting ? "Drag moves it across again" : "Drag lifts it up and down")
                         if showsFloor { Button("Floor") { placer.dropToFloor() } }
                         Button("True size") { placer.resetSelectedModelSize() }
@@ -455,7 +455,7 @@ struct ModelSizeBadge: View {
     var body: some View {
         if placer.pinching {
             Text(placer.sizeText)
-                .font(.title2.bold().monospacedDigit())
+                .font(Theme.title2.bold().monospacedDigit())
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
                 .background(Color.black.opacity(0.7), in: Capsule())

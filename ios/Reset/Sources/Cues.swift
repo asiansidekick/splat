@@ -22,7 +22,7 @@ struct StrengthIndicator: View {
             Text("NOW")
             Image(systemName: "chevron.right")
         }
-        .font(.system(size: 13, weight: .heavy))
+        .font(Theme.font(size: 13, weight: .heavy))
         .foregroundStyle(.white.opacity(0.75))
         .shadow(color: .black.opacity(0.8), radius: 2)
         .padding(.bottom, 2)

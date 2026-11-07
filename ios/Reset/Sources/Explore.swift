@@ -219,15 +219,15 @@ struct ExploreView: View {
             if !ready {
                 VStack(spacing: 10) {
                     ProgressView().tint(.white)
-                    Text(status).font(.footnote).foregroundStyle(.white.opacity(0.8))
+                    Text(status).font(Theme.footnote).foregroundStyle(.white.opacity(0.8))
                 }
             }
             VStack {
                 HStack(spacing: 14) {
-                    Button("Done") { dismiss() }.font(.body.weight(.semibold)).lineLimit(1).fixedSize()
+                    Button("Done") { dismiss() }.font(Theme.body.weight(.semibold)).lineLimit(1).fixedSize()
                     Spacer()
                     Button { jump(-1) } label: { Image(systemName: "chevron.left").frame(width: 34, height: 34) }
-                    Text("From frame \(frameIndex + 1)").font(.footnote.weight(.semibold)).monospacedDigit()
+                    Text("From frame \(frameIndex + 1)").font(Theme.footnote.weight(.semibold)).monospacedDigit()
                     Button { jump(1) } label: { Image(systemName: "chevron.right").frame(width: 34, height: 34) }
                 }
                 .padding(.horizontal, 16).padding(.top, 8)
@@ -236,7 +236,7 @@ struct ExploreView: View {
                 Spacer()
                 if ready {
                     Text("One finger: look. Two fingers: slide. Pinch: forward and back.")
-                        .font(.caption2).foregroundStyle(.white.opacity(0.75))
+                        .font(Theme.caption2).foregroundStyle(.white.opacity(0.75))
                         .padding(.bottom, 10)
                 }
             }

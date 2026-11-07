@@ -101,8 +101,8 @@ struct TorchButton: View {
     var body: some View {
         if torch.available {
             Image(systemName: torch.on ? "flashlight.on.fill" : "flashlight.off.fill")
-                .font(.title3)
-                .foregroundStyle(torch.on ? Color.yellow : Color.white)
+                .font(Theme.title3)
+                .foregroundStyle(torch.on ? Theme.accent : Color.white)
                 .frame(minWidth: 28, minHeight: 28)
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -134,8 +134,8 @@ struct TorchDial: View {
         if torch.dialShown && torch.on {
             VStack(spacing: 4) {
                 Text("Torch \(Int((torch.level * 100).rounded()))%")
-                    .font(.caption.bold().monospacedDigit())
-                    .foregroundStyle(.yellow)
+                    .font(Theme.caption.bold().monospacedDigit())
+                    .foregroundStyle(Theme.accent)
                 ZStack {
                     // Ticks slide with the level; the yellow mark in the middle stays put.
                     HStack(spacing: 8) {
@@ -148,7 +148,7 @@ struct TorchDial: View {
                     .offset(x: CGFloat(0.5 - torch.level) * span)
                     .frame(width: width, height: 30)
                     .clipped()
-                    Rectangle().fill(Color.yellow).frame(width: 3, height: 24)
+                    Rectangle().fill(Theme.accent).frame(width: 3, height: 24)
                 }
                 .frame(width: width, height: 30)
                 .background(Color.black.opacity(0.45), in: Capsule())

@@ -46,7 +46,7 @@ struct ReferenceSyncView: View {
             Form {
                 Section {
                     Label("Open Sync in Reset on every phone, close together, with the same passcode.", systemImage: "iphone.gen3.radiowaves.left.and.right")
-                        .font(.subheadline.weight(.semibold))
+                        .font(Theme.subheadline.weight(.semibold))
                 }
                 if let sync {
                     ReferenceSyncStatus(sync: sync)
@@ -113,12 +113,12 @@ private struct ReferenceSyncStatus: View {
         Section {
             HStack(spacing: 14) {
                 Image(systemName: symbol)
-                    .font(.system(size: 34))
+                    .font(Theme.font(size: 34))
                     .foregroundStyle(sync.state == .upToDate ? Color.green : Color.accentColor)
                     .symbolEffect(.pulse, isActive: sync.state == .looking || sync.state == .syncing)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(headline).font(.headline)
-                    Text(detail).font(.subheadline).foregroundStyle(.secondary)
+                    Text(headline).font(Theme.headline)
+                    Text(detail).font(Theme.subheadline).foregroundStyle(.secondary)
                 }
             }
             .padding(.vertical, 6)
@@ -139,7 +139,7 @@ private struct ReferenceSyncStatus: View {
         if sync.strangerNearby {
             Section {
                 Label("A phone nearby is using a different team passcode, so it can't sync with this one.", systemImage: "lock")
-                    .font(.footnote)
+                    .font(Theme.footnote)
             }
         }
     }

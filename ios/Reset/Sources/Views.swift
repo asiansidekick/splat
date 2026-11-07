@@ -9,13 +9,18 @@ import UniformTypeIdentifiers
 struct ResetApp: App {
     init() {
         Diagnostics.logLaunch()
+        Theme.installAppearance()
         NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main
         ) { _ in Diagnostics.log("Memory warning") }
     }
 
     var body: some Scene {
-        WindowGroup { CameraHome() }
+        WindowGroup {
+            CameraHome()
+                .font(Theme.body)
+                .tint(Theme.accent)
+        }
     }
 }
 
@@ -119,7 +124,7 @@ struct CameraHome: View {
         .overlay(alignment: .top) {
             if let toast {
                 Text(toast)
-                    .font(.subheadline.bold())
+                    .font(Theme.subheadline.bold())
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
                     .multilineTextAlignment(.center)
@@ -140,7 +145,7 @@ struct CameraHome: View {
                         panel = .sketch
                     } label: {
                         Label("Sketch", systemImage: "pencil.tip")
-                            .font(.subheadline.bold())
+                            .font(Theme.subheadline.bold())
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
                             .background(Color.white, in: Capsule())
@@ -151,10 +156,10 @@ struct CameraHome: View {
                         panel = .sharePhoto
                     } label: {
                         Label("Share", systemImage: "square.and.arrow.up")
-                            .font(.subheadline.bold())
+                            .font(Theme.subheadline.bold())
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
-                            .background(Color.yellow, in: Capsule())
+                            .background(Theme.accent, in: Capsule())
                             .foregroundStyle(.black)
                     }
                 }
@@ -217,8 +222,8 @@ struct CameraHome: View {
                 .modifier(LoadNudge(active: nudgeLoad))
                 .overlay(alignment: .bottom) {
                     Text(nudgeLoad ? "Tap to load" : "Reference")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(nudgeLoad ? Color.yellow : Color.white)
+                        .font(Theme.font(size: 14, weight: .semibold))
+                        .foregroundStyle(nudgeLoad ? Theme.accent : Color.white)
                         .shadow(color: .black.opacity(0.9), radius: 2)
                         .lineLimit(1)
                         .fixedSize()
@@ -658,10 +663,10 @@ struct ModePicker<Mode: Hashable>: View {
                     choose(mode)
                 } label: {
                     Text(label(mode))
-                        .font(.footnote.weight(.semibold))
+                        .font(Theme.footnote.weight(.semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
-                        .foregroundStyle(selection == mode ? Color.yellow : Color.white)
+                        .foregroundStyle(selection == mode ? Theme.accent : Color.white)
                 }
             }
         }
@@ -701,7 +706,7 @@ struct ShutterButton: View {
                 case .photo: Circle().fill(Color.white).frame(width: 60, height: 60)
                 case .record:
                     Circle().fill(Color.red).frame(width: 60, height: 60)
-                    Image(systemName: "video.fill").font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
+                    Image(systemName: "video.fill").font(Theme.font(size: 26, weight: .semibold)).foregroundStyle(.white)
                 case .stop: RoundedRectangle(cornerRadius: 6).fill(Color.red).frame(width: 30, height: 30)
                 }
                 if busy { ProgressView().tint(style == .photo ? .black : .white) }
@@ -722,10 +727,10 @@ struct SideButton: View {
         Button(action: action) {
             VStack(spacing: 4) {
                 Image(systemName: systemImage)
-                    .font(.title3)
+                    .font(Theme.title3)
                     .frame(width: 50, height: 50)
                     .background(Color.white.opacity(0.15), in: Circle())
-                Text(title).font(.caption.bold()).lineLimit(1).minimumScaleFactor(0.7)
+                Text(title).font(Theme.caption.bold()).lineLimit(1).minimumScaleFactor(0.7)
             }
             .foregroundStyle(tint)
         }
@@ -780,10 +785,10 @@ struct TopPill: View {
                 if let systemImage { Image(systemName: systemImage) }
                 Text(text).lineLimit(1)
             }
-            .font(.subheadline.bold())
+            .font(Theme.subheadline.bold())
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(highlighted ? Color.yellow : Color.white.opacity(0.15), in: Capsule())
+            .background(highlighted ? Theme.accent : Color.white.opacity(0.15), in: Capsule())
             .foregroundStyle(highlighted ? Color.black : Color.white)
         }
     }
@@ -805,7 +810,7 @@ struct Banner: View {
 
     var body: some View {
         Text(text)
-            .font(.footnote.weight(.semibold))
+            .font(Theme.footnote.weight(.semibold))
             .multilineTextAlignment(.center)
             .lineLimit(2)
             .minimumScaleFactor(0.8)
@@ -855,20 +860,20 @@ struct ReferenceThumbnail: View {
                 VStack(alignment: .leading, spacing: 0) {
                 HStack(alignment: .lastTextBaseline, spacing: 3) {
                     Text(reference.number)
-                        .font(.system(size: max(14, size * (size >= 100 ? 0.2 : 0.32)), weight: .heavy).monospacedDigit())
+                        .font(Theme.font(size: max(14, size * (size >= 100 ? 0.2 : 0.32)), weight: .heavy).monospacedDigit())
                     if size >= 100 {
                         Spacer(minLength: 0)
-                        Text(timestamp(reference.created)).font(.system(size: 13).monospacedDigit())
+                        Text(timestamp(reference.created)).font(Theme.font(size: 13).monospacedDigit())
                     }
                 }
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
                 ForEach(Array(reference.captionLines(count: size >= 80 ? 2 : 1).enumerated()), id: \.offset) { _, line in
                     Text(line)
-                        .font(.system(size: size >= 100 ? 12 : size >= 80 ? 12 : 10, weight: .semibold))
+                        .font(Theme.font(size: size >= 100 ? 12 : size >= 80 ? 12 : 10, weight: .semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
-                        .foregroundStyle(Color.yellow)
+                        .foregroundStyle(Theme.accent)
                 }
                 }
                 .padding(.horizontal, 4)
@@ -882,14 +887,14 @@ struct ReferenceThumbnail: View {
         .overlay(alignment: .topLeading) {
             if reference?.hero == true {
                 Image(systemName: "star.fill")
-                    .font(.system(size: max(11, size * 0.2)))
-                    .foregroundStyle(.yellow)
+                    .font(Theme.font(size: max(11, size * 0.2)))
+                    .foregroundStyle(Theme.accent)
                     .shadow(color: .black.opacity(0.8), radius: 2)
                     .padding(3)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Color.yellow : Color.white.opacity(0.8), lineWidth: selected ? 3 : 1))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Theme.accent : Color.white.opacity(0.8), lineWidth: selected ? 3 : 1))
         .task(id: reference?.id) {
             if let reference { await thumbnails.load(reference) }
         }
@@ -1031,7 +1036,7 @@ struct Gallery: View {
 
     private func arrow(_ name: String) -> some View {
         Image(systemName: name)
-            .font(.system(size: 20, weight: .bold)).foregroundStyle(.white)
+            .font(Theme.font(size: 20, weight: .bold)).foregroundStyle(.white)
             .frame(width: 40, height: 64)
             .background(Capsule().fill(Color.black.opacity(0.45)))
     }
@@ -1050,7 +1055,7 @@ struct Gallery: View {
             .overlay(alignment: .topTrailing) {
                 if let position = ordered.firstIndex(where: { $0.id == current }), ordered.count > 1 {
                     Text("\(position + 1) of \(ordered.count)")
-                        .font(.footnote.weight(.bold)).monospacedDigit().foregroundStyle(.white)
+                        .font(Theme.footnote.weight(.bold)).monospacedDigit().foregroundStyle(.white)
                         .padding(.horizontal, 10).padding(.vertical, 5)
                         .background(Capsule().fill(Color.black.opacity(0.6)))
                         .padding(8)
@@ -1065,12 +1070,12 @@ struct Gallery: View {
                     load(shown)
                 } label: {
                     Label("Load \(shown.slate.isEmpty ? "ghost" : shown.slate)", systemImage: "camera.viewfinder")
-                        .font(.headline)
+                        .font(Theme.headline)
                         .frame(maxWidth: 360)
                         .padding(.vertical, 6)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.yellow)
+                .tint(Theme.accent)
                 .foregroundStyle(.black)
                 .padding(.horizontal)
                 .padding(.bottom, 8)
@@ -1111,18 +1116,18 @@ struct Gallery: View {
                 }
                 if search.remaining > 0 {
                     Label("Looking at your pictures so they can be searched… \(search.remaining) to go", systemImage: "sparkle.magnifyingglass")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(Theme.footnote).foregroundStyle(.secondary)
                 }
                 let heroes = visible.filter(\.hero)
                 if !heroes.isEmpty {
-                    Label("Heroes", systemImage: "star.fill").font(.headline).foregroundStyle(.yellow)
+                    Label("Heroes", systemImage: "star.fill").font(Theme.headline).foregroundStyle(Theme.accent)
                     section(title: nil, references: heroes)
                 }
                 ForEach(gridScenes, id: \.self) { scene in
-                    Text(sceneHeading(scene)).font(.headline)
+                    Text(sceneHeading(scene)).font(Theme.headline)
                     let inScene = setups(in: scene)
                     if inScene.isEmpty {
-                        Text("Nothing recorded yet").font(.footnote).foregroundStyle(.secondary)
+                        Text("Nothing recorded yet").font(Theme.footnote).foregroundStyle(.secondary)
                     }
                     let groups = Array(Set(inScene.map(\.group).filter { !$0.isEmpty }))
                         .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
@@ -1141,7 +1146,7 @@ struct Gallery: View {
                         Label("Group \(chosen.count)", systemImage: "rectangle.stack.badge.plus").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.yellow)
+                    .tint(Theme.accent)
                     .foregroundStyle(.black)
                     .disabled(chosen.isEmpty)
                     Button {
@@ -1170,7 +1175,7 @@ struct Gallery: View {
     @ViewBuilder
     private func section(title: String?, references: [Reference]) -> some View {
         if !references.isEmpty {
-            if let title { Text(title).font(.subheadline.bold()).foregroundStyle(.yellow) }
+            if let title { Text(title).font(Theme.subheadline.bold()).foregroundStyle(Theme.accent) }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], spacing: 8) {
                 ForEach(references) { reference in
                     Button {
@@ -1187,8 +1192,8 @@ struct Gallery: View {
                             .overlay(alignment: .topTrailing) {
                                 if selecting {
                                     Image(systemName: chosen.contains(reference.id) ? "checkmark.circle.fill" : "circle")
-                                        .font(.title3)
-                                        .foregroundStyle(chosen.contains(reference.id) ? Color.yellow : Color.white)
+                                        .font(Theme.title3)
+                                        .foregroundStyle(chosen.contains(reference.id) ? Theme.accent : Color.white)
                                         .shadow(radius: 2)
                                         .padding(4)
                                 }
@@ -1277,14 +1282,14 @@ struct GalleryPage: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Text(details)
-                .font(.footnote)
+                .font(Theme.footnote)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
             Label("Hold the photo for options", systemImage: "hand.tap")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.yellow)
+                .font(Theme.footnote.weight(.semibold))
+                .foregroundStyle(Theme.accent)
         }
         .contentShape(Rectangle())
         .task(id: reference.id) {
@@ -1397,11 +1402,11 @@ struct CaptureStage: View {
                 // Works while a scan or recording is going, too.
                 MeasureToggle(measurer: recorder.measurer)
                 if FreeScanner.supported {
-                    Button { freeScanner.start(recorder) } label: { Image(systemName: "cube.transparent").font(.title3) }
+                    Button { freeScanner.start(recorder) } label: { Image(systemName: "cube.transparent").font(Theme.title3) }
                         .disabled(recorder.capturing)
                         .accessibilityLabel("Scan")
                 }
-                Button { open(.help) } label: { Image(systemName: "questionmark.circle").font(.title3) }
+                Button { open(.help) } label: { Image(systemName: "questionmark.circle").font(Theme.title3) }
                     .accessibilityLabel("Help")
             }
             .padding(.horizontal, 12)
@@ -1447,7 +1452,7 @@ struct CaptureStage: View {
                     MeasureBar(measurer: recorder.measurer)
                     ModelOverlay(placer: recorder.placer)
                     if let error = recorder.error {
-                        Text(error).font(.callout).padding(10)
+                        Text(error).font(Theme.callout).padding(10)
                             .background(Color.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
                     }
                 }
@@ -1471,7 +1476,7 @@ struct CaptureStage: View {
             WithScreenshot(camera: { holder.view }, toast: showToast, size: 74, evenCells: true) {
                 if recorder.capturing {
                     Text("\(recorder.keyframeCount)\n\(recorder.keyframeCount == 1 ? "view" : "views")")
-                        .font(.caption.bold().monospacedDigit())
+                        .font(Theme.caption.bold().monospacedDigit())
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.white)
                 } else {
@@ -1744,7 +1749,7 @@ struct ResetStage: View {
     }
 
     private var logButton: some View {
-        SideButton(title: "Log T\(reference.nextTakeNumber)", systemImage: "checkmark.circle", tint: .yellow) {
+        SideButton(title: "Log T\(reference.nextTakeNumber)", systemImage: "checkmark.circle", tint: Theme.accent) {
             logTakeOnce()
         }
         .modifier(WindowFrame { frame in tapCatcher.targets["Log"] = (frame, { logTakeOnce() }) })
@@ -1766,7 +1771,7 @@ struct ResetStage: View {
 
     private var topBar: some View {
         HStack(spacing: 12) {
-            Button { close() } label: { Image(systemName: "xmark").font(.title3) }
+            Button { close() } label: { Image(systemName: "xmark").font(Theme.title3) }
                 .accessibilityLabel("Back to recording")
             // This reference: tap to hide or show the ghost, press and hold for all references.
             ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 34, selected: ghostShown)
@@ -1786,7 +1791,7 @@ struct ResetStage: View {
             if restorer.paused {
                 // Small, in the top bar, so it covers none of the picture.
                 Text("PAUSED")
-                    .font(.caption.weight(.heavy))
+                    .font(Theme.caption.weight(.heavy))
                     .foregroundStyle(Color.orange)
                     .accessibilityLabel("Paused")
                 TopPill(text: wipe ? "Wipe" : "Fade", systemImage: wipe ? "rectangle.split.2x1" : "square.on.square") {
@@ -1797,16 +1802,16 @@ struct ResetStage: View {
             } else {
                 if restorer.usesDepth {
                     Button { restorer.showDifferences.toggle() } label: {
-                        Image(systemName: "square.2.layers.3d").font(.title3)
-                            .foregroundStyle(restorer.showDifferences ? Color.yellow : Color.white)
+                        Image(systemName: "square.2.layers.3d").font(Theme.title3)
+                            .foregroundStyle(restorer.showDifferences ? Theme.accent : Color.white)
                     }
                     .accessibilityLabel(restorer.showDifferences ? "Hide LiDAR changes" : "Show LiDAR changes")
                 }
                 if !reference.photoOnly {
                     Button { restorer.toggleLock() } label: {
                         Image(systemName: restorer.lockedKeyframe == nil ? "lock.open" : "lock.fill")
-                            .font(.title3)
-                            .foregroundStyle(restorer.lockedKeyframe == nil ? Color.white : Color.yellow)
+                            .font(Theme.title3)
+                            .foregroundStyle(restorer.lockedKeyframe == nil ? Color.white : Theme.accent)
                     }
                     .accessibilityLabel(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow the camera")
                 }
@@ -1836,7 +1841,7 @@ struct ResetStage: View {
                 } label: { Label("Show tips again", systemImage: "lightbulb") }
                 Button { open(.help) } label: { Label("Help", systemImage: "questionmark.circle") }
             } label: {
-                Image(systemName: "ellipsis.circle").font(.title3)
+                Image(systemName: "ellipsis.circle").font(Theme.title3)
             }
             .accessibilityLabel("More")
         }
@@ -2029,7 +2034,7 @@ struct ResetStage: View {
             Text(restorer.slowToFind
                 ? "Still looking. Stand where this photo was taken and point at the same spot. Turn the lights back to how they were, and move slowly side to side."
                 : "Start where this photo was taken and point at the same spot.")
-                .font(.caption)
+                .font(Theme.caption)
                 .foregroundStyle(.white)
         }
         .padding(8)
@@ -2213,8 +2218,8 @@ struct AimOverlay: View {
                     y: min(max(point.y, inset), size.height - inset))
                 if shown != point {
                     Image(systemName: "arrowtriangle.up.fill")
-                        .font(.system(size: 54))
-                        .foregroundStyle(Color.yellow)
+                        .font(Theme.font(size: 54))
+                        .foregroundStyle(Theme.accent)
                         .shadow(color: .black.opacity(0.7), radius: 2)
                         .rotationEffect(.radians(atan2(point.x - centre.x, centre.y - point.y)))
                         .position(shown)
@@ -2283,8 +2288,8 @@ struct LoadNudge: ViewModifier {
     func body(content: Content) -> some View {
         if active {
             content
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow, lineWidth: 3))
-                .shadow(color: .yellow.opacity(0.8), radius: 8)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.accent, lineWidth: 3))
+                .shadow(color: Theme.accent.opacity(0.8), radius: 8)
                 .phaseAnimator(reduceMotion ? [0] : [0, -9, 9, -7, 7, 0, 0], content: { view, angle in
                     view.rotationEffect(.degrees(Double(angle))).scaleEffect(1.25)
                 }, animation: { angle in

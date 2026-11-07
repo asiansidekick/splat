@@ -1693,8 +1693,8 @@ struct MeasureReticle: View {
             let found = measurer.cursor != nil
             // The crosshair's middle sits on the middle of the screen, the reading just under it.
             ZStack {
-                Circle().stroke(found ? Color.yellow : Color.white.opacity(0.6), lineWidth: 2).frame(width: 34, height: 34)
-                Circle().fill(found ? Color.yellow : Color.white.opacity(0.6)).frame(width: 6, height: 6)
+                Circle().stroke(found ? Theme.accent : Color.white.opacity(0.6), lineWidth: 2).frame(width: 34, height: 34)
+                Circle().fill(found ? Theme.accent : Color.white.opacity(0.6)).frame(width: 6, height: 6)
             }
             .shadow(color: .black.opacity(0.5), radius: 2)
             .allowsHitTesting(false)
@@ -1710,7 +1710,7 @@ struct MeasureHint: View {
     var body: some View {
         if measurer.active {
             Text(measurer.readout)
-                .font(.caption.bold().monospacedDigit())
+                .font(Theme.caption.bold().monospacedDigit())
                 .padding(.horizontal, 8)
                 .padding(.vertical, 2)
                 .background(Color.black.opacity(0.25), in: Capsule())
@@ -1740,10 +1740,10 @@ struct MeasureBar: View {
             layout {
                 if measurer.selected != nil && measurer.moving == nil {
                     if let line = measurer.selectedMeasurement {
-                        small("pencil", "Size", tint: .yellow) { measurer.askLength(line.id) }
+                        small("pencil", "Size", tint: Theme.accent) { measurer.askLength(line.id) }
                     } else if let id = measurer.selected {
-                        small("pencil", "Edit", tint: .yellow) { measurer.askNote(editing: id) }
-                        small("arrow.up.and.down.and.arrow.left.and.right", "Move", tint: .yellow) { measurer.toggleMove() }
+                        small("pencil", "Edit", tint: Theme.accent) { measurer.askNote(editing: id) }
+                        small("arrow.up.and.down.and.arrow.left.and.right", "Move", tint: Theme.accent) { measurer.toggleMove() }
                     }
                 } else if measurer.moving == nil {
                     small("arrow.uturn.backward", "Undo") { measurer.undo() }
@@ -1752,9 +1752,9 @@ struct MeasureBar: View {
                 }
                 Button { measurer.addPoint() } label: {
                     Image(systemName: measurer.start == nil && measurer.moving == nil ? "plus" : "checkmark")
-                        .font(.title3.bold())
+                        .font(Theme.title3.bold())
                         .frame(width: 46, height: 46)
-                        .background(Color.yellow.opacity(0.9), in: Circle())
+                        .background(Theme.accent.opacity(0.9), in: Circle())
                         .foregroundStyle(.black)
                 }
                 .accessibilityLabel(measurer.moving != nil ? "Put the note down here" : measurer.start == nil ? "Start a line here" : "End the line here")
@@ -1790,8 +1790,8 @@ struct MeasureBar: View {
             Button { showingGuide = true } label: { Label("How it works", systemImage: "questionmark.circle") }
         } label: {
             VStack(spacing: 1) {
-                Image(systemName: measurer.tapeMode ? "ruler.fill" : "slider.horizontal.3").font(.body)
-                Text(measurer.tapeMode ? "Drag on tape" : measurer.calibration != 1 ? String(format: "Exact ×%.2f", measurer.calibration) : "Exact").font(.system(size: 9, weight: .semibold))
+                Image(systemName: measurer.tapeMode ? "ruler.fill" : "slider.horizontal.3").font(Theme.body)
+                Text(measurer.tapeMode ? "Drag on tape" : measurer.calibration != 1 ? String(format: "Exact ×%.2f", measurer.calibration) : "Exact").font(Theme.font(size: 9, weight: .semibold))
             }
             .frame(minWidth: 36)
             .foregroundStyle((measurer.tapeMode ? Color.green : Color.white).opacity(0.95))
@@ -1802,8 +1802,8 @@ struct MeasureBar: View {
     private func small(_ symbol: String, _ title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 1) {
-                Image(systemName: symbol).font(.body)
-                Text(title).font(.system(size: 9, weight: .semibold))
+                Image(systemName: symbol).font(Theme.body)
+                Text(title).font(Theme.font(size: 9, weight: .semibold))
             }
             .frame(minWidth: 36)
             .foregroundStyle(tint.opacity(0.95))
@@ -1821,7 +1821,7 @@ struct MeasureGuideSheet: View {
             List {
                 Section {
                     Label("The app's readings are estimates, good to a few per cent. Check them against the real thing: measure something on set with a tape, then correct the app to match.", systemImage: "exclamationmark.triangle")
-                        .font(.body)
+                        .font(Theme.body)
                 }
                 Section("Calibrate with a tape measure") {
                     step("1", "Stretch a tape measure along a flat surface in the picture.")
@@ -1850,8 +1850,8 @@ struct MeasureGuideSheet: View {
 
     private func step(_ number: String, _ text: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(number).font(.headline).foregroundStyle(.yellow).frame(width: 18)
-            Text(text).font(.body)
+            Text(number).font(Theme.headline).foregroundStyle(Theme.accent).frame(width: 18)
+            Text(text).font(Theme.body)
         }
     }
 }
@@ -1875,7 +1875,7 @@ struct MeasurePointer: View {
                 ZStack {
                     ring(at: pointer.start, colour: .white)
                     if hypot(pointer.landed.x - pointer.aim.x, pointer.landed.y - pointer.aim.y) > 3 {
-                        ring(at: pointer.landed, colour: .yellow)
+                        ring(at: pointer.landed, colour: Theme.accent)
                     }
                     loupe(pointer, in: geometry.size)
                 }
@@ -1905,7 +1905,7 @@ struct MeasurePointer: View {
                 Color.black.opacity(0.4)
             }
             if hypot(snap.width, snap.height) > 6 {
-                Circle().stroke(Color.yellow, lineWidth: 2).frame(width: 16, height: 16).offset(snap)
+                Circle().stroke(Theme.accent, lineWidth: 2).frame(width: 16, height: 16).offset(snap)
             }
             Circle().fill(Color.red).frame(width: 7, height: 7)
                 .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
@@ -1983,11 +1983,11 @@ struct MeasureEntry: View {
         return VStack(spacing: 10) {
             if scaling {
                 Text("No depth in this photo. How long is this line in real life?")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.green).multilineTextAlignment(.center)
+                    .font(Theme.subheadline.weight(.semibold)).foregroundStyle(.green).multilineTextAlignment(.center)
             }
             if tape {
                 Text("How long is the tape between those points?")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.green)
+                    .font(Theme.subheadline.weight(.semibold)).foregroundStyle(.green)
             }
             HStack(spacing: 8) {
                 plainButton("Delete", fill: Color.red.opacity(0.85), text: .white) { measurer.deleteMark(id) }
@@ -2008,7 +2008,7 @@ struct MeasureEntry: View {
                     }
                     measurer.dismissEntry()
                 } }
-                plainButton("Set", fill: .yellow, text: .black) {
+                plainButton("Set", fill: Theme.accent, text: .black) {
                     var typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     // Nothing typed keeps the phone's guess.
                     if typed.isEmpty {
@@ -2040,7 +2040,7 @@ struct MeasureEntry: View {
             TextField(guess.map { String(format: "%.4g", Double($0 / factor)) } ?? "0", text: $text)
                 .keyboardType(.decimalPad)
                 .focused($focused)
-                .font(.system(size: 40, weight: .bold, design: .rounded).monospacedDigit())
+                .font(Theme.font(size: 40, weight: .bold, design: .rounded).monospacedDigit())
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white)
                 .padding(.vertical, 2)
@@ -2048,7 +2048,7 @@ struct MeasureEntry: View {
                 .overlay(alignment: .trailing) {
                     if !text.isEmpty {
                         Button { text = ""; problem = nil } label: {
-                            Image(systemName: "xmark.circle.fill").font(.title2).foregroundStyle(.white.opacity(0.6))
+                            Image(systemName: "xmark.circle.fill").font(Theme.title2).foregroundStyle(.white.opacity(0.6))
                                 .padding(.trailing, 8)
                         }
                         .accessibilityLabel("Clear")
@@ -2056,15 +2056,15 @@ struct MeasureEntry: View {
                 }
                 .onChange(of: text) { _, _ in problem = nil }
             if let problem {
-                Text(problem).font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                Text(problem).font(Theme.subheadline.weight(.semibold)).foregroundStyle(.orange)
                     .multilineTextAlignment(.center)
             }
             HStack(spacing: 6) {
                 ForEach(Self.units, id: \.name) { item in
                     Button { unit = item.name } label: {
-                        Text(item.name).font(.subheadline.weight(.semibold))
+                        Text(item.name).font(Theme.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity, minHeight: 32)
-                            .background(unit == item.name ? Color.yellow : Color.white.opacity(0.12), in: Capsule())
+                            .background(unit == item.name ? Theme.accent : Color.white.opacity(0.12), in: Capsule())
                             .foregroundStyle(unit == item.name ? Color.black : Color.white)
                     }
                 }
@@ -2079,7 +2079,7 @@ struct MeasureEntry: View {
 
     private func plainButton(_ title: String, fill: Color, text color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title).font(.subheadline.weight(.bold))
+            Text(title).font(Theme.subheadline.weight(.bold))
                 .frame(maxWidth: .infinity, minHeight: 38)
                 .background(fill, in: RoundedRectangle(cornerRadius: 12))
                 .foregroundStyle(color)
@@ -2093,7 +2093,7 @@ struct MeasureEntry: View {
                     comicButton("DELETE", fill: Color(red: 1, green: 0.4, blue: 0.4)) { measurer.deleteMark(id) }
                 }
                 comicButton("CANCEL", fill: .white) { measurer.dismissEntry() }
-                comicButton(id == nil ? "PLACE IT!" : "SAVE IT!", fill: .yellow) { measurer.saveNote(text, editing: id) }
+                comicButton(id == nil ? "PLACE IT!" : "SAVE IT!", fill: Theme.accent) { measurer.saveNote(text, editing: id) }
             }
             ZStack {
                 SpeechBubble().fill(Color.black).offset(x: 4, y: 4)
@@ -2183,8 +2183,8 @@ struct MeasureToggle: View {
             Haptics.tap()
             measurer.active.toggle()
         } label: {
-            Image(systemName: "ruler").font(.title3)
-                .foregroundStyle(measurer.active ? Color.yellow : Color.white)
+            Image(systemName: "ruler").font(Theme.title3)
+                .foregroundStyle(measurer.active ? Theme.accent : Color.white)
         }
         .accessibilityLabel(measurer.active ? "Stop measuring" : "Measure")
     }

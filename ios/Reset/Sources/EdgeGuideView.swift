@@ -85,7 +85,7 @@ struct EdgeGuideOverlay: View {
                 if state.step != 0, !state.all {
                     // In or out, which the strokes' length alone did not make clear.
                     Label(state.step > 0 ? "STEP IN" : "STEP BACK", systemImage: state.step > 0 ? "arrow.up" : "arrow.down")
-                        .font(.caption.weight(.heavy))
+                        .font(Theme.caption.weight(.heavy))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .background(Color.black.opacity(0.35), in: Capsule())
@@ -182,7 +182,7 @@ struct PauseButton: View {
             action()
         } label: {
             Image(systemName: paused ? "play.fill" : "pause.fill")
-                .font(.system(size: 26, weight: .bold))
+                .font(Theme.font(size: 26, weight: .bold))
                 .foregroundStyle(paused ? Color.orange : Color.white)
                 .frame(width: 66, height: 66)
                 .overlay(Circle().stroke(paused ? Color.orange : Color.white, lineWidth: 3))
@@ -227,7 +227,7 @@ struct HeldCompare: View {
                             .shadow(color: .black.opacity(0.8), radius: 2)
                             .position(x: size.width * (1 - toNow), y: size.height / 2)
                         Image(systemName: "arrow.left.and.right")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(Theme.font(size: 14, weight: .bold))
                             .foregroundStyle(.black)
                             .frame(width: 34, height: 34)
                             .background(Color.white, in: Circle())
@@ -286,7 +286,7 @@ struct ScrubCursor: View {
             .frame(width: 120)
             Text(end)
         }
-        .font(.caption.bold())
+        .font(Theme.caption.bold())
         .foregroundStyle(.white)
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -319,7 +319,7 @@ struct SwipeTags: View {
     private func tag(_ text: String, weight: Double) -> some View {
         let w = min(1, max(0, weight))
         return Text(text)
-            .font(.caption.weight(.heavy))
+            .font(Theme.caption.weight(.heavy))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .foregroundStyle(Color(white: 1 - w * 0.9).opacity(0.6 + 0.4 * w))
@@ -392,13 +392,13 @@ struct SwipeHint: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text("THEN").font(.caption.weight(.heavy))
-            Image(systemName: "chevron.left").font(.caption.weight(.bold))
+            Text("THEN").font(Theme.caption.weight(.heavy))
+            Image(systemName: "chevron.left").font(Theme.caption.weight(.bold))
             Image(systemName: "hand.point.up.fill")
-                .font(.title2)
+                .font(Theme.title2)
                 .offset(x: slid ? 28 : -28)
-            Image(systemName: "chevron.right").font(.caption.weight(.bold))
-            Text("NOW").font(.caption.weight(.heavy))
+            Image(systemName: "chevron.right").font(Theme.caption.weight(.bold))
+            Text("NOW").font(Theme.caption.weight(.heavy))
         }
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.8), radius: 3)

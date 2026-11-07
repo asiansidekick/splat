@@ -326,7 +326,7 @@ struct FreeScanOverlay: View {
                     Spacer()
                     if scanner.phase == .scanning {
                         Text("\(scanner.triangles / 1000)k triangles · \(scanner.pictures) pictures")
-                            .font(.footnote.monospacedDigit())
+                            .font(Theme.footnote.monospacedDigit())
                     }
                 }
                 .padding(.horizontal, 16)
@@ -334,29 +334,29 @@ struct FreeScanOverlay: View {
                 switch scanner.phase {
                 case .scanning:
                     Text("Keep the object in the middle of the screen and walk slowly round it. The blue skin shows what is covered.")
-                        .font(.footnote).multilineTextAlignment(.center).padding(.horizontal, 20)
+                        .font(Theme.footnote).multilineTextAlignment(.center).padding(.horizontal, 20)
                     pill("Finish: just the object") { scanner.finish(isolating: true) }
                     Button("Finish: whole scene") { scanner.finish(isolating: false) }
-                        .font(.subheadline.bold())
+                        .font(Theme.subheadline.bold())
                 case .building:
                     ProgressView()
-                    Text("Joining the pictures and saving…").font(.subheadline)
+                    Text("Joining the pictures and saving…").font(Theme.subheadline)
                 case .done(let url):
-                    Text("Saved in Files > Reset > Scans").font(.footnote)
+                    Text("Saved in Files > Reset > Scans").font(Theme.footnote)
                     pill("Place in the camera") {
                         place(url)
                         scanner.close()
                     }
                     ShareLink(item: url) {
                         Label("Save to Files", systemImage: "square.and.arrow.up")
-                            .font(.headline)
+                            .font(Theme.headline)
                             .padding(.horizontal, 22)
                             .padding(.vertical, 12)
                             .background(Color.white, in: Capsule())
                             .foregroundStyle(.black)
                     }
                 case .failed(let message):
-                    Text(message).font(.subheadline).multilineTextAlignment(.center).padding(.horizontal, 20)
+                    Text(message).font(Theme.subheadline).multilineTextAlignment(.center).padding(.horizontal, 20)
                 }
                 Spacer()
             }
@@ -368,10 +368,10 @@ struct FreeScanOverlay: View {
     private func pill(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.headline)
+                .font(Theme.headline)
                 .padding(.horizontal, 22)
                 .padding(.vertical, 12)
-                .background(Color.yellow, in: Capsule())
+                .background(Theme.accent, in: Capsule())
                 .foregroundStyle(.black)
         }
     }

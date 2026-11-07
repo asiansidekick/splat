@@ -47,7 +47,7 @@ struct TakeNumber: View {
 
     var body: some View {
         Text("\(take.number)")
-            .font(.headline.monospacedDigit())
+            .font(Theme.headline.monospacedDigit())
             .frame(minWidth: 32, minHeight: 32)
             .overlay {
                 if take.circled { Circle().stroke(lineWidth: 2) }
@@ -70,9 +70,9 @@ struct TakeRow: View {
                             .foregroundStyle(.green)
                     }
                 }
-                .font(.subheadline)
+                .font(Theme.subheadline)
                 if !take.note.isEmpty {
-                    Text(take.note).font(.callout).foregroundStyle(.secondary)
+                    Text(take.note).font(Theme.callout).foregroundStyle(.secondary)
                 }
             }
         }

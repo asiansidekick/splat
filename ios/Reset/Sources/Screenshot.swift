@@ -140,7 +140,7 @@ struct ScreenshotButton: View {
             }
         } label: {
             Image(systemName: "camera.viewfinder")
-                .font(.system(size: size * 0.86))
+                .font(Theme.font(size: size * 0.86))
                 .foregroundStyle(.white)
                 .frame(width: size, height: size)
                 .shadow(color: .black.opacity(0.7), radius: 3)

@@ -101,9 +101,9 @@ struct FrameReview: View {
                         .disabled(index == 0)
                     VStack(spacing: 0) {
                         Text("Frame \(index + 1) of \(frames.count)")
-                            .font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).fixedSize()
+                            .font(Theme.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).fixedSize()
                         if index >= reference.keyframes.count {
-                            Text("Snapshot").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                            Text("Snapshot").font(Theme.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
                         }
                     }
                     .frame(minWidth: 96)
@@ -112,7 +112,7 @@ struct FrameReview: View {
                 }
                 HStack {
                     Button { dismiss() } label: {
-                        Text("Done").font(.body.weight(.semibold)).lineLimit(1).fixedSize()
+                        Text("Done").font(Theme.body.weight(.semibold)).lineLimit(1).fixedSize()
                             .padding(.horizontal, 14).frame(height: 40)
                             .background(Capsule().fill(Color.white.opacity(0.18)))
                     }
@@ -130,7 +130,7 @@ struct FrameReview: View {
                 } label: {
                     Image(systemName: editingModels ? "cube.fill" : "cube").frame(width: 40, height: 36)
                 }
-                .tint(editingModels ? .yellow : nil)
+                .tint(editingModels ? Theme.accent : nil)
                 .accessibilityLabel(editingModels ? "Back to dimensions and notes" : "Place 3D models")
                 if editingModels {
                     Button { importingModel = true } label: { Image(systemName: "plus").frame(width: 40, height: 36) }
@@ -139,11 +139,11 @@ struct FrameReview: View {
                 Button { measuring.toggle(); if measuring { editingModels = false } } label: {
                     Image(systemName: measuring ? "ruler.fill" : "ruler").frame(width: 40, height: 36)
                 }
-                .tint(measuring ? .yellow : nil)
+                .tint(measuring ? Theme.accent : nil)
                 .accessibilityLabel(measuring ? "Back to zooming" : "Measure and add notes")
-                Button { measurer.scaleText(by: 0.8) } label: { Text("A").font(.footnote.weight(.bold)).frame(width: 40, height: 36) }
+                Button { measurer.scaleText(by: 0.8) } label: { Text("A").font(Theme.footnote.weight(.bold)).frame(width: 40, height: 36) }
                     .accessibilityLabel("Smaller text")
-                Button { measurer.scaleText(by: 1.25) } label: { Text("A").font(.title3.weight(.bold)).frame(width: 40, height: 36) }
+                Button { measurer.scaleText(by: 1.25) } label: { Text("A").font(Theme.title3.weight(.bold)).frame(width: 40, height: 36) }
                     .accessibilityLabel("Bigger text")
             }
         }
@@ -219,17 +219,17 @@ struct FrameThumb: View {
             } else {
                 Color.white.opacity(0.1)
             }
-            Text("\(number)").font(.caption.weight(.bold)).monospacedDigit()
+            Text("\(number)").font(Theme.caption.weight(.bold)).monospacedDigit()
                 .padding(.horizontal, 4).background(Color.black.opacity(0.6)).foregroundStyle(.white)
             if frame.depthFile == nil {
-                Image(systemName: "ruler").font(.caption).foregroundStyle(.white.opacity(0.7))
+                Image(systemName: "ruler").font(Theme.caption).foregroundStyle(.white.opacity(0.7))
                     .overlay(Rectangle().fill(Color.white.opacity(0.7)).frame(height: 1).rotationEffect(.degrees(-35)))
                     .padding(3).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
         }
         .frame(width: 64, height: 64)
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(current ? Color.yellow : Color.clear, lineWidth: 3))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(current ? Theme.accent : Color.clear, lineWidth: 3))
         .task(id: frame.id) {
             let url = folder.appendingPathComponent(frame.imageFile)
             let orientation = frame.uprightOrientation
@@ -389,7 +389,7 @@ struct FramePage: View {
                         withAnimation(.snappy) { zoom = 1; baseZoom = 1; pan = .zero; basePan = .zero }
                     } label: {
                         Text("\(zoom, specifier: "%.1f")×  Reset")
-                            .font(.footnote.weight(.bold)).foregroundStyle(.white)
+                            .font(Theme.footnote.weight(.bold)).foregroundStyle(.white)
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(Capsule().fill(Color.black.opacity(0.6)))
                     }
@@ -754,7 +754,7 @@ private struct ReviewLine: View {
             Circle().fill(colour).frame(width: 9, height: 9).position(a)
             Circle().fill(colour).frame(width: 9, height: 9).position(b)
             Text(label)
-                .font(.system(size: 15 * scale, weight: .bold, design: .rounded))
+                .font(Theme.font(size: 15 * scale, weight: .bold, design: .rounded))
                 .foregroundStyle(colour)
                 .padding(.horizontal, 6).padding(.vertical, 1)
                 .background(Color.black.opacity(0.55), in: Capsule())

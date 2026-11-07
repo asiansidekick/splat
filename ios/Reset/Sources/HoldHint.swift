@@ -27,20 +27,20 @@ struct HoldHintBubble: View {
         VStack(spacing: 2) {
             ZStack {
                 Circle()
-                    .stroke(Color.yellow, lineWidth: 3)
+                    .stroke(Theme.accent, lineWidth: 3)
                     .frame(width: 34, height: 34)
                     .scaleEffect(pressed ? 1.5 : 0.5)
                     .opacity(pressed ? 0.15 : 0.9)
                 Image(systemName: "hand.point.up.fill")
-                    .font(.system(size: 26))
+                    .font(Theme.font(size: 26))
                     .foregroundStyle(.white)
                     .scaleEffect(pressed ? 0.82 : 1)
                     .offset(y: pressed ? 4 : 0)
             }
             .frame(width: 52, height: 52)
             Text(label)
-                .font(.system(size: 13, weight: .heavy))
-                .foregroundStyle(.yellow)
+                .font(Theme.font(size: 13, weight: .heavy))
+                .foregroundStyle(Theme.accent)
                 .lineLimit(1)
                 .fixedSize()
         }

@@ -90,7 +90,7 @@ struct CallSheetSheet: View {
                         Label("Pick a photo of one", systemImage: "photo")
                     }
                     if reading { HStack { ProgressView(); Text("Reading…").foregroundStyle(.secondary) } }
-                    if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
+                    if let message { Text(message).font(Theme.footnote).foregroundStyle(.orange) }
                 }
                 if !found.isEmpty {
                     Section("Found on the sheet. Fix anything wrong, then add.") {
@@ -111,7 +111,7 @@ struct CallSheetSheet: View {
                             found = []
                             message = nil
                         } label: { Label("Add \(found.count) scene\(found.count == 1 ? "" : "s")", systemImage: "plus.circle.fill") }
-                            .tint(.yellow)
+                            .tint(Theme.accent)
                     }
                 }
                 if !store.scenes.isEmpty {
