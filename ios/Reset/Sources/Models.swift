@@ -35,6 +35,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         var shown: Int
     }
     private var cutouts: [UUID: CutoutState] = [:]
+    /// The saved description of each cut-out, kept so a new pose can be written back to its file.
+    private var cutoutPackages: [UUID: CutoutPackage] = [:]
     private var cutoutTimer: Timer?
     /// Each model's box in its own coordinates, measured on loading, before any arrows are hung
     /// on it (they would make it look bigger).
@@ -171,12 +173,48 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         refreshDimensions(id)
     }
 
+    /// Tipped back or forward, and slanted sideways, about the card's foot.
+    private static func poseMatrix(tilt: Float, skew: Float) -> simd_float4x4 {
+        let t = tilt * .pi / 180
+        var shear = matrix_identity_float4x4
+        shear.columns.1.x = tan(min(max(skew, -60), 60) * .pi / 180)  // x grows with height
+        let rotation = simd_float4x4(simd_quatf(angle: -t, axis: SIMD3(1, 0, 0)))
+        return rotation * shear
+    }
+
+    var selectedIsCutout: Bool { selectedModel.map { cutoutPackages[$0] != nil } ?? false }
+
+    /// Tips or slants the selected cut-out a step (degrees), and keeps the pose in its file.
+    func nudgePose(tilt: Float = 0, skew: Float = 0) {
+        guard let id = selectedModel, var package = cutoutPackages[id], let model = models.first(where: { $0.id == id }),
+              let plane = cutouts[id]?.plane else { return }
+        package.tilt = min(max(package.tilt + tilt, -80), 80)
+        package.skew = min(max(package.skew + skew, -60), 60)
+        savePose(package, id: id, file: model.file, plane: plane)
+    }
+
+    func resetPose() {
+        guard let id = selectedModel, var package = cutoutPackages[id], let model = models.first(where: { $0.id == id }),
+              let plane = cutouts[id]?.plane else { return }
+        package.tilt = 0
+        package.skew = 0
+        savePose(package, id: id, file: model.file, plane: plane)
+    }
+
+    private func savePose(_ package: CutoutPackage, id: UUID, file: String, plane: SCNNode) {
+        cutoutPackages[id] = package
+        plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew)
+        try? JSONEncoder().encode(package).write(to: folder.appendingPathComponent(file), options: .atomic)
+        if let index = models.firstIndex(where: { $0.id == id }) { models[index].moved = Date() }
+    }
+
     func deleteSelectedModel() {
         guard let id = selectedModel, let index = models.firstIndex(where: { $0.id == id }) else { return }
         modelNodes[id]?.removeFromParentNode()
         modelNodes[id] = nil
         boxes[id] = nil
         cutouts[id] = nil
+        cutoutPackages[id] = nil
         if cutouts.isEmpty { stopCutoutTimer() }
         try? FileManager.default.removeItem(at: folder.appendingPathComponent(models[index].file))
         models.remove(at: index)
@@ -478,12 +516,17 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         plane.name = "cutout-plane"
         // The card's origin is the middle of its foot.
         plane.pivot = SCNMatrix4MakeTranslation(0, -Float(height) / 2, 0)
+        plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew)
+        // The holder turns to face the camera; the card inside it is tipped and slanted from there.
+        let holder = SCNNode()
         let billboard = SCNBillboardConstraint()
         billboard.freeAxes = .Y
-        plane.constraints = [billboard]
+        holder.constraints = [billboard]
+        holder.addChildNode(plane)
         let node = SCNNode()
         node.name = model.id.uuidString
-        node.addChildNode(plane)
+        node.addChildNode(holder)
+        cutoutPackages[model.id] = package
         let widest = (aspects.max() ?? 1) * height
         boxes[model.id] = (SIMD3(-widest / 2, 0, -0.01), SIMD3(widest / 2, height, 0.01))
         node.simdTransform = matrix4(model.transform)
@@ -590,6 +633,22 @@ struct ModelOverlay: View {
                     .controlSize(.small)
                     .lineLimit(1)
                     .fixedSize(horizontal: false, vertical: true)
+                    if placer.selectedIsCutout {
+                        HStack {
+                            Text("Tilt").font(Theme.subheadline)
+                            Button("Back") { placer.nudgePose(tilt: 7) }
+                            Button("Forward") { placer.nudgePose(tilt: -7) }
+                            Text("Slant").font(Theme.subheadline)
+                            Button("Left") { placer.nudgePose(skew: -7) }
+                            Button("Right") { placer.nudgePose(skew: 7) }
+                            Spacer(minLength: 0)
+                            Button("Straight") { placer.resetPose() }
+                        }
+                        .buttonStyle(.bordered)
+                        .font(Theme.subheadline)
+                        .controlSize(.small)
+                        .lineLimit(1)
+                    }
                     HStack {
                         Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
                         Spacer()

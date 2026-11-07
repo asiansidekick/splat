@@ -451,6 +451,13 @@ expect(parsed.first?.title == "INT. KITCHEN - DAY" && parsed.last?.title == "Roo
 let cutId = UUID()
 expect(ReferenceSyncLibrary.kind("model-\(cutId.uuidString).cutout") == .model && ReferenceSyncLibrary.path("model-\(cutId.uuidString).cutout") == "models/\(cutId.uuidString).cutout"
     && ReferenceSyncLibrary.syncName(modelFile: "models/\(cutId.uuidString).cutout") == "model-\(cutId.uuidString).cutout", "a cut-out travels like a model")
+
+// A cut-out saved before poses existed reads as straight; a posed one keeps its tilt and slant.
+let oldCut = try! JSONDecoder().decode(CutoutPackage.self, from: Data(#"{"name":"Bob","height":1.7,"views":[]}"#.utf8))
+expect(oldCut.tilt == 0 && oldCut.skew == 0 && oldCut.name == "Bob", "an old cut-out has no pose")
+let posedCut = CutoutPackage(name: "Bob", height: 1.7, views: [], tilt: 14, skew: -7)
+let posedBack = try! JSONDecoder().decode(CutoutPackage.self, from: JSONEncoder().encode(posedCut))
+expect(posedBack == posedCut && posedBack.tilt == 14 && posedBack.skew == -7, "a cut-out keeps its pose")
 expect(Cutout.viewAngle(camera: SIMD3(0, 1.5, 3), position: .zero, front: SIMD3(0, 0, 1)) == 0, "in front of it reads 0")
 expect(abs(Cutout.viewAngle(camera: SIMD3(3, 1.5, 0), position: .zero, front: SIMD3(0, 0, 1)) - 90) < 0.01, "on its left reads 90")
 expect(abs(Cutout.viewAngle(camera: SIMD3(-3, 1.5, 0), position: .zero, front: SIMD3(0, 0, 1)) + 90) < 0.01, "on its right reads -90")

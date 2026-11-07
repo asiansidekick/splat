@@ -20,6 +20,29 @@ struct CutoutPackage: Codable, Equatable {
     /// How tall the thing really is (metres): every photo is scaled so the thing stands this tall.
     var height: Float
     var views: [View]
+    /// How the card is posed relative to the camera, in degrees: tipped back (+) or forward (-), and slanted
+    /// sideways like italic type (+ to the right).
+    var tilt: Float = 0
+    var skew: Float = 0
+
+    init(name: String, height: Float, views: [View], tilt: Float = 0, skew: Float = 0) {
+        self.name = name
+        self.height = height
+        self.views = views
+        self.tilt = tilt
+        self.skew = skew
+    }
+
+    private enum CodingKeys: String, CodingKey { case name, height, views, tilt, skew }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        height = try c.decode(Float.self, forKey: .height)
+        views = try c.decode([View].self, forKey: .views)
+        tilt = try c.decodeIfPresent(Float.self, forKey: .tilt) ?? 0
+        skew = try c.decodeIfPresent(Float.self, forKey: .skew) ?? 0
+    }
 }
 
 enum Cutout {
