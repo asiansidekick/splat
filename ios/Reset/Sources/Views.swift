@@ -1080,27 +1080,30 @@ struct Gallery: View {
             if let shown {
                 HStack(spacing: 10) {
                     Button { dismiss(); action(.measure, shown) } label: {
-                        Label("Dimensions & notes", systemImage: "ruler").font(Theme.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+                        Image(systemName: "ruler").font(Theme.font(size: 22, weight: .semibold)).frame(width: 30, height: 30)
                     }
                     .buttonStyle(.bordered)
+                    .accessibilityLabel("Dimensions and notes")
                     Button { dismiss(); action(.sketch, shown) } label: {
-                        Label("Draw", systemImage: "pencil.tip.crop.circle").font(Theme.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+                        Image(systemName: "pencil.tip.crop.circle").font(Theme.font(size: 22, weight: .semibold)).frame(width: 30, height: 30)
                     }
                     .buttonStyle(.bordered)
-                }
-                .frame(maxWidth: 360)
-                Button {
-                    load(shown)
-                } label: {
-                    Label("Load \(shown.slate.isEmpty ? "ghost" : shown.slate)", systemImage: "camera.viewfinder")
-                        .font(Theme.headline)
-                        .frame(maxWidth: 360)
-                        .padding(.vertical, 6)
-                }
+                    .accessibilityLabel("Draw")
+                    Button {
+                        load(shown)
+                    } label: {
+                        Label("Load \(shown.slate.isEmpty ? "ghost" : shown.slate)", systemImage: "camera.viewfinder")
+                            .font(Theme.headline)
+                            .lineLimit(1).minimumScaleFactor(0.7)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
                 .buttonStyle(.borderedProminent)
                 .font(Theme.headline)
                 .tint(Theme.accent)
                 .foregroundStyle(.black)
+                }
+                .frame(maxWidth: 400)
                 .padding(.horizontal)
                 .padding(.bottom, 8)
             }
