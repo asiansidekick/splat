@@ -101,29 +101,43 @@ struct CaptureView: View {
         } modes: { vertical in
             referenceStrip(vertical: vertical)
         } leading: {
-            referenceButton
-        } shutter: {
-            // Upright: Next take and pause flank the shutter, each in a cell as wide as the shutter's, so
-            // the shutter stays dead centre. Pause is on the shutter's right, Next take on its left
-            // (swapped when left-handed). On its side there is no room across, so pause goes under it.
+            // Upright, the whole bottom row is laid out in the shutter's slot, in four equal cells.
             if previewSize.width > previewSize.height {
+                referenceButton(size: 52)
+            } else {
+                Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
+            }
+        } shutter: {
+            if previewSize.width > previewSize.height {
+                // On its side there is no room across, so pause goes under the shutter.
                 VStack(spacing: 10) {
                     ShutterButton(style: .photo) { shoot() }
                         .accessibilityLabel("Take photo")
                     pauseButton(size: 56)
                 }
             } else {
-                HStack(spacing: 8) {
-                    if leftHanded { pauseButton(size: 74).frame(width: 74) } else { nextTakeButton.frame(width: 74) }
-                    ShutterButton(style: .photo) { shoot() }
-                        .accessibilityLabel("Take photo")
-                    if leftHanded { nextTakeButton.frame(width: 74) } else { pauseButton(size: 74).frame(width: 74) }
+                // Four buttons the same size in evenly spaced cells: reference, next take, shutter, pause
+                // (the other way round when left-handed).
+                HStack(spacing: 0) {
+                    ForEach(leftHanded ? [3, 2, 1, 0] : [0, 1, 2, 3], id: \.self) { slot in
+                        Group {
+                            switch slot {
+                            case 0: referenceButton(size: 74)
+                            case 1: nextTakeButton(size: 74)
+                            case 2:
+                                ShutterButton(style: .photo) { shoot() }
+                                    .accessibilityLabel("Take photo")
+                            default: pauseButton(size: 74)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
                 }
             }
         } trailing: {
-            // Upright, Next take is beside the shutter instead; on its side it sits at the top of the column.
+            // On its side, Next take sits at the top of the column.
             if previewSize.width > previewSize.height {
-                nextTakeButton
+                nextTakeButton(size: 56)
             } else {
                 Color.clear.frame(width: 1, height: 1).allowsHitTesting(false)
             }
@@ -241,10 +255,23 @@ struct CaptureView: View {
 
     // MARK: Next take
 
-    private var nextTakeButton: some View {
-        SideButton(title: "Next T\(take + 1)", systemImage: "forward.end.fill", tint: .yellow) {
+    /// Next take, in the same ring style as the shutter and pause.
+    private func nextTakeButton(size: CGFloat) -> some View {
+        Button {
+            Haptics.tap()
             setTake(take + 1)
+        } label: {
+            VStack(spacing: 1) {
+                Image(systemName: "forward.end.fill").font(.system(size: size * 0.28, weight: .bold))
+                Text("T\(take + 1)").font(.system(size: size * 0.2, weight: .bold)).monospacedDigit()
+            }
+            .foregroundStyle(Color.yellow)
+            .frame(width: size, height: size)
+            .background(Color.white.opacity(0.15), in: Circle())
+            .overlay(Circle().stroke(Color.white, lineWidth: size > 60 ? 4 : 3))
+            .contentShape(Circle())
         }
+        .buttonStyle(PressScale())
         .contextMenu {
             if take > 0 {
                 Button("Back to \(Slate.takeName(take - 1))") { setTake(take - 1) }
@@ -824,7 +851,7 @@ struct CaptureView: View {
     /// One thumbnail, like the Camera app's: the overlay being shown, else the latest reference.
     /// Tap it for the gallery.
     @ViewBuilder
-    private var referenceButton: some View {
+    private func referenceButton(size: CGFloat) -> some View {
         let shown = ghostID.flatMap { id in board?.shots.first { $0.id == id } }
         let shot = shown ?? board?.references.last
         Button {
@@ -844,7 +871,7 @@ struct CaptureView: View {
                     Image(systemName: "photo.on.rectangle").font(.title3)
                 }
             }
-            .frame(width: 52, height: 52)
+            .frame(width: size, height: size)
             .background(.white.opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(alignment: .bottom) {
