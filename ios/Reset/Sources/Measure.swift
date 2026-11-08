@@ -166,6 +166,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         /// The flat surface the line was drawn on (a point on it and its normal), when the depth under it was flat.
         var plane: (point: SIMD3<Float>, normal: SIMD3<Float>)?
         var shifted = false
+        /// When the remembered picture was last renewed from a newer view of the same spot.
+        var refreshedAt: TimeInterval = 0
     }
     private var tracks: [String: EndTrack] = [:]
     /// Each held line's length, kept while its ends follow the picture, so holding never stretches or shrinks it.
@@ -385,6 +387,14 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
                 continue
             }
             track.matches += 1
+            // The floor looks different as the phone moves round it, so a spot that is still found but no longer a
+            // near-perfect match is remembered afresh from this view. Otherwise the end loses it for good once the
+            // phone has moved (Phil's 2026-11-08 log: matches stopped and misses climbed after about 3 seconds).
+            if hit.score < 0.92, frame.timestamp - track.refreshedAt > 0.4,
+               let fresh = Measurer.lumaGrid(frame, centre: SIMD2(centre.x + hit.dx, centre.y + hit.dy), half: Measurer.patchHalf) {
+                track.patch = fresh
+                track.refreshedAt = frame.timestamp
+            }
             let matched = SIMD2(Float((centre.x + hit.dx) * 2) + 1, Float((centre.y + hit.dy) * 2) + 1)
             let second = Measurer.ray(through: matched, in: frame)
             if let plane = track.plane {
