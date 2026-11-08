@@ -231,7 +231,11 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         pan.maximumNumberOfTouches = 1
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         let rotate = UIRotationGestureRecognizer(target: self, action: #selector(handleRotate(_:)))
-        for gesture in [tap, pan, pinch, rotate] as [UIGestureRecognizer] {
+        // Two fingers dragging tips and slants a cut-out: up and down tilts it, sideways slants it.
+        let pose = UIPanGestureRecognizer(target: self, action: #selector(handlePose(_:)))
+        pose.minimumNumberOfTouches = 2
+        pose.maximumNumberOfTouches = 2
+        for gesture in [tap, pan, pinch, rotate, pose] as [UIGestureRecognizer] {
             gesture.delegate = self
             view.addGestureRecognizer(gesture)
         }
@@ -239,6 +243,19 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     nonisolated func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
         true
+    }
+
+    @objc private func handlePose(_ gesture: UIPanGestureRecognizer) {
+        let moved = gesture.translation(in: gesture.view)
+        gesture.setTranslation(.zero, in: gesture.view)
+        guard !pinching, let id = selectedModel, var package = cutoutPackages[id], let plane = cutouts[id]?.plane,
+              let model = models.first(where: { $0.id == id }) else { return }
+        // Pushing up on the card tips its top away from you.
+        package.tilt = min(max(package.tilt - Float(moved.y) * 0.3, -80), 80)
+        package.skew = min(max(package.skew + Float(moved.x) * 0.2, -60), 60)
+        cutoutPackages[id] = package
+        plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew)
+        if gesture.state == .ended { savePose(package, id: id, file: model.file, plane: plane) }
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -579,7 +596,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private func refreshDimensions(_ id: UUID) {
         guard let node = modelNodes[id] else { return }
         node.childNode(withName: ModelDimensions.nodeName, recursively: false)?.removeFromParentNode()
-        guard showDimensions, let box = boxes[id] else { return }
+        guard showDimensions, cutoutPackages[id] == nil, let box = boxes[id] else { return }
         node.addChildNode(ModelDimensions.make(low: box.low, high: box.high, scale: node.simdScale.x))
     }
 
@@ -621,48 +638,46 @@ struct ModelOverlay: View {
                     .background(.ultraThinMaterial, in: Capsule())
             }
             else if let name = placer.selectedModelName {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(placer.lifting ? "\(name): drag up or down to lift it" : "\(name): drag to move (it stands on surfaces), pinch to scale, twist to turn").font(Theme.caption)
-                    Text("W × D × H  \(placer.sizeText)").font(Theme.caption.bold().monospacedDigit())
-                    HStack {
-                        Button {
-                            placer.showDimensions.toggle()
-                        } label: {
-                            Image(systemName: placer.showDimensions ? "ruler.fill" : "ruler")
-                        }
-                        .accessibilityLabel(placer.showDimensions ? "Hide size arrows" : "Show size arrows")
-                        Button {
-                            placer.lifting.toggle()
-                        } label: {
-                            Image(systemName: "arrow.up.and.down")
-                        }
-                        .tint(placer.lifting ? Theme.accent : nil)
-                        .accessibilityLabel(placer.lifting ? "Drag moves it across again" : "Drag lifts it up and down")
-                        if showsFloor { Button("Floor") { placer.dropToFloor() } }
-                        Button("Bring here") { placer.bringToView() }
-                        Button("True size") { placer.resetSelectedModelSize() }
-                        Spacer(minLength: 0)
-                    }
-                    .buttonStyle(.bordered)
-                    .font(Theme.headline)
-                    .controlSize(.small)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 8) {
                     if placer.selectedIsCutout {
-                        HStack {
-                            Text("Tilt").font(Theme.subheadline)
-                            Button("Back") { placer.nudgePose(tilt: 7) }
-                            Button("Forward") { placer.nudgePose(tilt: -7) }
-                            Text("Slant").font(Theme.subheadline)
-                            Button("Left") { placer.nudgePose(skew: -7) }
-                            Button("Right") { placer.nudgePose(skew: 7) }
+                        // A cut-out is handled with the fingers: nothing to read, nothing to press but these four.
+                        Text("Drag to move. Pinch to resize. Twist to turn. Two fingers up or down to tilt, sideways to slant.")
+                            .font(Theme.subheadline)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            Button("Bring here") { placer.bringToView() }
+                            Button("Straighten") { placer.resetPose() }
                             Spacer(minLength: 0)
-                            Button("Straight") { placer.resetPose() }
                         }
                         .buttonStyle(.bordered)
                         .font(Theme.subheadline)
-                        .controlSize(.small)
                         .lineLimit(1)
+                    } else {
+                        Text(placer.lifting ? "\(name): drag up or down to lift it" : "\(name): drag to move (it stands on surfaces), pinch to scale, twist to turn")
+                            .font(Theme.subheadline)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("W × D × H  \(placer.sizeText)").font(Theme.subheadline.bold().monospacedDigit())
+                        HStack(spacing: 8) {
+                            Button {
+                                placer.showDimensions.toggle()
+                            } label: {
+                                Image(systemName: placer.showDimensions ? "ruler.fill" : "ruler")
+                            }
+                            Button {
+                                placer.lifting.toggle()
+                            } label: {
+                                Image(systemName: "arrow.up.and.down")
+                            }
+                            .tint(placer.lifting ? Theme.accent : nil)
+                            if showsFloor { Button("Floor") { placer.dropToFloor() } }
+                            Button("True size") { placer.resetSelectedModelSize() }
+                            Button("Bring here") { placer.bringToView() }
+                            Spacer(minLength: 0)
+                        }
+                        .buttonStyle(.bordered)
+                        .font(Theme.subheadline)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     }
                     HStack {
                         Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
@@ -670,11 +685,10 @@ struct ModelOverlay: View {
                         Button("Done") { placer.selectedModel = nil }
                     }
                     .buttonStyle(.bordered)
-                    .font(Theme.headline)
-                    .controlSize(.small)
+                    .font(Theme.subheadline)
                 }
-                .padding(8)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .padding(10)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
                 .frame(maxWidth: 420)
             }
         }
