@@ -656,6 +656,30 @@ struct ModelOverlay: View {
                     .padding(6)
                     .background(.ultraThinMaterial, in: Capsule())
             }
+            else if placer.selectedIsCutout {
+                // Phil, 2026-11-08: the cut-out panel took too much of the screen. One short line of help with a soft
+                // shadow, and one row of buttons, no panel behind.
+                VStack(spacing: 4) {
+                    Text("Drag, pinch, twist. Two fingers to tilt or slant.")
+                        .font(Theme.caption)
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
+                        .shadow(color: .black.opacity(0.5), radius: 6)
+                        .allowsHitTesting(false)
+                    HStack(spacing: 6) {
+                        Button("Place here") { placer.bringToView() }
+                        Button("Straighten") { placer.resetPose() }
+                        Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
+                        Button("Done") { placer.selectedModel = nil }
+                    }
+                    .buttonStyle(.bordered)
+                    .font(Theme.caption)
+                    .controlSize(.small)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                }
+                .frame(maxWidth: 420)
+            }
             else if let name = placer.selectedModelName {
                 VStack(alignment: .leading, spacing: 8) {
                     if placer.selectedIsCutout {
@@ -664,7 +688,7 @@ struct ModelOverlay: View {
                             .font(Theme.subheadline)
                             .fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 8) {
-                            Button("Bring here") { placer.bringToView() }
+                            Button("Place here") { placer.bringToView() }
                             Button("Straighten") { placer.resetPose() }
                             Spacer(minLength: 0)
                         }
@@ -690,7 +714,7 @@ struct ModelOverlay: View {
                             .tint(placer.lifting ? Theme.accent : nil)
                             if showsFloor { Button("Floor") { placer.dropToFloor() } }
                             Button("True size") { placer.resetSelectedModelSize() }
-                            Button("Bring here") { placer.bringToView() }
+                            Button("Place here") { placer.bringToView() }
                             Spacer(minLength: 0)
                         }
                         .buttonStyle(.bordered)
