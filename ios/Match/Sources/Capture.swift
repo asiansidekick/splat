@@ -1015,7 +1015,7 @@ struct CaptureView: View {
             .background(Theme.chip)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(alignment: .bottom) {
-                if let shot { TimeStamp(date: shot.taken, size: 8).offset(y: 9) }
+                if let shot { TimeStamp(date: shot.taken, size: size > 60 ? 12 : 10).offset(y: 10) }
             }
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(shown != nil ? Theme.accent : Theme.text, lineWidth: 2))
         }

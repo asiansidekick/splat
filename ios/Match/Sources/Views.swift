@@ -569,7 +569,7 @@ struct TimeStamp: View {
     var body: some View {
         Text(Calendar.current.isDateInToday(date)
              ? date.formatted(date: .omitted, time: .shortened)
-             : date.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
+             : date.formatted(.dateTime.month(.abbreviated).day()) + " " + date.formatted(date: .omitted, time: .shortened))
             .font(.custom("AvenirNextCondensed-Bold", fixedSize: size).monospacedDigit())
             .foregroundStyle(.white)
             .lineLimit(1)
