@@ -895,8 +895,13 @@ struct ReferenceThumbnail: View {
                 .padding(.horizontal, 4)
                 .padding(.vertical, 1)
                 .frame(width: size)
-                .background(Color.black.opacity(0.65))
                 .foregroundStyle(.white)
+                // Soft shadows round the letters instead of a hard block behind them (Phil, 2026-11-08).
+                .shadow(color: .black.opacity(0.95), radius: 1.5, x: 0, y: 1)
+                .shadow(color: .black.opacity(0.8), radius: 5, x: 0, y: 0)
+                .background(
+                    LinearGradient(colors: [.clear, .black.opacity(0.35)], startPoint: .top, endPoint: .bottom)
+                )
             }
         }
         .frame(width: size, height: size)
