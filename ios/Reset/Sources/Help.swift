@@ -17,6 +17,11 @@ struct HelpView: View {
                     ShareLink(item: Diagnostics.reportURL()) {
                         Label("Send feedback log", systemImage: "ladybug")
                     }
+                    NavigationLink {
+                        SurfaceTestView()
+                    } label: {
+                        Label("Surface test (24 s)", systemImage: "square.on.square.dashed")
+                    }
                 } header: {
                     Text("Testing")
                 } footer: {
