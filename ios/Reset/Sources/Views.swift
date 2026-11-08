@@ -1476,7 +1476,6 @@ struct CaptureStage: View {
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
-                ModelSizeBadge(placer: recorder.placer).hiddenInScreenshots()
                 MeasureReticle(measurer: recorder.measurer).hiddenInScreenshots()
                 if mode == .snapshot && (recorder.pendingSave || recorder.saving || justSaved) {
                     ScanProgressOverlay(
@@ -1996,7 +1995,6 @@ struct ResetStage: View {
                 .padding(8)
                 .clearOfControls()
                 .hiddenInScreenshots()
-                ModelSizeBadge(placer: restorer.placer).hiddenInScreenshots()
                 if !restorer.paused {
                     MeasureReticle(measurer: restorer.measurer).hiddenInScreenshots()
                 }

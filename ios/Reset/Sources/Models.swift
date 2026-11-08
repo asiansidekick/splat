@@ -608,6 +608,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 plane.width = CGFloat(state.height * state.aspects[best])
                 plane.firstMaterial?.diffuse.contents = state.images[best]
             }
+            if showDimensions { refreshDimensions(id) }
         }
     }
 
@@ -615,6 +616,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private func refreshDimensions(_ id: UUID) {
         guard let node = modelNodes[id] else { return }
         node.childNode(withName: ModelDimensions.nodeName, recursively: false)?.removeFromParentNode()
+        if let state = cutouts[id], let holder = state.plane.parent {
+            // A cut-out: width and height of the photo shown now, on the card's holder so they face the camera with it.
+            holder.childNode(withName: ModelDimensions.nodeName, recursively: false)?.removeFromParentNode()
+            guard showDimensions else { return }
+            let w = state.height * state.aspects[state.shown]
+            holder.addChildNode(ModelDimensions.make(low: SIMD3(-w / 2, 0, 0), high: SIMD3(w / 2, state.height, 0), scale: node.simdScale.x))
+            return
+        }
         guard showDimensions, cutoutPackages[id] == nil, let box = boxes[id] else { return }
         node.addChildNode(ModelDimensions.make(low: box.low, high: box.high, scale: node.simdScale.x))
     }
@@ -669,6 +678,7 @@ struct ModelOverlay: View {
                     HStack(spacing: 6) {
                         Button("Place here") { placer.bringToView() }
                         Button("Straighten") { placer.resetPose() }
+                        Button(placer.showDimensions ? "Hide sizes" : "Sizes") { placer.showDimensions.toggle() }
                         Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
                         Button("Done") { placer.selectedModel = nil }
                     }

@@ -67,7 +67,6 @@ struct FrameReview: View {
                     .padding(.bottom, 84)
                     .padding(.horizontal, 12)
             }
-            ModelSizeBadge(placer: placer)
         }
         .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result, frames.indices.contains(index) else { return }
