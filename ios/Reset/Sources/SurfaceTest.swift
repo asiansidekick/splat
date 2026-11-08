@@ -16,9 +16,17 @@ final class SurfaceTest: ObservableObject {
     private var results: [String] = []
     private let steps: [(name: String, depth: Bool)] = [("ARKit on its own", false), ("ARKit with LiDAR depth", true)]
 
+    static let willStart = Notification.Name("SurfaceTestWillStart")
+    static let didEnd = Notification.Name("SurfaceTestDidEnd")
+
     func start() {
         Diagnostics.log("Surface test: started")
-        run(step: 0)
+        // Reset's own camera session first steps aside: two sessions at once fight for the camera.
+        NotificationCenter.default.post(name: SurfaceTest.willStart, object: nil)
+        Task {
+            try? await Task.sleep(for: .seconds(0.5))
+            run(step: 0)
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -29,6 +37,7 @@ final class SurfaceTest: ObservableObject {
         timer = nil
         session.pause()
         if !done { Diagnostics.log("Surface test: closed early. " + results.joined(separator: "; ")) }
+        NotificationCenter.default.post(name: SurfaceTest.didEnd, object: nil)
     }
 
     private func run(step: Int) {

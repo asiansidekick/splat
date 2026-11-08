@@ -83,7 +83,29 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     /// usually ready by the time the shutter is tapped.
     private var lastUseLiDAR = false
 
+    private var watchingSurfaceTest = false
+
+    /// The Surface test in Help runs its own ARKit session; this one steps aside for it and comes back after.
+    private func watchSurfaceTest() {
+        guard !watchingSurfaceTest else { return }
+        watchingSurfaceTest = true
+        NotificationCenter.default.addObserver(forName: SurfaceTest.willStart, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.capturing, !self.pendingSave, !self.saving else { return }
+                self.measurer.active = false
+                self.session.pause()
+            }
+        }
+        NotificationCenter.default.addObserver(forName: SurfaceTest.didEnd, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.capturing, !self.pendingSave, !self.saving else { return }
+                self.prepare(useLiDAR: self.lastUseLiDAR)
+            }
+        }
+    }
+
     func prepare(useLiDAR: Bool) {
+        watchSurfaceTest()
         lastUseLiDAR = useLiDAR
         // A new session has new coordinates, so models placed in the old one are cleared.
         placer.removeAll()
