@@ -256,7 +256,13 @@ struct Homography: Equatable {
         var out = [Double](repeating: 0, count: 9)
         for r in 0..<3 {
             for c in 0..<3 {
-                out[r * 3 + c] = (0..<3).reduce(0) { $0 + m[r * 3 + $1] * first.m[$1 * 3 + c] }
+                var sum: Double = 0
+                for k in 0..<3 {
+                    let left: Double = m[r * 3 + k]
+                    let right: Double = first.m[k * 3 + c]
+                    sum += left * right
+                }
+                out[r * 3 + c] = sum
             }
         }
         return Homography(m: out)
@@ -267,7 +273,7 @@ struct Homography: Equatable {
         let c00 = a[4] * a[8] - a[5] * a[7], c01 = a[5] * a[6] - a[3] * a[8], c02 = a[3] * a[7] - a[4] * a[6]
         let det = a[0] * c00 + a[1] * c01 + a[2] * c02
         guard abs(det) > 1e-12 else { return nil }
-        let inv = [
+        let inv: [Double] = [
             c00, a[2] * a[7] - a[1] * a[8], a[1] * a[5] - a[2] * a[4],
             c01, a[0] * a[8] - a[2] * a[6], a[2] * a[3] - a[0] * a[5],
             c02, a[1] * a[6] - a[0] * a[7], a[0] * a[4] - a[1] * a[3],

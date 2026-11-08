@@ -515,7 +515,9 @@ do {
         let t = φ * .pi / 180
         let forward = SIMD3<Double>(0, sin(t), cos(t)), up = SIMD3<Double>(0, cos(t), -sin(t)), right = SIMD3<Double>(1, 0, 0)
         let z = simd_dot(d, forward)
-        return CGPoint(x: centre.x + f * simd_dot(d, right) / z, y: centre.y - f * simd_dot(d, up) / z)
+        let x: Double = Double(centre.x) + f * simd_dot(d, right) / z
+        let y: Double = Double(centre.y) - f * simd_dot(d, up) / z
+        return CGPoint(x: x, y: y)
     }
     let points = [SIMD3<Double>(0.3, 0.2, 2), SIMD3<Double>(-0.4, -0.5, 3), SIMD3<Double>(0.1, 0.6, 1.5), SIMD3<Double>(0, 0, 4)]
     let key = OverlayWarp.keystone(degrees: 8, focal: f, centre: centre)
