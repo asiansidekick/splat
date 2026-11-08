@@ -329,7 +329,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let mean = patch.reduce(0, +) / Float(patch.count)
             let spread = (patch.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Float(patch.count)).squareRoot()
             // Plain sand or a flat wall has nothing to hold on to.
-            guard spread > 3.5 else { continue }
+            guard spread > 2.0 else { continue }
             let through = Measurer.ray(through: SIMD2(Float(centre.x * 2) + 1, Float(centre.y * 2) + 1), in: frame)
             let depth = simd_dot(point - through.origin, through.direction)
             guard depth > 0.1 else { continue }
