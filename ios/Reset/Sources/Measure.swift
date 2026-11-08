@@ -336,7 +336,12 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             // at the depth the LiDAR gave, instead of trusting the phone's pose alone (which drifts in dim rooms).
             let back = frame.camera.transform.columns.2
             let facing = (point: point, normal: simd_normalize(SIMD3(back.x, back.y, back.z)))
-            tracks["\(line.id.uuidString):\(end)"] = EndTrack(patch: patch, origin: through.origin, direction: through.direction, depth: depth, first: depth, plane: plane ?? facing)
+            // Looking well down at it, the thing is nearly always a floor or a table: hold the end on a level plane through
+            // it. A plane facing the camera slides the end along the view as the phone walks round, so the picture
+            // under it is no longer where the end is and the hold is lost (Phil's 2026-11-08 logs).
+            let looksDown = frame.camera.transform.columns.2.y > 0.4  // the camera's back axis points up when it looks down
+            let level = (point: point, normal: SIMD3<Float>(0, 1, 0))
+            tracks["\(line.id.uuidString):\(end)"] = EndTrack(patch: patch, origin: through.origin, direction: through.direction, depth: depth, first: depth, plane: plane ?? (looksDown ? level : facing))
         }
     }
 
