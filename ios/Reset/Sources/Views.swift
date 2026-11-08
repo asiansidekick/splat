@@ -1281,6 +1281,9 @@ struct Gallery: View {
     /// Short, one-line rows so the whole menu fits on screen without scrolling (Phil, 2026-11-05).
     @ViewBuilder
     private func menuItems(for reference: Reference) -> some View {
+        if reference.keyframes.count > 1, !reference.photoOnly {
+            Button { dismiss(); action(.cutout, reference) } label: { Label("Cut-out from this scan", systemImage: "person.crop.rectangle.stack") }
+        }
         Button { dismiss(); action(.hero, reference) } label: { Label(reference.hero ? "Remove hero star" : "Hero", systemImage: reference.hero ? "star.slash" : "star") }
         Button { dismiss(); action(.review, reference) } label: { Label("Review frames", systemImage: "rectangle.stack") }
         Button { dismiss(); action(.sketch, reference) } label: { Label("Sketch", systemImage: "pencil.tip.crop.circle") }
@@ -1289,9 +1292,6 @@ struct Gallery: View {
         Button { dismiss(); action(.compare, reference) } label: { Label("Compare", systemImage: "rectangle.split.2x1") }
         if ExploreView.offered {
             Button { dismiss(); action(.explore, reference) } label: { Label("Explore in 3D", systemImage: "view.3d") }
-        }
-        if reference.keyframes.count > 1, !reference.photoOnly {
-            Button { dismiss(); action(.cutout, reference) } label: { Label("Make a cut-out from this scan", systemImage: "person.crop.rectangle.stack") }
         }
         Menu {
             Button { dismiss(); action(.pdf, reference) } label: { Label("PDF report", systemImage: "doc.richtext") }
