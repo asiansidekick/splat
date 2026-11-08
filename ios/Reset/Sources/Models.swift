@@ -176,13 +176,19 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     /// Tipped back or forward, and slanted sideways, about the card's foot.
-    private static func poseMatrix(tilt: Float, skew: Float) -> simd_float4x4 {
+    private static func poseMatrix(tilt: Float, skew: Float, turn: Float = 0) -> simd_float4x4 {
         let t = tilt * .pi / 180
         var shear = matrix_identity_float4x4
         shear.columns.1.x = tan(min(max(skew, -60), 60) * .pi / 180)  // x grows with height
         let rotation = simd_float4x4(simd_quatf(angle: -t, axis: SIMD3(1, 0, 0)))
-        return rotation * shear
+        // The card also swings round its upright axis as the person twists it, up to 70 degrees (the holder always
+        // faces the camera, so without this a twist changed only the photo and nothing seemed to turn).
+        let swing = simd_float4x4(simd_quatf(angle: min(max(turn, -1.22), 1.22), axis: SIMD3(0, 1, 0)))
+        return swing * rotation * shear
     }
+
+    /// How far each cut-out has been twisted this session, in radians (wrapped to -pi...pi).
+    private var cutoutTurn: [UUID: Float] = [:]
 
     var selectedIsCutout: Bool { selectedModel.map { cutoutPackages[$0] != nil } ?? false }
 
@@ -200,12 +206,13 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
               let plane = cutouts[id]?.plane else { return }
         package.tilt = 0
         package.skew = 0
+        cutoutTurn[id] = 0
         savePose(package, id: id, file: model.file, plane: plane)
     }
 
     private func savePose(_ package: CutoutPackage, id: UUID, file: String, plane: SCNNode) {
         cutoutPackages[id] = package
-        plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew)
+        plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: cutoutTurn[id] ?? 0)
         try? JSONEncoder().encode(package).write(to: folder.appendingPathComponent(file), options: .atomic)
         if let index = models.firstIndex(where: { $0.id == id }) { models[index].moved = Date() }
     }
@@ -235,6 +242,9 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let pose = UIPanGestureRecognizer(target: self, action: #selector(handlePose(_:)))
         pose.minimumNumberOfTouches = 2
         pose.maximumNumberOfTouches = 2
+        pose.name = "pose"
+        pinch.name = "pinch"
+        rotate.name = "rotate"
         for gesture in [tap, pan, pinch, rotate, pose] as [UIGestureRecognizer] {
             gesture.delegate = self
             view.addGestureRecognizer(gesture)
@@ -242,7 +252,10 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     nonisolated func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        true
+        // Tilting with two fingers must not also pinch or twist (and the other way round): whichever starts first wins.
+        let names = Set([gestureRecognizer.name, other.name])
+        if names.contains("pose") && (names.contains("pinch") || names.contains("rotate")) { return false }
+        return true
     }
 
     @objc private func handlePose(_ gesture: UIPanGestureRecognizer) {
@@ -254,7 +267,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         package.tilt = min(max(package.tilt - Float(moved.y) * 0.3, -80), 80)
         package.skew = min(max(package.skew + Float(moved.x) * 0.2, -60), 60)
         cutoutPackages[id] = package
-        plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew)
+        plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: cutoutTurn[id] ?? 0)
         if gesture.state == .ended { savePose(package, id: id, file: model.file, plane: plane) }
     }
 
@@ -406,6 +419,12 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     @objc private func handleRotate(_ gesture: UIRotationGestureRecognizer) {
         guard let id = selectedModel, let node = modelNodes[id] else { return }
         node.simdEulerAngles.y -= Float(gesture.rotation)
+        if let package = cutoutPackages[id], let plane = cutouts[id]?.plane {
+            let turn = (cutoutTurn[id] ?? 0) - Float(gesture.rotation)
+            let wrapped = atan2(sin(turn), cos(turn))
+            cutoutTurn[id] = wrapped
+            plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: wrapped)
+        }
         gesture.rotation = 0
         if gesture.state == .ended { commit(id) }
     }
