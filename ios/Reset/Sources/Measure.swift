@@ -32,6 +32,15 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     let pictureSurface = PointSurface()
     private var crosshairSource = ""
     private var loggedCrosshairSource = ""
+    private var lastSourceLog = Date.distantPast
+
+    /// Two readings of the same place within 15 % of each other's distance from the camera. Build 1231 on Phil's
+    /// phone: frames "agreed" on 0.84 m where this frame said 1.26 m, and the line was drawn far too short.
+    static func agrees(_ p: SIMD3<Float>, _ q: SIMD3<Float>, _ frame: ARFrame) -> Bool {
+        let inverse = frame.camera.transform.inverse
+        let dp = -(inverse * SIMD4(p, 1)).z, dq = -(inverse * SIMD4(q, 1)).z
+        return dp > 0.1 && dq > 0.1 && abs(dp - dq) / dq < 0.15
+    }
     private var onFused = false
     private var loggedFused: Bool?
     /// A line being drawn with a finger, both ends read from one camera frame.
@@ -863,7 +872,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             pa = qa.point
             pb = qb.point
             dragPlane = nil
-        } else if let fa = fusion.point(in: frame, normalized: a.normalized), let fb = fusion.point(in: frame, normalized: b.normalized) {
+        } else if let fa = fusion.point(in: frame, normalized: a.normalized), let fb = fusion.point(in: frame, normalized: b.normalized),
+                  Measurer.agrees(fa.point, pa, frame), Measurer.agrees(fb.point, pb, frame) {
             let inverse = frame.camera.transform.inverse
             func ahead(_ p: SIMD3<Float>) -> Float { -(inverse * SIMD4(p, 1)).z }
             planeNote += String(format: ", agreed over %ld/%ld frames %.3f/%.3f m (this frame %.3f/%.3f m)", fa.frames, fb.frames, ahead(fa.point), ahead(fb.point), ahead(pa), ahead(pb))
@@ -1407,11 +1417,13 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         fusion.add(frame)
         pictureSurface.add(frame)
         let pictured = found == nil ? pictureSurface.point(in: frame, normalized: CGPoint(x: 0.5, y: 0.5)) : nil
-        let fused = found == nil && pictured == nil ? fusion.point(in: frame, normalized: CGPoint(x: 0.5, y: 0.5)) : nil
+        var fused = found == nil && pictured == nil ? fusion.point(in: frame, normalized: CGPoint(x: 0.5, y: 0.5)) : nil
+        if let f = fused, let single = Measurer.depthPoint(frame), !Measurer.agrees(f.point, single, frame) { fused = nil }
         onFused = fused != nil
         crosshairSource = found != nil ? "ARKit surface" : pictured != nil ? "picture points" : fused != nil ? "LiDAR over frames" : "one LiDAR frame"
-        if crosshairSource != loggedCrosshairSource {
+        if crosshairSource != loggedCrosshairSource, Date().timeIntervalSince(lastSourceLog) > 3 {
             loggedCrosshairSource = crosshairSource
+            lastSourceLog = Date()
             Diagnostics.log("Measure: crosshair on \(crosshairSource)\(pictured.map { " (\($0.points) points)" } ?? "")")
         }
         if let found {
