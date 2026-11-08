@@ -226,3 +226,167 @@ enum Fit {
         abs(reference - 1) > 0.01 && (reference > 1) != (screen > 1)
     }
 }
+
+/// A 3×3 projective map of the plane (rows first), for warping the overlay: it can move, turn,
+/// scale, skew and keystone a picture. Points are (x, y, 1).
+struct Homography: Equatable {
+    var m: [Double]
+
+    static let identity = Homography(m: [1, 0, 0, 0, 1, 0, 0, 0, 1])
+
+    init(m: [Double]) { self.m = m }
+
+    /// x' = a x + b y + tx, y' = c x + d y + ty.
+    static func affine(a: Double, b: Double, c: Double, d: Double, tx: Double, ty: Double) -> Homography {
+        Homography(m: [a, b, tx, c, d, ty, 0, 0, 1])
+    }
+
+    static func translation(_ dx: Double, _ dy: Double) -> Homography { affine(a: 1, b: 0, c: 0, d: 1, tx: dx, ty: dy) }
+    static func scaling(_ sx: Double, _ sy: Double) -> Homography { affine(a: sx, b: 0, c: 0, d: sy, tx: 0, ty: 0) }
+
+    func apply(_ p: CGPoint) -> CGPoint {
+        let x = Double(p.x), y = Double(p.y)
+        let w = m[6] * x + m[7] * y + m[8]
+        guard abs(w) > 1e-12 else { return p }
+        return CGPoint(x: (m[0] * x + m[1] * y + m[2]) / w, y: (m[3] * x + m[4] * y + m[5]) / w)
+    }
+
+    /// This after `first`: (self * first)(p) = self(first(p)).
+    func after(_ first: Homography) -> Homography {
+        var out = [Double](repeating: 0, count: 9)
+        for r in 0..<3 {
+            for c in 0..<3 {
+                out[r * 3 + c] = (0..<3).reduce(0) { $0 + m[r * 3 + $1] * first.m[$1 * 3 + c] }
+            }
+        }
+        return Homography(m: out)
+    }
+
+    var inverse: Homography? {
+        let a = m
+        let c00 = a[4] * a[8] - a[5] * a[7], c01 = a[5] * a[6] - a[3] * a[8], c02 = a[3] * a[7] - a[4] * a[6]
+        let det = a[0] * c00 + a[1] * c01 + a[2] * c02
+        guard abs(det) > 1e-12 else { return nil }
+        let inv = [
+            c00, a[2] * a[7] - a[1] * a[8], a[1] * a[5] - a[2] * a[4],
+            c01, a[0] * a[8] - a[2] * a[6], a[2] * a[3] - a[0] * a[5],
+            c02, a[1] * a[6] - a[0] * a[7], a[0] * a[4] - a[1] * a[3],
+        ]
+        return Homography(m: inv.map { $0 / det })
+    }
+}
+
+/// How the overlay is bent to sit on the actor (Phil, 2026-11-08): besides moving, turning and
+/// scaling to the eyes, it is keystoned for the phone being tilted up or down from how the reference
+/// was held (known from the motion sensors), and skewed a little to follow the nose and mouth (or
+/// neck and hips). Both are capped, so a real change of angle still shows and the arrows still ask
+/// for it rather than the actor being stretched to fit.
+enum OverlayWarp {
+    /// Degrees of tilt the keystone makes up for; beyond this the guide asks to tilt the phone.
+    static let maxTilt: Double = 15
+    /// How far the skew may bend the picture: a share of its size (or of the eye spacing, for moves).
+    static let maxSkew: Double = 0.12
+
+    /// The camera's focal length in "even" units (the picture's width is 1), from the tangent of
+    /// half its field of view along the sensor's long side and the sensor's long-over-short ratio.
+    static func focal(tanHalfLong: Double, sensorRatio: Double, aspect: CGFloat) -> Double? {
+        guard tanHalfLong > 0, sensorRatio >= 1, aspect > 0 else { return nil }
+        let a = Double(aspect)
+        // The length of the sensor's long side in the visible picture's even units: the picture is
+        // the sensor filled to the screen's shape, so one side of it is whole.
+        let long = a < 1 ? max(1 / a, sensorRatio) : max(1, sensorRatio / a)
+        return long / 2 / tanHalfLong
+    }
+
+    /// The picture's change when the phone looks `degrees` further up than it did (pure rotation of
+    /// the camera about its own across axis), in even units, about the picture's middle.
+    static func keystone(degrees: Double, focal f: Double, centre: CGPoint) -> Homography {
+        let t = degrees * .pi / 180
+        let c = cos(t), s = sin(t)
+        // K R K⁻¹ for a camera with x right, y down, z ahead, turned up by t.
+        let tilt = Homography(m: [1, 0, 0, 0, c, f * s, 0, -s / f, c])
+        return Homography.translation(Double(centre.x), Double(centre.y))
+            .after(tilt)
+            .after(.translation(-Double(centre.x), -Double(centre.y)))
+    }
+
+    /// Reference photo points to live points (both 0...1 across and down the same-shaped picture),
+    /// for the overlay pinned on an actor. `pitchChange` is the live phone's pitch minus the
+    /// reference's, in degrees; `focal` in even units. Nil when the eyes can't give a map.
+    static func map(reference: ActorPose, live: ActorPose, aspect: CGFloat, pitchChange: Double? = nil, focal: Double? = nil) -> Homography? {
+        guard aspect > 0 else { return nil }
+        let a = Double(aspect)
+        let even = Homography.scaling(1, 1 / a)
+        guard let back = even.inverse else { return nil }
+        func e(_ p: CGPoint) -> CGPoint { even.apply(p) }
+
+        // 1. Keystone for the change in tilt.
+        var key = Homography.identity
+        if let pitchChange, let focal, focal > 0 {
+            let clamped = max(-maxTilt, min(maxTilt, pitchChange))
+            key = keystone(degrees: clamped, focal: focal, centre: CGPoint(x: 0.5, y: 0.5 / a))
+        }
+        // The mouth (or hips) counts only when found in both.
+        let both = reference.lower != nil && live.lower != nil
+        let rPoints = [reference.left, reference.right, reference.middle] + (both ? [reference.lower!] : [])
+        let lPoints = [live.left, live.right, live.middle] + (both ? [live.lower!] : [])
+        let r = rPoints.map { key.apply(e($0)) }
+        let l = lPoints.map(e)
+
+        // 2. Move, turn and scale the (keystoned) eyes onto the live eyes.
+        let v1 = (Double(r[1].x - r[0].x), Double(r[1].y - r[0].y))
+        let v2 = (Double(l[1].x - l[0].x), Double(l[1].y - l[0].y))
+        let len1 = hypot(v1.0, v1.1), len2 = hypot(v2.0, v2.1)
+        guard len1 > 1e-6, len2 > 1e-6 else { return nil }
+        let scale = len2 / len1
+        let angle = atan2(v2.1, v2.0) - atan2(v1.1, v1.0)
+        let cs = cos(angle) * scale, sn = sin(angle) * scale
+        let rot = Homography.affine(a: cs, b: -sn, c: sn, d: cs, tx: 0, ty: 0)
+        let similarity = Homography.translation(Double(l[0].x), Double(l[0].y))
+            .after(rot)
+            .after(.translation(-Double(r[0].x), -Double(r[0].y)))
+
+        // 3. A little skew and stretch below the eyes, from the nose and mouth (or neck and hips),
+        //    leaving the eyes exactly where they are: the map adds w × (distance below the eye line).
+        var skew = Homography.identity
+        if let inverse = similarity.inverse, r.count == l.count, r.count >= 3 {
+            let o = CGPoint(x: (r[0].x + r[1].x) / 2, y: (r[0].y + r[1].y) / 2)
+            let u = (v1.0 / len1, v1.1 / len1)
+            let n = (-u.1, u.0)  // a quarter turn clockwise from the eye line: down the face
+            var sumX = 0.0, sumY = 0.0, sumH = 0.0
+            for i in 2..<r.count {
+                let target = inverse.apply(l[i])
+                let h = (Double(r[i].x - o.x)) * n.0 + (Double(r[i].y - o.y)) * n.1
+                sumX += Double(target.x - r[i].x) * h
+                sumY += Double(target.y - r[i].y) * h
+                sumH += h * h
+            }
+            if sumH > 1e-6 * len1 * len1 {
+                // Split into skew along the eye line and stretch down the face, each relative to the
+                // eye spacing's own scale (unitless), and cap both.
+                let w = (sumX / sumH, sumY / sumH)
+                let along = max(-maxSkew, min(maxSkew, w.0 * u.0 + w.1 * u.1))
+                let down = max(-maxSkew, min(maxSkew, w.0 * n.0 + w.1 * n.1))
+                let wx = along * u.0 + down * n.0, wy = along * u.1 + down * n.1
+                // I + w nᵀ about the eyes' middle.
+                skew = Homography.translation(Double(o.x), Double(o.y))
+                    .after(.affine(a: 1 + wx * n.0, b: wx * n.1, c: wy * n.0, d: 1 + wy * n.1, tx: 0, ty: 0))
+                    .after(.translation(-Double(o.x), -Double(o.y)))
+            }
+        }
+
+        return back.after(similarity).after(skew).after(key).after(even)
+    }
+}
+
+extension ScreenMap {
+    /// A map of photo points (0...1) as the same map of screen points, for warping the overlay
+    /// view drawn over the whole screen.
+    func projection(_ photo: Homography) -> Homography? {
+        let o = toScreen(CGPoint(x: 0, y: 0)), x = toScreen(CGPoint(x: 1, y: 0)), y = toScreen(CGPoint(x: 0, y: 1))
+        let onScreen = Homography.affine(a: Double(x.x - o.x), b: Double(y.x - o.x), c: Double(x.y - o.y), d: Double(y.y - o.y),
+                                         tx: Double(o.x), ty: Double(o.y))
+        guard let fromScreen = onScreen.inverse else { return nil }
+        return onScreen.after(photo).after(fromScreen)
+    }
+}

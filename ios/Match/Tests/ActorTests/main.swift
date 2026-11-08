@@ -470,5 +470,88 @@ do {
     expect(reading(turnY: 0.3).biggestArrow == .tilt(.down), "level lines: without sensors the tilt arrow is drawn as before")
 }
 
+
+// MARK: Overlay warp (keystone and skew for the actor lock)
+
+do {
+    func pose(_ l: CGPoint, _ r: CGPoint, _ m: CGPoint, _ low: CGPoint?) -> ActorPose {
+        ActorPose(kind: .face, left: l, right: r, middle: m, lower: low, box: .zero)
+    }
+    let aspect: CGFloat = 0.75
+    let ref = pose(CGPoint(x: 0.4, y: 0.4), CGPoint(x: 0.6, y: 0.4), CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.5, y: 0.6))
+
+    if let h = OverlayWarp.map(reference: ref, live: ref, aspect: aspect) {
+        expect(close(h.apply(CGPoint(x: 0.2, y: 0.9)), CGPoint(x: 0.2, y: 0.9), 1e-6), "warp: the same pose leaves the overlay alone")
+    } else {
+        expect(false, "warp: a map for the same pose")
+    }
+
+    let sim = Similarity(from: (ref.left, ref.right), to: (CGPoint(x: 0.3, y: 0.5), CGPoint(x: 0.55, y: 0.56)), aspect: aspect)
+    let moved = pose(sim.apply(ref.left), sim.apply(ref.right), sim.apply(ref.middle), sim.apply(ref.lower!))
+    if let h = OverlayWarp.map(reference: ref, live: moved, aspect: aspect) {
+        let p = CGPoint(x: 0.1, y: 0.2)
+        expect(close(h.apply(p), sim.apply(p), 1e-6), "warp: a move, turn and scale is followed exactly, with no skew")
+    } else {
+        expect(false, "warp: a map for a moved pose")
+    }
+
+    var sheared = ref
+    sheared.middle.x += 0.2
+    sheared.lower!.x += 0.4
+    if let h = OverlayWarp.map(reference: ref, live: sheared, aspect: aspect) {
+        expect(close(h.apply(ref.left), ref.left, 1e-6) && close(h.apply(ref.right), ref.right, 1e-6),
+               "warp: the skew leaves the eyes exactly on the eyes")
+        let p = CGPoint(x: 0.5, y: 0.9)
+        let dx = h.apply(p).x - p.x
+        let limit = OverlayWarp.maxSkew * Double((0.9 - 0.4) / aspect) + 1e-6
+        expect(dx > 0.01 && Double(dx) <= limit, "warp: the skew follows the nose and mouth but is capped (moved \(dx), limit \(limit))")
+    } else {
+        expect(false, "warp: a map for a skewed pose")
+    }
+
+    // Keystone against an independent pinhole camera: world y up, the camera pitched up by φ.
+    let f = 1.3, centre = CGPoint(x: 0.5, y: 0.5 / Double(aspect))
+    func shoot(_ d: SIMD3<Double>, pitch φ: Double) -> CGPoint {
+        let t = φ * .pi / 180
+        let forward = SIMD3<Double>(0, sin(t), cos(t)), up = SIMD3<Double>(0, cos(t), -sin(t)), right = SIMD3<Double>(1, 0, 0)
+        let z = simd_dot(d, forward)
+        return CGPoint(x: centre.x + f * simd_dot(d, right) / z, y: centre.y - f * simd_dot(d, up) / z)
+    }
+    let points = [SIMD3<Double>(0.3, 0.2, 2), SIMD3<Double>(-0.4, -0.5, 3), SIMD3<Double>(0.1, 0.6, 1.5), SIMD3<Double>(0, 0, 4)]
+    let key = OverlayWarp.keystone(degrees: 8, focal: f, centre: centre)
+    let worst = points.map { p -> Double in
+        let a = key.apply(shoot(p, pitch: 2)), b = shoot(p, pitch: 10)
+        return Double(hypot(a.x - b.x, a.y - b.y))
+    }.max() ?? 1
+    expect(worst < 1e-9, "keystone: tilting the phone 8° further up is matched exactly for any scene (worst \(worst))")
+    expect(key.apply(centre).y > centre.y, "keystone: phone tilted further up, so the overlay moves down the screen")
+
+    if let focal = OverlayWarp.focal(tanHalfLong: tan(35 * Double.pi / 180), sensorRatio: 4.0 / 3.0, aspect: 9.0 / 16.0) {
+        expect(abs(focal - (16.0 / 9.0) / 2 / tan(35 * Double.pi / 180)) < 1e-9, "keystone: focal length from the lens for a tall screen")
+    } else {
+        expect(false, "keystone: focal length from the lens")
+    }
+
+    if let h = OverlayWarp.map(reference: ref, live: ref, aspect: aspect, pitchChange: 30, focal: f),
+        let capped = OverlayWarp.map(reference: ref, live: ref, aspect: aspect, pitchChange: 15, focal: f)
+    {
+        let p = CGPoint(x: 0.2, y: 0.95)
+        expect(close(h.apply(p), capped.apply(p), 1e-9), "keystone: limited to 15°, beyond that the guide asks to tilt")
+        expect(close(h.apply(ref.left), ref.left, 1e-6), "keystone: the eyes still sit on the eyes")
+    } else {
+        expect(false, "keystone: a map with tilt")
+    }
+
+    let screen = ScreenMap(size: CGSize(width: 390, height: 844), quarterTurns: 1, mirrored: true)
+    if let s = screen.projection(.identity) {
+        let p = CGPoint(x: 100, y: 300)
+        expect(close(s.apply(p), p, 1e-6), "screen: no warp stays no warp, turned and mirrored")
+    }
+    let shift = Homography.translation(0.1, 0)
+    if let s = ScreenMap(size: CGSize(width: 400, height: 800), quarterTurns: 0, mirrored: false).projection(shift) {
+        expect(close(s.apply(CGPoint(x: 0, y: 0)), CGPoint(x: 40, y: 0), 1e-6), "screen: a photo move becomes the same move on screen")
+    }
+}
+
 print(failures == 0 ? "All actor tests passed" : "\(failures) actor tests failed")
 exit(failures == 0 ? 0 : 1)

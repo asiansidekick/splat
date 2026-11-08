@@ -194,6 +194,19 @@ final class Camera: NSObject, ObservableObject {
     /// How far the saved photos and frames are turned to sit upright (0, 90, 180 or 270).
     var uprightAngle: Double { Double(captureAngle) }
 
+    /// The lens in use: the tangent of half its field of view along the sensor's long side, at the
+    /// zoom in use, and that side over the short one. Lens distortion is already taken out by iOS
+    /// (geometric distortion correction is on by default), so the lens behaves as a pinhole.
+    var lensGeometry: (tanHalfLong: Double, sensorRatio: Double)? {
+        guard let device = input?.device else { return nil }
+        let fov = Double(device.activeFormat.videoFieldOfView) * .pi / 180
+        guard fov > 0.05, fov < 3 else { return nil }
+        let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+        let long = Double(max(dims.width, dims.height)), short = Double(min(dims.width, dims.height))
+        guard short > 0 else { return nil }
+        return (tan(fov / 2) / max(Double(device.videoZoomFactor), 1), long / short)
+    }
+
     func setCloseUp(_ on: Bool) {
         guard on != closeUp else { return }
         closeUp = on

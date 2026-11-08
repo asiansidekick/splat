@@ -849,9 +849,9 @@ struct CaptureView: View {
                     .scaleEffect(x: camera.isFront ? -ghostScale : ghostScale, y: ghostScale)
                     .offset(ghostOffset)
                     // Actor lock: the reference's eyes (or shoulders) sit on the actor's, wherever they stand.
-                    .modifier(ActorPin(transform: guideOn ? guide.anchor.map {
-                        ScreenMap(size: size, quarterTurns: quarterTurns, mirrored: camera.isFront, inner: ghostBox)
-                            .ghostTransform(from: $0.from, to: $0.to)
+                    // Keystoned for a change in tilt and skewed a little to the nose and mouth, within limits.
+                    .modifier(ActorPin(warp: guideOn ? guide.anchor?.warp.flatMap {
+                        ScreenMap(size: size, quarterTurns: quarterTurns, mirrored: camera.isFront, inner: ghostBox).projection($0)
                     } : nil))
                     .animation(.easeOut(duration: 0.2), value: guide.anchor)
                     .allowsHitTesting(false)
@@ -1050,6 +1050,7 @@ struct CaptureView: View {
             camera.onFrame = nil
         }
         guide.liveAttitude = { [camera] in Motion.shared.attitude(uprightAngle: camera.uprightAngle, front: camera.isFront) }
+        guide.liveLens = { [camera] in camera.lensGeometry }
         guide.setReference(wanted ? ghost : nil, depth: ghostDepth, aspect: visibleAspect, whole: ghostWhole,
                            prefersBody: board?.department == .costume, fit: ghostFit, needsFit: needsFit,
                            attitude: ghostShot?.attitude)
@@ -1184,13 +1185,22 @@ struct CaptureView: View {
 
 /// Scales, turns and moves the ghost about the screen's middle; nothing when there is no actor.
 private struct ActorPin: ViewModifier {
-    let transform: (scale: CGFloat, angle: CGFloat, offset: CGSize)?
+    /// Screen points of the overlay to where they go: moved, turned, scaled, keystoned and skewed.
+    let warp: Homography?
 
     func body(content: Content) -> some View {
-        content
-            .scaleEffect(transform?.scale ?? 1)
-            .rotationEffect(.radians(Double(transform?.angle ?? 0)))
-            .offset(transform?.offset ?? .zero)
+        content.projectionEffect(ProjectionTransform(Self.transform(warp ?? .identity)))
+    }
+
+    /// The 3×3 map as Core Animation's 4×4, which multiplies row vectors (x, y, 0, 1).
+    static func transform(_ h: Homography) -> CATransform3D {
+        let s = abs(h.m[8]) > 1e-9 ? h.m[8] : 1
+        let m = h.m.map { CGFloat($0 / s) }
+        var t = CATransform3DIdentity
+        t.m11 = m[0]; t.m21 = m[1]; t.m41 = m[2]
+        t.m12 = m[3]; t.m22 = m[4]; t.m42 = m[5]
+        t.m14 = m[6]; t.m24 = m[7]; t.m44 = m[8]
+        return t
     }
 }
 

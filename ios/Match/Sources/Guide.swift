@@ -6,16 +6,32 @@ import simd
 /// Where the ghost is pinned when it follows an actor: the reference's eyes (or shoulders) and
 /// where the same points are live, in 0...1 picture points.
 struct GhostAnchor: Equatable {
-    var from: (CGPoint, CGPoint)
-    var to: (CGPoint, CGPoint)
+    /// The actor in the reference and now, 0...1 of the guide's picture.
+    var reference: ActorPose
+    var live: ActorPose
+    /// That picture's width over height.
+    var aspect: CGFloat
+    /// The live phone's pitch minus the reference's, in degrees, and the lens's focal length in even
+    /// units, when both are known: the overlay is then keystoned for the tilt.
+    var pitchChange: Double?
+    var focal: Double?
 
-    static func == (a: GhostAnchor, b: GhostAnchor) -> Bool {
-        a.from.0 == b.from.0 && a.from.1 == b.from.1 && a.to.0 == b.to.0 && a.to.1 == b.to.1
+    /// Reference photo points to live ones: the eyes on the eyes, keystoned and slightly skewed.
+    var warp: Homography? {
+        OverlayWarp.map(reference: reference, live: live, aspect: aspect, pitchChange: pitchChange, focal: focal)
     }
 
     func blended(towards new: GhostAnchor, by k: CGFloat) -> GhostAnchor {
         func mix(_ p: CGPoint, _ q: CGPoint) -> CGPoint { CGPoint(x: p.x + (q.x - p.x) * k, y: p.y + (q.y - p.y) * k) }
-        return GhostAnchor(from: new.from, to: (mix(to.0, new.to.0), mix(to.1, new.to.1)))
+        var out = new
+        // Only ease between readings of the same person and kind; otherwise jump.
+        guard new.live.kind == live.kind, new.reference == reference else { return new }
+        out.live.left = mix(live.left, new.live.left)
+        out.live.right = mix(live.right, new.live.right)
+        out.live.middle = mix(live.middle, new.live.middle)
+        if let a = live.lower, let b = new.live.lower { out.live.lower = mix(a, b) }
+        if let a = pitchChange, let b = new.pitchChange { out.pitchChange = a + (b - a) * Double(k) }
+        return out
     }
 }
 
@@ -54,6 +70,9 @@ final class Guide: ObservableObject {
     /// How the reference was held (pitch and roll), and how the phone is held now.
     private var referenceAttitude: Attitude?
     var liveAttitude: (@MainActor () -> Attitude?)?
+    /// The live lens: tangent of half its field of view along the sensor's long side, and that side
+    /// over the short one. For keystoning the overlay when the phone is tilted differently.
+    var liveLens: (@MainActor () -> (tanHalfLong: Double, sensorRatio: Double)?)?
     /// The newest live LiDAR depth, for the change colours.
     private var liveDepth: DepthGrid?
     /// Red and blue where the set differs from the reference, once lined up (see DepthChange).
@@ -249,7 +268,7 @@ final class Guide: ObservableObject {
             else { continue }
             return ActorResult(
                 reading: reading,
-                anchor: GhostAnchor(from: (reference.left, reference.right), to: (live[index].left, live[index].right)),
+                anchor: GhostAnchor(reference: reference, live: live[index], aspect: aspect),
                 people: live.map(\.box),
                 followed: index)
         }
@@ -260,10 +279,22 @@ final class Guide: ObservableObject {
         if let result {
             var new = result.reading
             // Pitch and roll from the motion sensors, when the reference was shot with them.
+            var anchorNow = result.anchor
             if let reference = referenceAttitude, let live = liveAttitude?() {
                 let errors = live.errors(to: reference)
                 new.pitchError = errors.pitch
                 new.rollError = errors.roll
+                // Pinned on an actor with the whole reference on screen: keystone the overlay for the
+                // tilt, so only tilt beyond what that makes up for is asked for.
+                if var pinned = anchorNow, liveBox == nil, let visible = aspect, let lens = liveLens?(),
+                    let focal = OverlayWarp.focal(tanHalfLong: lens.tanHalfLong, sensorRatio: lens.sensorRatio, aspect: visible)
+                {
+                    pinned.pitchChange = -errors.pitch
+                    pinned.focal = focal
+                    anchorNow = pinned
+                    let beyond = max(0, abs(errors.pitch) - OverlayWarp.maxTilt)
+                    new.pitchError = errors.pitch < 0 ? -beyond : beyond
+                }
             }
             // Switching between actor and room starts afresh rather than easing between them.
             if let old = reading, old.actor == new.actor {
@@ -271,7 +302,7 @@ final class Guide: ObservableObject {
             } else {
                 reading = new
             }
-            if let fresh = result.anchor {
+            if let fresh = anchorNow {
                 anchor = anchor.map { $0.blended(towards: fresh, by: 0.5) } ?? fresh
             } else {
                 anchor = nil
