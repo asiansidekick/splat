@@ -356,6 +356,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
               case .normal = frame.camera.trackingState else { return }
         lastRefine = frame.timestamp
         var changedAny = false
+        // How far each line's tracked end was moved to follow the picture this time, for the other end to share.
+        var carried: [UUID: SIMD3<Float>] = [:]
         // A length changed by hand (an end dragged) becomes the new length to keep.
         for (id, rest) in restLength {
             guard let i = measurements.firstIndex(where: { $0.id == id }) else { restLength[id] = nil; continue }
@@ -395,6 +397,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
                 let moved = second.origin + second.direction * t
                 if simd_distance(moved, current) < 0.5 {
                     if end == 0 { measurements[index].a = array(moved) } else { measurements[index].b = array(moved) }
+                    carried[id] = moved - current
                     if !track.shifted, simd_distance(moved, current) > 0.03 {
                         track.shifted = true
                         Diagnostics.log(String(format: "Line end %d held on its surface: moved %.1f cm to follow the picture, %d matches, %d misses",
@@ -419,6 +422,18 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
                 changedAny = true
             }
             tracks[key] = track
+        }
+        // An end with nothing to hold on to (a plain mat or floor) rides along with the other end of its line, so
+        // the whole line follows the picture instead of one end floating (Phil, 2026-11-08, build 1209 log).
+        for (id, shift) in carried {
+            guard let i = measurements.firstIndex(where: { $0.id == id }) else { continue }
+            let hasA = tracks["\(id.uuidString):0"] != nil, hasB = tracks["\(id.uuidString):1"] != nil
+            guard hasA != hasB, simd_length(shift) < 0.3 else { continue }
+            if hasA {
+                measurements[i].b = array(measurements[i].end + shift)
+            } else {
+                measurements[i].a = array(measurements[i].start + shift)
+            }
         }
         if changedAny {
             // Holding the ends to the picture must not change the length: put them back to it about the middle.
