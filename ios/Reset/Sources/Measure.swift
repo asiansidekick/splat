@@ -23,6 +23,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// Whether the crosshair's distance comes from LiDAR or only from ARKit's estimated surfaces,
     /// which can be well out; shown under the reading.
     @Published private(set) var fromLiDAR = false
+    /// The crosshair sits on a surface ARKit has found (steady), not on one frame's LiDAR depth.
+    private var onFoundSurface = false
+    private var loggedFound: Bool?
     /// A line being drawn with a finger, both ends read from one camera frame.
     struct DragLine: Equatable {
         var a: SIMD3<Float>
@@ -116,7 +119,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// calibration (build 168 saved ×0.30 from a mistyped tape length) and is dropped.
     static var depthScale: Float = {
         let saved = UserDefaults.standard.object(forKey: "measureDepthScale") as? Float ?? 1
-        return (0.5...2).contains(saved) ? saved : 1
+        // Build 1221: tightened to 0.8 to 1.25, the same as learning from typed lengths. A ×0.59 saved on
+        // 2026-11-08 was shrinking every line by 40 %.
+        return (0.8...1.25).contains(saved) ? saved : 1
     }()
 
     /// The real/measured ratios of the last typed lengths (up to five), whose median is the correction.
@@ -355,7 +360,12 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// by the sheet's size) and the two-view refinement wrong (it shrank the sheet to 24 x 15 cm).
     static let refineDepthFromViews = false
 
+    /// Off since build 1221 (Phil, 2026-11-08): following the picture moved ends 3 to 4 cm and then lost them as the
+    /// view turned. Ends now sit on the surface ARKit has found, which needs no following.
+    static let movesEndsWithPicture = false
+
     private func refineTracks() {
+        guard Measurer.movesEndsWithPicture else { return }
         guard Measurer.refineDepthFromViews || tracks.values.contains(where: { $0.plane != nil }) else { return }
         if let at = refinedAt, Date().timeIntervalSince(at) > 1.5 {
             refinedAt = nil
@@ -803,7 +813,15 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         if Measurer.useRaycast {
             let inverse = frame.camera.transform.inverse
             func along(_ p: SIMD3<Float>) -> Float { -(inverse * SIMD4(p, 1)).z }
-            if let ra = Measurer.raycastPoint(frame, session: session, normalized: a.normalized),
+            if let fa = Measurer.foundSurfacePoint(frame, session: session, normalized: a.normalized),
+               let fb = Measurer.foundSurfacePoint(frame, session: session, normalized: b.normalized) {
+                let (da, db) = (along(a.point), along(b.point))
+                planeNote += String(format: ", on ARKit's found surface %.3f/%.3f m (LiDAR %.3f/%.3f m)", along(fa), along(fb), da, db)
+                pa = fa
+                pb = fb
+                dragPlane = nil
+                dragDoubtful = false
+            } else if let ra = Measurer.raycastPoint(frame, session: session, normalized: a.normalized),
                let rb = Measurer.raycastPoint(frame, session: session, normalized: b.normalized) {
                 let (da, db, xa, xb) = (along(a.point), along(b.point), along(ra), along(rb))
                 let agrees = abs(xa - da) / max(da, 0.1) < 0.35 && abs(xb - db) / max(db, 0.1) < 0.35
@@ -1045,7 +1063,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let raw = simd_distance(line.start, line.end)
         let scale = metres / raw
         // Far from what the phone read means a mistyped length or unit (a bare number is centimetres), not a bias.
-        guard (0.5...2).contains(scale) else {
+        guard (0.8...1.25).contains(scale) else {
             Diagnostics.log(String(format: "Calibration refused: read %.1f cm, typed %.1f cm, ratio %.3f", raw * 100, metres * 100, scale))
             lastProblem = String(format: "Phone read %.0f cm, you typed %.0f cm. Check the number and unit.", raw * 100, metres * 100)
             say(lastProblem ?? "")
@@ -1318,7 +1336,12 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         loggedNote = nil
         logMarkCheck(frame)
         var reading: SIMD3<Float>?
-        if let point = Measurer.depthPoint(frame) {
+        let found = Measurer.foundSurfacePoint(frame, session: session, normalized: CGPoint(x: 0.5, y: 0.5))
+        onFoundSurface = found != nil
+        if let found {
+            reading = found
+            fromLiDAR = true
+        } else if let point = Measurer.depthPoint(frame) {
             reading = point
             fromLiDAR = true
         } else {
@@ -1337,6 +1360,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         if loggedSource != fromLiDAR {
             loggedSource = fromLiDAR
             Diagnostics.log("Measure: distance from \(fromLiDAR ? "LiDAR depth" : "estimated surfaces (no LiDAR depth)")")
+        }
+        if loggedFound != onFoundSurface {
+            loggedFound = onFoundSurface
+            Diagnostics.log("Measure: crosshair \(onFoundSurface ? "on a surface ARKit has found" : "off any found surface (LiDAR depth)")")
         }
         if let cursor, let camera = session.currentFrame?.camera.transform.columns.3 {
             let away = simd_distance(cursor, SIMD3(camera.x, camera.y, camera.z))
@@ -1554,8 +1581,19 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         return SIMD3(world.x, world.y, world.z)
     }
 
+    /// Where a place in the camera picture meets a surface ARKit has already found (a table top, the floor, a wall),
+    /// within its known outline. ARKit builds these from many frames, so the point does not swim the way one frame's
+    /// LiDAR depth does, and it stays on the surface as you walk round. This is how Apple's Measure places points.
+    static func foundSurfacePoint(_ frame: ARFrame, session: ARSession, normalized n: CGPoint) -> SIMD3<Float>? {
+        let query = frame.raycastQuery(from: n, allowing: .existingPlaneGeometry, alignment: .any)
+        guard let hit = session.raycast(query).first else { return nil }
+        let p = hit.worldTransform.columns.3
+        return SIMD3(p.x, p.y, p.z)
+    }
+
     /// Where a place in the camera picture meets a surface ARKit has found or estimates.
     static func raycastPoint(_ frame: ARFrame, session: ARSession, normalized n: CGPoint) -> SIMD3<Float>? {
+        if let found = foundSurfacePoint(frame, session: session, normalized: n) { return found }
         let query = frame.raycastQuery(from: n, allowing: .estimatedPlane, alignment: .any)
         guard let hit = session.raycast(query).first else { return nil }
         let p = hit.worldTransform.columns.3
