@@ -147,7 +147,8 @@ final class WindowTapCatcher: NSObject, UIGestureRecognizerDelegate {
     }
 
     @MainActor @objc private func tapped(_ gesture: UITapGestureRecognizer) {
-        guard let window else { return }
+        // Not through a sheet or menu covering the screen.
+        guard let window, window.rootViewController?.presentedViewController == nil else { return }
         let point = gesture.location(in: window)
         for (name, target) in targets where target.frame.insetBy(dx: -6, dy: -6).contains(point) {
             let top = window.hitTest(point, with: nil).map { String(describing: type(of: $0)) } ?? "nothing"

@@ -1400,6 +1400,10 @@ final class CameraViewHolder {
 /// tap to stop and save.
 struct CaptureStage: View {
     @StateObject private var freeScanner = FreeScanner()
+    /// Landscape taps on the shutter sometimes never reached it (Phil, 2026-11-08), as on the reference screen:
+    /// a tap inside its frame runs it from here too.
+    @State private var tapCatcher = WindowTapCatcher()
+    @State private var lastShutter = Date.distantPast
     @StateObject private var recorder = Recorder()
     let scene: String
     var shot = ""
@@ -1512,8 +1516,9 @@ struct CaptureStage: View {
             thumbnail.disabled(recorder.capturing)
         } shutter: {
             ShutterButton(style: shutterStyle, busy: recorder.pendingSave || recorder.saving) {
-                shutterTapped()
+                shutterOnce()
             }
+            .modifier(WindowFrame { frame in tapCatcher.targets["Capture shutter"] = (frame, { shutterOnce() }) })
             .disabled(recorder.saving)
             .accessibilityLabel(shutterLabel)
         } trailing: {
@@ -1553,7 +1558,11 @@ struct CaptureStage: View {
             }
             recorder.prepare(useLiDAR: useLiDAR)
         }
-        .onDisappear { recorder.stop() }
+        .onAppear { tapCatcher.install() }
+        .onDisappear {
+            tapCatcher.remove()
+            recorder.stop()
+        }
         .onChange(of: showPoints) { _, show in
             holder.view?.debugOptions = show ? [.showFeaturePoints] : []
         }
@@ -1586,6 +1595,14 @@ struct CaptureStage: View {
         case .snapshot: return .photo
         case .walk: return recorder.capturing && !recorder.pendingSave ? .stop : .record
         }
+    }
+
+    /// The button and the window's tap watcher can both fire for one tap: the second within 0.6 s is ignored.
+    private func shutterOnce() {
+        guard !recorder.saving, Date().timeIntervalSince(lastShutter) > 0.6 else { return }
+        lastShutter = Date()
+        Diagnostics.log("Capture shutter pressed (\(Screen.orientation.isLandscape ? "landscape" : "portrait"), \(mode))")
+        shutterTapped()
     }
 
     private func shutterTapped() {
