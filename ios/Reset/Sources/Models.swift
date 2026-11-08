@@ -634,6 +634,7 @@ struct ModelOverlay: View {
     @ObservedObject var placer: ModelPlacer
     /// Off in Review, where there is no live LiDAR to find the floor with.
     var showsFloor = true
+    @State private var showsCutoutHelp = true
 
     var body: some View {
         VStack(spacing: 6) {
@@ -653,34 +654,32 @@ struct ModelOverlay: View {
                     .background(.ultraThinMaterial, in: Capsule())
             }
             else if placer.selectedIsCutout {
-                // Phil, 2026-11-08: the cut-out panel took too much of the screen. One short line of help with a soft
-                // shadow, and one row of buttons, no panel behind.
-                VStack(spacing: 4) {
-                    Text("Drag, pinch, twist. Two fingers to tilt or slant.")
-                        .font(Theme.caption)
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
-                        .shadow(color: .black.opacity(0.5), radius: 6)
-                        .allowsHitTesting(false)
-                    // Two rows so every word is whole (one row cut them to "Place h..." on Phil's phone).
-                    VStack(spacing: 6) {
-                        HStack(spacing: 6) {
-                            Button("Place here") { placer.bringToView() }
-                            Button("Straighten") { placer.resetPose() }
-                            Button(placer.showDimensions ? "Hide sizes" : "Sizes") { placer.showDimensions.toggle() }
-                        }
-                        HStack(spacing: 6) {
-                            Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
-                            Button("Done") { placer.selectedModel = nil }
-                        }
+                // Phil, 2026-11-08: the cut-out controls covered too much of the middle of the picture. One slim row
+                // along the bottom, a small picture with its word under it (the words stay whole), no panel; the
+                // help line shows for a few seconds when a cut-out is picked, then goes.
+                VStack(spacing: 2) {
+                    if showsCutoutHelp {
+                        Text("Drag, pinch, twist. Two fingers to tilt or slant.")
+                            .font(Theme.caption)
+                            .foregroundStyle(.white)
+                            .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
+                            .shadow(color: .black.opacity(0.5), radius: 6)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
                     }
-                    .buttonStyle(.bordered)
-                    .font(Theme.subheadline)
-                    .controlSize(.small)
-                    .lineLimit(1)
-                    .fixedSize()
+                    HStack(spacing: 2) {
+                        CutoutTool(word: "Place here", symbol: "scope") { placer.bringToView() }
+                        CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }
+                        CutoutTool(word: placer.showDimensions ? "Hide sizes" : "Sizes", symbol: "ruler") { placer.showDimensions.toggle() }
+                        CutoutTool(word: "Delete", symbol: "trash", tint: .red) { placer.deleteSelectedModel() }
+                        CutoutTool(word: "Done", symbol: "checkmark") { placer.selectedModel = nil }
+                    }
                 }
-                .frame(maxWidth: 420)
+                .task(id: placer.selectedModel) {
+                    withAnimation { showsCutoutHelp = true }
+                    try? await Task.sleep(for: .seconds(4))
+                    withAnimation { showsCutoutHelp = false }
+                }
             }
             else if let name = placer.selectedModelName {
                 VStack(alignment: .leading, spacing: 8) {
@@ -742,6 +741,29 @@ struct ModelOverlay: View {
         } message: {
             Text(placer.modelError ?? "")
         }
+    }
+}
+
+/// One small control for a cut-out: a picture with its word under it, white with a soft shadow, no box.
+private struct CutoutTool: View {
+    let word: String
+    let symbol: String
+    var tint: Color = .white
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
+                Text(word).font(.system(size: 11, weight: .semibold)).lineLimit(1).fixedSize()
+            }
+            .foregroundStyle(tint)
+            .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
+            .shadow(color: .black.opacity(0.5), radius: 6)
+            .frame(minWidth: 58, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
