@@ -28,6 +28,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     private var loggedFound: Bool?
     /// The LiDAR depth of the last second and a half, agreed between frames (ARKit finds no surfaces on Phil's phone).
     let fusion = DepthFusion()
+    /// Surfaces from the points ARKit tracks in the picture: no LiDAR needed, and they move with the picture.
+    let pictureSurface = PointSurface()
+    private var crosshairSource = ""
+    private var loggedCrosshairSource = ""
     private var onFused = false
     private var loggedFused: Bool?
     /// A line being drawn with a finger, both ends read from one camera frame.
@@ -851,8 +855,15 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             planeNote = ", no flat plane (own depth at each end)"
             dragPlane = nil
         }
-        // The recent frames' depth, agreed: steadier than this frame's alone (10 to 20 cm swims on Phil's phone).
-        if let fa = fusion.point(in: frame, normalized: a.normalized), let fb = fusion.point(in: frame, normalized: b.normalized) {
+        // First the surface the picture's tracked points lie on (no LiDAR), else the recent frames' depth agreed.
+        if let qa = pictureSurface.point(in: frame, normalized: a.normalized), let qb = pictureSurface.point(in: frame, normalized: b.normalized) {
+            let inverse = frame.camera.transform.inverse
+            func ahead(_ p: SIMD3<Float>) -> Float { -(inverse * SIMD4(p, 1)).z }
+            planeNote += String(format: ", on picture points %ld/%ld, %.3f/%.3f m (LiDAR %.3f/%.3f m)", qa.points, qb.points, ahead(qa.point), ahead(qb.point), ahead(pa), ahead(pb))
+            pa = qa.point
+            pb = qb.point
+            dragPlane = nil
+        } else if let fa = fusion.point(in: frame, normalized: a.normalized), let fb = fusion.point(in: frame, normalized: b.normalized) {
             let inverse = frame.camera.transform.inverse
             func ahead(_ p: SIMD3<Float>) -> Float { -(inverse * SIMD4(p, 1)).z }
             planeNote += String(format: ", agreed over %ld/%ld frames %.3f/%.3f m (this frame %.3f/%.3f m)", fa.frames, fb.frames, ahead(fa.point), ahead(fb.point), ahead(pa), ahead(pb))
@@ -1049,7 +1060,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         Haptics.success()
         let camera = session.currentFrame?.camera.transform.columns.3
         let away = camera.map { simd_distance(cursor, SIMD3($0.x, $0.y, $0.z)) }
-        Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (\(fromLiDAR ? "LiDAR" : "estimated surfaces")), end \(away.map { String(format: "%.2f m", $0) } ?? "?") from the camera")
+        Diagnostics.log("Measured \(Measurer.text(measurements[measurements.count - 1].length)) (\(fromLiDAR ? "LiDAR" : "estimated surfaces"), crosshair on \(crosshairSource)), end \(away.map { String(format: "%.2f m", $0) } ?? "?") from the camera")
         changed()
         startTracking(line)
     }
@@ -1348,7 +1359,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         cursor = nil
         selected = nil
         fusion.clear()
+        pictureSurface.clear()
         loggedFused = nil
+        loggedCrosshairSource = ""
         loggedSource = nil
         trackingNote = nil
         loggedNote = nil
@@ -1392,10 +1405,20 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         let found = Measurer.foundSurfacePoint(frame, session: session, normalized: CGPoint(x: 0.5, y: 0.5))
         onFoundSurface = found != nil
         fusion.add(frame)
-        let fused = found == nil ? fusion.point(in: frame, normalized: CGPoint(x: 0.5, y: 0.5)) : nil
+        pictureSurface.add(frame)
+        let pictured = found == nil ? pictureSurface.point(in: frame, normalized: CGPoint(x: 0.5, y: 0.5)) : nil
+        let fused = found == nil && pictured == nil ? fusion.point(in: frame, normalized: CGPoint(x: 0.5, y: 0.5)) : nil
         onFused = fused != nil
+        crosshairSource = found != nil ? "ARKit surface" : pictured != nil ? "picture points" : fused != nil ? "LiDAR over frames" : "one LiDAR frame"
+        if crosshairSource != loggedCrosshairSource {
+            loggedCrosshairSource = crosshairSource
+            Diagnostics.log("Measure: crosshair on \(crosshairSource)\(pictured.map { " (\($0.points) points)" } ?? "")")
+        }
         if let found {
             reading = found
+            fromLiDAR = true
+        } else if let pictured {
+            reading = pictured.point
             fromLiDAR = true
         } else if let fused {
             reading = fused.point
