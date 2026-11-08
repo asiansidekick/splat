@@ -952,7 +952,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         guard let cursor else { return trackingNote ?? "Aim at a surface" }
         if tooClose { return "Too close: step back a little" }
         if let start { return "~" + Measurer.liveText(simd_distance(start, cursor)) }
-        return measurements.isEmpty && notes.isEmpty ? "Drag a line across it, or hold to add a note" : "Drag a line, or hold to add a note"
+        return measurements.isEmpty && notes.isEmpty ? "Drag a line across it, or hold to add a note. Pinch to resize the text." : "Drag a line, or hold to add a note"
     }
 
     /// Starts a line at the crosshair, or finishes the one started.
@@ -1806,6 +1806,17 @@ struct MeasureBar: View {
                 .accessibilityLabel(measurer.moving != nil ? "Put the note down here" : measurer.start == nil ? "Start a line here" : "End the line here")
                 if measurer.moving == nil {
                     small("text.bubble", "Note") { measurer.askNote() }
+                    Menu {
+                        Button { measurer.scaleText(by: 1.25) } label: { Label("Bigger text", systemImage: "textformat.size.larger") }
+                        Button { measurer.scaleText(by: 0.8) } label: { Label("Smaller text", systemImage: "textformat.size.smaller") }
+                    } label: {
+                        VStack(spacing: 1) {
+                            Image(systemName: "textformat.size").font(Theme.body)
+                            Text("Text size").font(Theme.font(size: 9, weight: .semibold))
+                        }
+                        .frame(minWidth: 36)
+                        .foregroundStyle(Color.white.opacity(0.95))
+                    }
                     if measurer.selected != nil {
                         small("trash.fill", "Delete", tint: .red) { measurer.deleteSelected() }
                     } else {
