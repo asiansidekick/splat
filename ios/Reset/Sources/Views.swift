@@ -1288,11 +1288,14 @@ struct Gallery: View {
         Button { dismiss(); action(.review, reference) } label: { Label("Review frames", systemImage: "rectangle.stack") }
         Button { dismiss(); action(.sketch, reference) } label: { Label("Sketch", systemImage: "pencil.tip.crop.circle") }
         Button { dismiss(); action(.slate, reference) } label: { Label("Edit slate", systemImage: "pencil") }
-        Button { dismiss(); action(.takeLog, reference) } label: { Label("Take log", systemImage: "list.number") }
-        Button { dismiss(); action(.compare, reference) } label: { Label("Compare", systemImage: "rectangle.split.2x1") }
-        if ExploreView.offered {
-            Button { dismiss(); action(.explore, reference) } label: { Label("Explore in 3D", systemImage: "view.3d") }
-        }
+        // The long menu scrolled badly and snapped back to the top (Phil, 2026-11-08), so the rarer ones are tucked away.
+        Menu {
+            Button { dismiss(); action(.takeLog, reference) } label: { Label("Take log", systemImage: "list.number") }
+            Button { dismiss(); action(.compare, reference) } label: { Label("Compare", systemImage: "rectangle.split.2x1") }
+            if ExploreView.offered {
+                Button { dismiss(); action(.explore, reference) } label: { Label("Explore in 3D", systemImage: "view.3d") }
+            }
+        } label: { Label("More", systemImage: "ellipsis.circle") }
         Menu {
             Button { dismiss(); action(.pdf, reference) } label: { Label("PDF report", systemImage: "doc.richtext") }
             Button { dismiss(); action(.photos, reference) } label: { Label("Save to Photos", systemImage: "photo.on.rectangle.angled") }
