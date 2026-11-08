@@ -1669,6 +1669,8 @@ struct ResetStage: View {
     /// Compare by wiping across instead of fading.
     @AppStorage("compareStyleWipe") private var wipe = true
     @State private var ghostShown = true
+    /// Where an imported photo sits over the camera (moved, scaled, turned, mirrored by hand).
+    @State private var photoPose = PhotoPose()
     /// While swiping the ghost strength, the cursor shows.
     @State private var swipingStrength = false
     /// While swiping, how far towards now the view is, for the THEN and NOW tags; nil hides them.
@@ -1774,6 +1776,10 @@ struct ResetStage: View {
         }
         .onAppear {
             tapCatcher.install()
+            if reference.photoOnly {
+                photoPose = PhotoPose.load(reference.id)
+                showTip("Line the photo up: two fingers move it, pinch to size, twist to turn. Double tap puts it back. Flip is in the ••• menu.", key: "tip.photoPose")
+            }
             // Checked under the same light it was shot with.
             if let level = reference.torch, Torch.shared.available {
                 Torch.shared.set(on: true, level: level)
@@ -1871,6 +1877,18 @@ struct ResetStage: View {
                     .disabled(restorer.status != .ready)
             }
             Menu {
+                if reference.photoOnly {
+                    Button {
+                        photoPose.flipped.toggle()
+                        photoPose.save(reference.id)
+                    } label: { Label("Flip photo", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right") }
+                    if !photoPose.isStraight {
+                        Button {
+                            photoPose = PhotoPose()
+                            photoPose.save(reference.id)
+                        } label: { Label("Put photo back", systemImage: "arrow.uturn.backward") }
+                    }
+                }
                 Button { open(.gallery) } label: { Label("References", systemImage: "photo.on.rectangle") }
                 Button { importingModel = true } label: { Label("Add 3D model", systemImage: "cube") }
                     .disabled(restorer.status != .ready)
@@ -1915,6 +1933,8 @@ struct ResetStage: View {
                             .resizable()
                             .scaledToFill()
                             .frame(width: geometry.size.width, height: geometry.size.height)
+                            .posed(photoPose)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
                             .clipped()
                             .opacity(ghostOpacity)
                             .allowsHitTesting(false)
@@ -1934,7 +1954,20 @@ struct ResetStage: View {
                             .allowsHitTesting(false)
                     }
                 }
-                if !restorer.paused, reference.models.isEmpty, !measuring {
+                if !restorer.paused, reference.models.isEmpty, !measuring, reference.photoOnly {
+                    // An imported photo: one finger sideways for strength, two fingers to move, pinch, twist; double tap resets.
+                    PhotoAdjustLayer(
+                        pose: $photoPose,
+                        strength: Binding(get: { 1 - ghostOpacity }, set: { ghostOpacity = 1 - $0 }),
+                        swiping: { active in
+                            if active {
+                                if !swipingStrength { withAnimation(.easeOut(duration: 0.15)) { swipingStrength = true } }
+                            } else {
+                                withAnimation(.easeOut(duration: 0.4).delay(0.8)) { swipingStrength = false }
+                            }
+                        },
+                        changed: { photoPose.save(reference.id) })
+                } else if !restorer.paused, reference.models.isEmpty, !measuring {
                     // Swipe left or right anywhere for the ghost strength (not while measuring: drags draw lines).
                     Color.clear
                         .modifier(HorizontalSwipe(value: Binding(get: { 1 - ghostOpacity }, set: { ghostOpacity = 1 - $0 })) { active in
