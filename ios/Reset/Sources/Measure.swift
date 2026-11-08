@@ -168,6 +168,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         var shifted = false
         /// When the remembered picture was last renewed from a newer view of the same spot.
         var refreshedAt: TimeInterval = 0
+        /// The picture as it was when the line was drawn, kept for finding the spot again after it has been lost.
+        var original: [Float] = []
     }
     private var tracks: [String: EndTrack] = [:]
     /// Each held line's length, kept while its ends follow the picture, so holding never stretches or shrinks it.
@@ -341,7 +343,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             // under it is no longer where the end is and the hold is lost (Phil's 2026-11-08 logs).
             let looksDown = frame.camera.transform.columns.2.y > 0.4  // the camera's back axis points up when it looks down
             let level = (point: point, normal: SIMD3<Float>(0, 1, 0))
-            tracks["\(line.id.uuidString):\(end)"] = EndTrack(patch: patch, origin: through.origin, direction: through.direction, depth: depth, first: depth, plane: plane ?? (looksDown ? level : facing))
+            tracks["\(line.id.uuidString):\(end)"] = EndTrack(patch: patch, origin: through.origin, direction: through.direction, depth: depth, first: depth, plane: plane ?? (looksDown ? level : facing), original: patch)
         }
     }
 
@@ -384,9 +386,19 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             let point = track.plane != nil ? current : track.origin + track.direction * track.depth
             guard let p = Measurer.pixel(of: point, in: frame) else { continue }
             let centre = SIMD2(Int(p.x / 2), Int(p.y / 2))
-            guard let window = Measurer.lumaGrid(frame, centre: centre, half: grid / 2),
-                  let hit = FeatureTrack.find(patch: track.patch, patchSize: side, in: window, gridSize: grid, radius: Measurer.searchRadius),
-                  hit.score > 0.72 else {
+            // The renewed picture first; when that fails (a quick turn of the phone), the original one, which can
+            // find the spot again once the view comes back.
+            var found: (dx: Int, dy: Int, score: Float)?
+            if let window = Measurer.lumaGrid(frame, centre: centre, half: grid / 2) {
+                for candidate in [track.patch, track.original] where candidate.count == side * side {
+                    if let hit = FeatureTrack.find(patch: candidate, patchSize: side, in: window, gridSize: grid, radius: Measurer.searchRadius),
+                       hit.score > 0.72 {
+                        found = hit
+                        break
+                    }
+                }
+            }
+            guard let hit = found else {
                 track.misses += 1
                 tracks[key] = track
                 continue
