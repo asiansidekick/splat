@@ -493,6 +493,40 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// Every couple of seconds, logs where the newest line's ends sit against the depth the phone
     /// reads there now: a growing gap means the marks are drifting, a gap from the start means
     /// they were placed wrong.
+    private var lastHealth: TimeInterval = 0
+
+    /// Every 3 s while measuring: what ARKit itself has found. Build 1221 showed ARKit's raycasts never hit a
+    /// surface on Phil's phone (all 72 tries in his logs), so this says whether it finds planes or points at all.
+    private func logARKitHealth(_ frame: ARFrame) {
+        guard frame.timestamp - lastHealth > 3 else { return }
+        lastHealth = frame.timestamp
+        let planes = frame.anchors.compactMap { $0 as? ARPlaneAnchor }
+        let level = planes.filter { $0.alignment == .horizontal }.count
+        let points = frame.rawFeaturePoints?.points.count ?? -1
+        let mapping: String
+        switch frame.worldMappingStatus {
+        case .notAvailable: mapping = "not available"
+        case .limited: mapping = "limited"
+        case .extending: mapping = "extending"
+        case .mapped: mapping = "mapped"
+        @unknown default: mapping = "?"
+        }
+        let centre = CGPoint(x: 0.5, y: 0.5)
+        func hits(_ target: ARRaycastQuery.Target) -> String {
+            let query = frame.raycastQuery(from: centre, allowing: target, alignment: .any)
+            guard let hit = session.raycast(query).first else { return "none" }
+            let p = frame.camera.transform.inverse * hit.worldTransform.columns.3
+            return String(format: "%.2f m", -p.z)
+        }
+        let depth = Measurer.depthPoint(frame).map { p -> String in
+            let q = frame.camera.transform.inverse * SIMD4(p.x, p.y, p.z, 1)
+            return String(format: "%.2f m", -q.z)
+        } ?? "none"
+        let biggest = planes.map { $0.planeExtent.width * $0.planeExtent.height }.max() ?? 0
+        Diagnostics.log(String(format: "ARKit: %ld planes (%ld level, biggest %.2f m2), %ld feature points, map %@, anchors %ld; at the crosshair found surface %@, estimated %@, LiDAR %@",
+                               planes.count, level, biggest, points, mapping, frame.anchors.count, hits(.existingPlaneGeometry), hits(.estimatedPlane), depth))
+    }
+
     private func logMarkCheck(_ frame: ARFrame) {
         guard frame.timestamp - lastMarkCheck > 2, let mark = measurements.last, let depth = Measurer.depth(of: frame) else { return }
         lastMarkCheck = frame.timestamp
@@ -1335,6 +1369,7 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         trackingNote = nil
         loggedNote = nil
         logMarkCheck(frame)
+        logARKitHealth(frame)
         var reading: SIMD3<Float>?
         let found = Measurer.foundSurfacePoint(frame, session: session, normalized: CGPoint(x: 0.5, y: 0.5))
         onFoundSurface = found != nil
