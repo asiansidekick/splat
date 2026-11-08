@@ -8,13 +8,15 @@ struct HelpView: View {
     @AppStorage(PhotoMetadata.key) private var stampMetadata = true
     @AppStorage("leftHanded") private var leftHanded = false
     @AppStorage("measureRaycast") private var measureRaycast = true
+    /// Made again each time this page shows, so a test just run (Surface test) is in the log sent.
+    @State private var report = Diagnostics.reportURL()
 
     var body: some View {
         NavigationStack {
             List {
                 // Phil, 2026-11-01: feedback log at the TOP while testing. Move it back to the bottom when the app is shared with the team.
                 Section {
-                    ShareLink(item: Diagnostics.reportURL()) {
+                    ShareLink(item: report) {
                         Label("Send feedback log", systemImage: "ladybug")
                     }
                     NavigationLink {
@@ -85,6 +87,7 @@ struct HelpView: View {
                 }
             }
             .navigationTitle("How Reset works")
+            .onAppear { report = Diagnostics.reportURL() }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
