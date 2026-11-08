@@ -73,6 +73,13 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
+      - name: Cache the depth model
+        uses: actions/cache@v4
+        with:
+          path: ios/Reset/Models
+          key: depth-anything-v2-small-f16
+      - name: Fetch the depth model
+        run: python3 .github/scripts/fetch_depth_model.py
       - name: Generate Xcode project
         working-directory: ios/Reset
         run: |

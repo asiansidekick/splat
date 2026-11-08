@@ -864,8 +864,17 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             planeNote = ", no flat plane (own depth at each end)"
             dragPlane = nil
         }
-        // First the surface the picture's tracked points lie on (no LiDAR), else the recent frames' depth agreed.
-        if let qa = pictureSurface.point(in: frame, normalized: a.normalized), let qb = pictureSurface.point(in: frame, normalized: b.normalized) {
+        // First depth from the picture (the network, scaled by the tracked points), then the surface the tracked
+        // points lie on, else the recent frames' LiDAR depth agreed: none of them need a working LiDAR but the last.
+        if let ga = PictureDepth.shared.point(in: frame, normalized: a.normalized), let gb = PictureDepth.shared.point(in: frame, normalized: b.normalized) {
+            let inverse = frame.camera.transform.inverse
+            func ahead(_ p: SIMD3<Float>) -> Float { -(inverse * SIMD4(p, 1)).z }
+            let fit = PictureDepth.shared.latest
+            planeNote += String(format: ", depth from the picture %.3f/%.3f m (LiDAR %.3f/%.3f m), fit %ld points, error %.1f %%", ahead(ga), ahead(gb), ahead(pa), ahead(pb), fit?.points ?? 0, (fit?.error ?? 0) * 100)
+            pa = ga
+            pb = gb
+            dragPlane = nil
+        } else if let qa = pictureSurface.point(in: frame, normalized: a.normalized), let qb = pictureSurface.point(in: frame, normalized: b.normalized) {
             let inverse = frame.camera.transform.inverse
             func ahead(_ p: SIMD3<Float>) -> Float { -(inverse * SIMD4(p, 1)).z }
             planeNote += String(format: ", on picture points %ld/%ld, %.3f/%.3f m (LiDAR %.3f/%.3f m)", qa.points, qb.points, ahead(qa.point), ahead(qb.point), ahead(pa), ahead(pb))
@@ -1417,11 +1426,13 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         onFoundSurface = found != nil
         fusion.add(frame)
         pictureSurface.add(frame)
-        let pictured = found == nil ? pictureSurface.point(in: frame, normalized: CGPoint(x: 0.5, y: 0.5)) : nil
+        if found == nil { PictureDepth.shared.update(frame, points: pictureSurface.recent) }
+        let guessed = found == nil ? PictureDepth.shared.point(in: frame, normalized: CGPoint(x: 0.5, y: 0.5)) : nil
+        let pictured = found == nil && guessed == nil ? pictureSurface.point(in: frame, normalized: CGPoint(x: 0.5, y: 0.5)) : nil
         var fused = found == nil && pictured == nil ? fusion.point(in: frame, normalized: CGPoint(x: 0.5, y: 0.5)) : nil
         if let f = fused, let single = Measurer.depthPoint(frame), !Measurer.agrees(f.point, single, frame) { fused = nil }
         onFused = fused != nil
-        crosshairSource = found != nil ? "ARKit surface" : pictured != nil ? "picture points" : fused != nil ? "LiDAR over frames" : "one LiDAR frame"
+        crosshairSource = found != nil ? "ARKit surface" : guessed != nil ? "depth from the picture" : pictured != nil ? "picture points" : fused != nil ? "LiDAR over frames" : "one LiDAR frame"
         if crosshairSource != loggedCrosshairSource, Date().timeIntervalSince(lastSourceLog) > 3 {
             loggedCrosshairSource = crosshairSource
             lastSourceLog = Date()
@@ -1429,6 +1440,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         }
         if let found {
             reading = found
+            fromLiDAR = true
+        } else if let guessed {
+            reading = guessed
             fromLiDAR = true
         } else if let pictured {
             reading = pictured.point

@@ -8,7 +8,11 @@ targets:
   Reset:
     type: application
     platform: iOS
-    sources: [Sources]
+    sources:
+      - Sources
+      # Depth Anything V2 Small (Core ML), fetched by CI: depth from the picture where the LiDAR fails.
+      - path: Models
+        optional: true
     # A shared scheme, so CI can archive the app for TestFlight.
     scheme: {}
     info:

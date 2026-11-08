@@ -34,6 +34,9 @@ final class PointSurface {
 
     var count: Int { points.count }
 
+    /// Every point kept, in room coordinates.
+    var recent: [SIMD3<Float>] { points.values.map(\.point) }
+
     /// Where the line of sight through a place in the current picture (0 to 1, sensor layout) meets the surface the
     /// tracked points round it lie on; nil when too few points are near it or they do not lie flat.
     func point(in frame: ARFrame, normalized n: CGPoint) -> (point: SIMD3<Float>, points: Int)? {
