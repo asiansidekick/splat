@@ -675,18 +675,23 @@ struct ModelOverlay: View {
                         .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
                         .shadow(color: .black.opacity(0.5), radius: 6)
                         .allowsHitTesting(false)
-                    HStack(spacing: 6) {
-                        Button("Place here") { placer.bringToView() }
-                        Button("Straighten") { placer.resetPose() }
-                        Button(placer.showDimensions ? "Hide sizes" : "Sizes") { placer.showDimensions.toggle() }
-                        Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
-                        Button("Done") { placer.selectedModel = nil }
+                    // Two rows so every word is whole (one row cut them to "Place h..." on Phil's phone).
+                    VStack(spacing: 6) {
+                        HStack(spacing: 6) {
+                            Button("Place here") { placer.bringToView() }
+                            Button("Straighten") { placer.resetPose() }
+                            Button(placer.showDimensions ? "Hide sizes" : "Sizes") { placer.showDimensions.toggle() }
+                        }
+                        HStack(spacing: 6) {
+                            Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
+                            Button("Done") { placer.selectedModel = nil }
+                        }
                     }
                     .buttonStyle(.bordered)
-                    .font(Theme.caption)
+                    .font(Theme.subheadline)
                     .controlSize(.small)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .fixedSize()
                 }
                 .frame(maxWidth: 420)
             }

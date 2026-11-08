@@ -2316,8 +2316,11 @@ struct MeasureToggle: View {
             Haptics.tap()
             measurer.active.toggle()
         } label: {
-            Image(systemName: "ruler").font(Theme.title3)
-                .foregroundStyle(measurer.active ? Theme.accent : Color.white)
+            // On: dark ruler on a mint pill, like the LiDAR button, so it reads at a glance (Phil, 2026-11-08).
+            Image(systemName: measurer.active ? "ruler.fill" : "ruler").font(Theme.title3)
+                .foregroundStyle(measurer.active ? Theme.onAccent : Color.white)
+                .padding(.horizontal, measurer.active ? 8 : 0).padding(.vertical, measurer.active ? 4 : 0)
+                .background(Capsule().fill(measurer.active ? Theme.accent : Color.clear))
         }
         .accessibilityLabel(measurer.active ? "Stop measuring" : "Measure")
     }
