@@ -43,7 +43,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private var boxes: [UUID: (low: SIMD3<Float>, high: SIMD3<Float>)] = [:]
     /// While dragging: from where the finger's ray meets the model's floor height to the model,
     /// so the model keeps its place under the finger instead of jumping to it.
-    private var dragOffset: SIMD3<Float>?
+    private var dragTarget: SIMD3<Float>?
     /// One-finger drags move the selected model up and down instead of across (Phil, 2026-10-31).
     @Published var lifting = false
     /// The room is dim enough that the phone may lose its place, so cut-outs can drift (Phil, 2026-11-07).
@@ -277,11 +277,9 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         selectedModel = hits.lazy.compactMap { self.modelID(of: $0.node) }.first
     }
 
-    /// Drags the model across the room. Where the LiDAR sees a surface under the finger (the floor, a
-    /// table), the model stands on it; with none, it slides across the level plane at its own height,
-    /// which works with no surface found, unlike a raycast. With Lift on, a drag moves it up and down.
+    /// Drags the model (a USDZ or a cut-out) across the room at its own height: sideways with the finger, and
+    /// further or nearer as the finger goes up or down the screen. With Lift on, a drag moves it up and down.
     /// Picks up the model under the finger (or the only one) when none is selected.
-    static let snapsToSurface = false
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
         guard !isSuspended(), let view = gesture.view as? SCNView else { return }
@@ -293,7 +291,6 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             } else if selectedModel == nil, models.count == 1 {
                 selectedModel = models[0].id
             }
-            dragOffset = nil
         }
         guard let id = selectedModel, let node = modelNodes[id] else { return }
         if lifting {
@@ -311,37 +308,41 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             }
             return
         }
-        guard let point = floorPoint(location, in: view, height: node.simdWorldPosition.y) else { return }
-        // Sliding on a level plane at the model's own height felt right (build 78); snapping to the
-        // LiDAR surface under the finger (build 114) made it jumpy, so it is off. Floor does that on demand.
-        let hit: SIMD3<Float>? = Self.snapsToSurface ? surface(at: location, in: view) : nil
+        // Build 1237: the finger used to point at a spot on the level floor, so far away (where the line of sight
+        // is nearly level) a tiny finger move threw the model metres. Now the drag is by steps: sideways follows
+        // the finger on the screen, and up or down the screen pushes it away or pulls it in by a share of its
+        // distance (about double or half for a third of the screen), eased so it glides instead of twitching.
         switch gesture.state {
         case .began:
-            let anchor = hit ?? point
-            dragOffset = SIMD3(node.simdWorldPosition.x - anchor.x, 0, node.simdWorldPosition.z - anchor.z)
-            if hit == nil { dragOffset?.y = node.simdWorldPosition.y - point.y }
+            gesture.setTranslation(.zero, in: view)
+            dragTarget = node.simdWorldPosition
         case .changed:
-            move(node, id: id, level: point, surface: hit)
+            let delta = gesture.translation(in: view)
+            gesture.setTranslation(.zero, in: view)
+            guard var target = dragTarget, let eye = session.currentFrame?.camera.transform.columns.3.xyz else { return }
+            let shown = view.projectPoint(SCNVector3(target.x, target.y, target.z))
+            if shown.z > 0, shown.z < 1 {
+                let moved = SIMD3<Float>(view.unprojectPoint(SCNVector3(shown.x + Float(delta.x), shown.y, shown.z)))
+                var sideways = moved - target
+                sideways.y = 0
+                if simd_length(sideways) < 1 { target += sideways }
+            }
+            var away = target - eye
+            away.y = 0
+            let distance = simd_length(away)
+            if distance > 0.05 {
+                let wanted = min(max(distance * exp(-Float(delta.y) * 0.0022), 0.3), 15)
+                target += away / distance * (wanted - distance)
+            }
+            dragTarget = target
+            node.simdWorldPosition = simd_mix(node.simdWorldPosition, target, SIMD3(repeating: 0.45))
         case .ended, .cancelled:
-            if gesture.state == .ended { move(node, id: id, level: point, surface: hit) }
-            dragOffset = nil
+            if let target = dragTarget { node.simdWorldPosition = target }
+            dragTarget = nil
             commit(id)
         default:
             break
         }
-    }
-
-    private func move(_ node: SCNNode, id: UUID, level: SIMD3<Float>, surface: SIMD3<Float>?) {
-        let offset = dragOffset ?? .zero
-        guard let surface else {
-            node.simdWorldPosition = level + offset
-            return
-        }
-        // The lowest point of the model rests on the surface, eased so a noisy reading doesn't shake it.
-        let bottom = (boxes[id]?.low.y ?? 0) * node.simdScale.y
-        let wanted = surface.y - bottom
-        let y = node.simdWorldPosition.y * 0.6 + wanted * 0.4
-        node.simdWorldPosition = SIMD3(surface.x + offset.x, y, surface.z + offset.z)
     }
 
     /// The surface the LiDAR sees under a place on the screen, in the room's coordinates.
@@ -389,20 +390,6 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         node.simdWorldPosition.y = floor.y - (boxes[id]?.low.y ?? 0) * node.simdScale.y
         Haptics.success()
         commit(id)
-    }
-
-    /// Where the finger's ray meets the level plane at `height`, nil when it points above it
-    /// or the meeting point is very far off.
-    private func floorPoint(_ location: CGPoint, in view: SCNView, height: Float) -> SIMD3<Float>? {
-        let near = SIMD3<Float>(view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 0)))
-        let far = SIMD3<Float>(view.unprojectPoint(SCNVector3(Float(location.x), Float(location.y), 1)))
-        let direction = far - near
-        guard abs(direction.y) > 1e-6 else { return nil }
-        let t = (height - near.y) / direction.y
-        guard t > 0 else { return nil }
-        let point = near + direction * t
-        guard simd_distance(point, near) < 15 else { return nil }
-        return point
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
