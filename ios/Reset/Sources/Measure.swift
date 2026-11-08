@@ -523,6 +523,9 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             return String(format: "%.2f m", -q.z)
         } ?? "none"
         let biggest = planes.map { $0.planeExtent.width * $0.planeExtent.height }.max() ?? 0
+        let running = session.configuration as? ARWorldTrackingConfiguration
+        let config = running.map { "config planes \($0.planeDetection.rawValue), depth \($0.frameSemantics.contains(.sceneDepth)), video \(Int($0.videoFormat.imageResolution.width))x\(Int($0.videoFormat.imageResolution.height))@\($0.videoFormat.framesPerSecond)" } ?? "config not world tracking: \(String(describing: session.configuration))"
+        Diagnostics.log(config)
         Diagnostics.log(String(format: "ARKit: %ld planes (%ld level, biggest %.2f m2), %ld feature points, map %@, anchors %ld; at the crosshair found surface %@, estimated %@, LiDAR %@",
                                planes.count, level, biggest, points, mapping, frame.anchors.count, hits(.existingPlaneGeometry), hits(.estimatedPlane), depth))
     }
