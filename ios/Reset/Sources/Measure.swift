@@ -1041,7 +1041,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         guard let cursor else { return trackingNote ?? "Aim at a surface" }
         if tooClose { return "Too close: step back a little" }
         if let start { return "~" + Measurer.liveText(simd_distance(start, cursor)) }
-        return measurements.isEmpty && notes.isEmpty ? "Drag a line across it, or hold to add a note. Pinch to resize the text." : "Drag a line, or hold to add a note"
+        // Phil, 2026-11-08: measuring is for annotating; the phone's sizes are rough, real ones are typed in.
+        return measurements.isEmpty && notes.isEmpty ? "Drag a line, or hold to add a note. Sizes are rough: tap one to type the real size." : "Sizes are rough: tap one to type the real size"
     }
 
     /// Starts a line at the crosshair, or finishes the one started.
