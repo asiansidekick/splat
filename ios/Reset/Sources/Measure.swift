@@ -26,6 +26,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     /// The crosshair sits on a surface ARKit has found (steady), not on one frame's LiDAR depth.
     private var onFoundSurface = false
     private var loggedFound: Bool?
+    /// The LiDAR depth of the last second and a half, agreed between frames (ARKit finds no surfaces on Phil's phone).
+    let fusion = DepthFusion()
+    private var onFused = false
+    private var loggedFused: Bool?
     /// A line being drawn with a finger, both ends read from one camera frame.
     struct DragLine: Equatable {
         var a: SIMD3<Float>
@@ -847,6 +851,15 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
             planeNote = ", no flat plane (own depth at each end)"
             dragPlane = nil
         }
+        // The recent frames' depth, agreed: steadier than this frame's alone (10 to 20 cm swims on Phil's phone).
+        if let fa = fusion.point(in: frame, normalized: a.normalized), let fb = fusion.point(in: frame, normalized: b.normalized) {
+            let inverse = frame.camera.transform.inverse
+            func ahead(_ p: SIMD3<Float>) -> Float { -(inverse * SIMD4(p, 1)).z }
+            planeNote += String(format: ", agreed over %ld/%ld frames %.3f/%.3f m (this frame %.3f/%.3f m)", fa.frames, fb.frames, ahead(fa.point), ahead(fb.point), ahead(pa), ahead(pb))
+            pa = fa.point
+            pb = fb.point
+            dragPlane = nil
+        }
         if Measurer.useRaycast {
             let inverse = frame.camera.transform.inverse
             func along(_ p: SIMD3<Float>) -> Float { -(inverse * SIMD4(p, 1)).z }
@@ -1334,6 +1347,8 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         start = nil
         cursor = nil
         selected = nil
+        fusion.clear()
+        loggedFused = nil
         loggedSource = nil
         trackingNote = nil
         loggedNote = nil
@@ -1376,8 +1391,14 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         var reading: SIMD3<Float>?
         let found = Measurer.foundSurfacePoint(frame, session: session, normalized: CGPoint(x: 0.5, y: 0.5))
         onFoundSurface = found != nil
+        fusion.add(frame)
+        let fused = found == nil ? fusion.point(in: frame, normalized: CGPoint(x: 0.5, y: 0.5)) : nil
+        onFused = fused != nil
         if let found {
             reading = found
+            fromLiDAR = true
+        } else if let fused {
+            reading = fused.point
             fromLiDAR = true
         } else if let point = Measurer.depthPoint(frame) {
             reading = point
@@ -1402,6 +1423,10 @@ final class Measurer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
         if loggedFound != onFoundSurface {
             loggedFound = onFoundSurface
             Diagnostics.log("Measure: crosshair \(onFoundSurface ? "on a surface ARKit has found" : "off any found surface (LiDAR depth)")")
+        }
+        if loggedFused != onFused {
+            loggedFused = onFused
+            Diagnostics.log("Measure: crosshair \(onFused ? "on LiDAR depth agreed over recent frames" : "on one frame's LiDAR depth")")
         }
         if let cursor, let camera = session.currentFrame?.camera.transform.columns.3 {
             let away = simd_distance(cursor, SIMD3(camera.x, camera.y, camera.z))
