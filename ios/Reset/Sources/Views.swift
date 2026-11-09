@@ -1519,6 +1519,9 @@ struct CaptureStage: View {
     let onPhoto: (UIImage) -> Void
     let showToast: (String) -> Void
     @AppStorage("captureMode") private var mode: CaptureMode = .snapshot
+    /// Which lens a snapshot uses; anything but 1× is a plain photo (LensCamera.swift).
+    @AppStorage("snapshotLens") private var lens = 1.0
+    @State private var lensBusy = false
     @AppStorage("useLiDAR") private var useLiDAR = true
     @AppStorage("leftHanded") private var leftHanded = false
     @Environment(\.verticalSizeClass) private var verticalSize
@@ -1623,7 +1626,12 @@ struct CaptureStage: View {
                 shutterOnce()
             }
             .modifier(WindowFrame { frame in tapCatcher.targets["Capture shutter"] = (frame, { shutterOnce() }) })
-            .disabled(recorder.saving)
+            .overlay(alignment: .top) {
+                if mode == .snapshot, !recorder.capturing {
+                    LensChooser(zoom: $lens).offset(y: -44).disabled(lensBusy)
+                }
+            }
+            .disabled(recorder.saving || lensBusy)
             .accessibilityLabel(shutterLabel)
         } trailing: {
             WithScreenshot(camera: { holder.view }, toast: showToast, size: 74, evenCells: true) {
@@ -1709,8 +1717,39 @@ struct CaptureStage: View {
         shutterTapped()
     }
 
+    /// A snapshot on the 0.5× or 3× lens: tracking pauses, the photo is taken, tracking carries on.
+    private func lensSnapshot() {
+        guard let chosen = LensCamera.lenses.first(where: { $0.zoom == lens }), !lensBusy else { return }
+        lensBusy = true
+        let configuration = recorder.session.configuration
+        recorder.session.pause()
+        Diagnostics.log("Lens snapshot on \(chosen.label)")
+        Task {
+            let data = await LensCamera.photo(chosen)
+            if let configuration { recorder.session.run(configuration) }
+            lensBusy = false
+            guard let data else {
+                showToast("Couldn't take the \(chosen.label) photo")
+                return
+            }
+            do {
+                var reference = try PhotoLibrary.makeReference(from: data, scene: scene, setup: setup)
+                reference.shot = shot
+                reference.name = name.isEmpty ? "\(chosen.label) photo" : name
+                try ReferenceStore.save(reference)
+                if let image = UIImage(data: data) { onPhoto(image) }
+                onSaved(reference)
+            } catch {
+                Diagnostics.log("Lens snapshot could not be saved: \(error)")
+                showToast("Couldn't save the \(chosen.label) photo")
+            }
+        }
+    }
+
     private func shutterTapped() {
         switch mode {
+        case .snapshot where lens != 1 && LensCamera.lenses.contains(where: { $0.zoom == lens }) && !recorder.capturing:
+            lensSnapshot()
         case .snapshot:
             takePhoto()
             // Another tap while waiting for the map adds a second view to the same reference.
