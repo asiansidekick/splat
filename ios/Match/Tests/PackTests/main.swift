@@ -1,0 +1,468 @@
+// Tests for team packs (AirDrop sharing), run on a Mac by CI:
+//   swiftc -O Sources/Board.swift Sources/TeamPack.swift Tests/PackTests/main.swift -o pack-tests
+//   ./pack-tests
+// Boards are written to a folder the way the app keeps them, packed, opened and added to a
+// second "phone". Checks the passcode lock, that photos lose their location and camera details,
+// that nothing a teammate already has is overwritten, and that damaged or hostile packs are refused.
+
+import CoreGraphics
+import Foundation
+import ImageIO
+import UniformTypeIdentifiers
+
+var failures = 0
+func expect(_ condition: Bool, _ message: String) {
+    print((condition ? "PASS  " : "FAIL  ") + message)
+    if !condition { failures += 1 }
+}
+
+func error(of work: () throws -> Void) -> TeamPack.PackError? {
+    do {
+        try work()
+        return nil
+    } catch let error as TeamPack.PackError {
+        return error
+    } catch {
+        return nil
+    }
+}
+
+let manager = FileManager.default
+let scratch = manager.temporaryDirectory.appending(path: "pack-tests-\(UUID().uuidString)")
+let phoneA = scratch.appending(path: "A/Boards")
+let phoneB = scratch.appending(path: "B/Boards")
+try manager.createDirectory(at: phoneA, withIntermediateDirectories: true)
+try manager.createDirectory(at: phoneB, withIntermediateDirectories: true)
+defer { try? manager.removeItem(at: scratch) }
+
+/// A small JPEG, a different colour for each photo, optionally with a location and camera details
+/// as an iPhone photo imported from the Photos library would have.
+func jpeg(shade: CGFloat, private details: Bool = false, width: Int = 64, height: Int = 48) -> Data {
+    let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+    context.setFillColor(CGColor(red: shade, green: 0.5, blue: 1 - shade, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    context.fill(CGRect(x: 8, y: 8, width: 20, height: 10))
+    let image = context.makeImage()!
+    let out = NSMutableData()
+    let destination = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil)!
+    var properties: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 0.9]
+    if details {
+        properties[kCGImagePropertyGPSDictionary] = [
+            kCGImagePropertyGPSLatitude: 51.5014, kCGImagePropertyGPSLatitudeRef: "N",
+            kCGImagePropertyGPSLongitude: 0.1419, kCGImagePropertyGPSLongitudeRef: "W",
+        ]
+        properties[kCGImagePropertyTIFFDictionary] = [kCGImagePropertyTIFFMake: "Apple", kCGImagePropertyTIFFModel: "iPhone 15 Pro"]
+        properties[kCGImagePropertyExifDictionary] = [kCGImagePropertyExifDateTimeOriginal: "2026:10:30 07:12:00",
+                                                     kCGImagePropertyExifBodySerialNumber: "SERIAL123"]
+    }
+    CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+    CGImageDestinationFinalize(destination)
+    return out as Data
+}
+
+func properties(_ data: Data) -> [CFString: Any] {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return [:] }
+    return CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
+}
+
+/// A saved depth map, as Depth.swift writes it.
+func depthData(width: Int = 4, height: Int = 3) -> Data {
+    var out = Data()
+    func put(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
+    put(0x4450_5448)
+    put(UInt32(width))
+    put(UInt32(height))
+    for i in 0..<(width * height) { put(Float(1 + Double(i) * 0.01).bitPattern) }
+    return out
+}
+
+/// A board on "phone A": photos written to its folder like BoardStore does.
+func makeBoard(scene: String, subject: String, department: Department, shots: [(angle: String, reference: Bool, take: Int, details: Bool, depth: Bool)]) throws -> Board {
+    var board = Board(scene: scene, subject: subject, department: department, created: .now)
+    board.notes = "Hair pinned left, \(subject)"
+    let folder = phoneA.appending(path: board.id.uuidString)
+    try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+    for (i, s) in shots.enumerated() {
+        var shot = Shot(taken: Date(timeIntervalSince1970: 1_800_000_000 + Double(i) * 60), take: s.take, angle: s.angle,
+                        source: s.details ? .imported : .camera)
+        shot.isReference = s.reference
+        shot.note = "Note \(i)"
+        try jpeg(shade: CGFloat(i) / 10, private: s.details).write(to: folder.appending(path: shot.file))
+        try jpeg(shade: CGFloat(i) / 10, private: s.details).write(to: folder.appending(path: shot.thumbnailFile))
+        if s.depth { try depthData().write(to: folder.appending(path: shot.depthFile)) }
+        board.shots.append(shot)
+    }
+    try TeamPack.encoder.encode(board).write(to: folder.appending(path: "board.json"))
+    return board
+}
+
+let sarah = try makeBoard(scene: "12", subject: "Sarah", department: .hair, shots: [
+    ("Front", true, 0, false, true),
+    ("Left", true, 0, true, false),  // imported from Photos: has a location
+    ("Front", false, 1, false, false),
+    ("Front", false, 2, false, false),
+])
+let tom = try makeBoard(scene: "12", subject: "Tom", department: .costume, shots: [
+    ("Full length", true, 0, false, false),
+])
+
+// MARK: Metadata
+
+let gpsPhoto = jpeg(shade: 0.3, private: true)
+expect(properties(gpsPhoto)[kCGImagePropertyGPSDictionary] != nil, "test photo starts with a location")
+expect(!TeamPack.isClean(gpsPhoto), "a photo with a location is not clean")
+let stripped = TeamPack.stripped(gpsPhoto)
+expect(stripped != nil, "stripping gives a picture back")
+if let stripped {
+    let p = properties(stripped)
+    expect(p[kCGImagePropertyGPSDictionary] == nil, "stripped photo has no location")
+    expect((p[kCGImagePropertyTIFFDictionary] as? [CFString: Any])?[kCGImagePropertyTIFFModel] == nil, "stripped photo has no phone model")
+    expect((p[kCGImagePropertyExifDictionary] as? [CFString: Any])?[kCGImagePropertyExifBodySerialNumber] == nil, "stripped photo has no serial number")
+    expect(TeamPack.isClean(stripped), "stripped photo counts as clean")
+    expect((p[kCGImagePropertyPixelWidth] as? Int) == 64 && (p[kCGImagePropertyPixelHeight] as? Int) == 48, "stripped photo keeps its size")
+}
+let plainPhoto = jpeg(shade: 0.1)
+expect(TeamPack.isClean(plainPhoto), "a photo Match took counts as clean")
+expect(TeamPack.cleaned(plainPhoto) == plainPhoto, "a clean photo is sent untouched (no quality lost)")
+expect(TeamPack.cleaned(Data("not a picture".utf8)) == nil, "text is not a picture")
+
+// MARK: An open pack
+
+let open = try TeamPack.make(boards: [sarah, tom], content: .all, from: "Sam", passcode: nil, root: phoneA)
+expect(!TeamPack.isLocked(open), "pack without a passcode is not locked")
+let opened = try TeamPack.open(open, passcode: nil)
+expect(opened.manifest.from == "Sam", "pack says who sent it")
+expect(opened.manifest.boards.map(\.id) == [sarah.id, tom.id], "pack holds both boards")
+expect(opened.manifest.boards[0].shots.map(\.id) == sarah.shots.map(\.id), "all photos sent with All photos")
+expect(opened.manifest.boards[0].notes == sarah.notes && opened.manifest.boards[0].shots[1].note == "Note 1", "notes travel with the board and photos")
+expect(opened.files.count == 5 * 2 + 1, "photos, thumbnails and one depth map in the pack (got \(opened.files.count))")
+let sentLeft = opened.files["\(sarah.id.uuidString)/\(sarah.shots[1].file)"]
+expect(sentLeft.map { properties($0)[kCGImagePropertyGPSDictionary] == nil } == true, "imported photo goes without its location")
+expect(sentLeft.map(TeamPack.isClean) == true, "every sent photo is clean")
+let sentFront = opened.files["\(sarah.id.uuidString)/\(sarah.shots[0].file)"]
+let frontOnDisk = try Data(contentsOf: phoneA.appending(path: sarah.id.uuidString).appending(path: sarah.shots[0].file))
+expect(sentFront == frontOnDisk, "a photo Match took is sent byte for byte")
+expect(opened.files["\(sarah.id.uuidString)/\(sarah.shots[0].depthFile)"] == depthData(), "LiDAR depth goes with its photo")
+
+let refs = try TeamPack.open(TeamPack.make(boards: [sarah], content: .references, from: "", passcode: nil, root: phoneA), passcode: nil)
+expect(refs.manifest.boards[0].shots.count == 2 && refs.manifest.boards[0].shots.allSatisfy(\.isReference), "References only sends just the references")
+expect(refs.files.count == 2 * 2 + 1, "References only leaves the take photos behind")
+
+// MARK: A locked pack
+
+let locked = try TeamPack.make(boards: [sarah, tom], content: .all, from: "Sam", passcode: "blue-door-42", root: phoneA)
+expect(TeamPack.isLocked(locked), "pack with a passcode is locked")
+expect(locked.range(of: Data("Sarah".utf8)) == nil && locked.range(of: Data("manifest.json".utf8)) == nil, "locked pack shows no names or notes inside")
+expect(locked.range(of: frontOnDisk.prefix(200)) == nil, "locked pack shows no photo bytes")
+expect(error { _ = try TeamPack.open(locked, passcode: nil) } == .needsPasscode, "locked pack asks for the passcode")
+expect(error { _ = try TeamPack.open(locked, passcode: "blue-door-41") } == .wrongPasscode, "wrong passcode doesn't open it")
+let unlocked = try? TeamPack.open(locked, passcode: "blue-door-42")
+expect(unlocked?.manifest.boards.count == 2 && unlocked?.files.count == opened.files.count, "right passcode opens everything")
+let locked2 = try TeamPack.make(boards: [sarah], content: .all, from: "", passcode: "blue-door-42", root: phoneA)
+let locked3 = try TeamPack.make(boards: [sarah], content: .all, from: "", passcode: "blue-door-42", root: phoneA)
+expect(locked2 != locked3, "the same boards locked twice look different (fresh salt and nonce)")
+var tampered = locked
+tampered[tampered.count - 40] ^= 0xFF
+expect(error { _ = try TeamPack.open(tampered, passcode: "blue-door-42") } != nil, "a changed byte is caught, not opened")
+
+// MARK: Damaged and hostile packs
+
+expect(error { _ = try TeamPack.open(Data("hello".utf8), passcode: nil) } == .notAPack, "random file is not a pack")
+expect(error { _ = try TeamPack.open(open.prefix(open.count / 2), passcode: nil) } == .damaged, "half a pack is damaged, no crash")
+expect(error { _ = try TeamPack.open(open.prefix(9), passcode: nil) } == .damaged, "header only is damaged")
+expect(error { _ = try TeamPack.open((Data([0]) + open).dropFirst(), passcode: nil) } == nil, "a slice of a pack still opens")
+var future = open
+future[8] = 7
+expect(error { _ = try TeamPack.open(future, passcode: nil) } == .tooNew, "a pack from a newer Match says so")
+var huge = open.prefix(9)
+huge.append(contentsOf: [0xFF, 0xFF, 0xFF, 0x7F])
+expect(error { _ = try TeamPack.open(huge, passcode: nil) } == .damaged, "a giant name length is caught")
+
+// An extra file trying to escape the board folder, and one for a board not in the manifest.
+func entry(_ name: String, _ data: Data) -> Data {
+    var out = Data()
+    let n = Data(name.utf8)
+    withUnsafeBytes(of: UInt32(n.count).littleEndian) { out.append(contentsOf: $0) }
+    out.append(n)
+    withUnsafeBytes(of: UInt64(data.count).littleEndian) { out.append(contentsOf: $0) }
+    out.append(data)
+    return out
+}
+var hostile = open
+hostile.append(entry("../../evil.jpg", plainPhoto))
+hostile.append(entry("\(UUID().uuidString)/\(UUID().uuidString).jpg", plainPhoto))
+hostile.append(entry("\(sarah.id.uuidString)/board.json", Data("{}".utf8)))
+let hostileOpened = try TeamPack.open(hostile, passcode: nil)
+let hostileRoot = scratch.appending(path: "C/Boards")
+try manager.createDirectory(at: hostileRoot, withIntermediateDirectories: true)
+_ = try TeamPack.install(hostileOpened, into: hostileRoot, existing: [])
+expect(!manager.fileExists(atPath: scratch.appending(path: "evil.jpg").path)
+    && !manager.fileExists(atPath: scratch.appending(path: "C/evil.jpg").path), "a file can't climb out of the boards folder")
+let written = (manager.enumerator(atPath: hostileRoot.path)?.allObjects as? [String]) ?? []
+expect(written.allSatisfy { $0.hasPrefix(sarah.id.uuidString) || $0.hasPrefix(tom.id.uuidString) }, "only the manifest's boards get folders")
+expect(!written.contains("\(sarah.id.uuidString)/board.json"), "a pack can't write a board file directly")
+
+// A board whose photo is not a picture: that photo is skipped, the rest arrive.
+var broken = opened
+broken.files["\(sarah.id.uuidString)/\(sarah.shots[2].file)"] = Data("garbage".utf8)
+broken.files.removeValue(forKey: "\(sarah.id.uuidString)/\(sarah.shots[3].file)")
+let brokenRoot = scratch.appending(path: "D/Boards")
+try manager.createDirectory(at: brokenRoot, withIntermediateDirectories: true)
+let brokenResult = try TeamPack.install(broken, into: brokenRoot, existing: [])
+expect(brokenResult.report.skipped == 2 && brokenResult.report.newPhotos == 3, "bad or missing photos are skipped, the rest arrive")
+expect(brokenResult.boards.first { $0.id == sarah.id }?.shots.count == 2, "a skipped photo isn't listed on the board")
+
+// MARK: Adding to another phone
+
+let first = try TeamPack.install(unlocked ?? opened, into: phoneB, existing: [])
+expect(first.report.newBoards == 2 && first.report.newPhotos == 5, "both boards and all 5 photos arrive (\(first.report))")
+expect(first.report.summary == "Added 2 new boards and 5 new photos.", "summary reads well: \(first.report.summary)")
+let arrived = first.boards.first { $0.id == sarah.id }
+expect(arrived?.shots.map(\.id) == sarah.shots.map(\.id), "photos keep their ids, takes and order")
+expect(arrived?.shots.map(\.take) == [0, 0, 1, 2] && arrived?.references.count == 2, "takes and references survive")
+let folderB = phoneB.appending(path: sarah.id.uuidString)
+expect(sarah.shots.allSatisfy { manager.fileExists(atPath: folderB.appending(path: $0.file).path)
+    && manager.fileExists(atPath: folderB.appending(path: $0.thumbnailFile).path) }, "photos and thumbnails written")
+expect((try? Data(contentsOf: folderB.appending(path: sarah.shots[0].depthFile))) == depthData(), "depth written beside its photo")
+expect((try? Data(contentsOf: folderB.appending(path: sarah.shots[1].file))).map(TeamPack.isClean) == true, "received photos are clean")
+
+let again = try TeamPack.install(opened, into: phoneB, existing: first.boards)
+expect(again.report.newPhotos == 0 && again.report.newBoards == 0, "the same pack twice adds nothing")
+expect(again.report.summary.hasPrefix("Nothing new"), "and says so")
+expect(again.boards.first { $0.id == sarah.id }?.shots.count == 4, "no duplicate photos")
+
+// Phone B has worked on Sarah: notes, a photo of its own, a note on a shared photo. Phone A
+// then takes another photo and sends again.
+var bSarah = first.boards.first { $0.id == sarah.id }!
+bSarah.notes = "B: clip moved for scene 14"
+bSarah.shots[0].note = "B's own note"
+var bShot = Shot(taken: .now, take: 3, angle: "Back")
+bShot.note = "Taken on B"
+bSarah.shots.append(bShot)
+var aSarah = sarah
+var aShot = Shot(taken: .now, take: 3, angle: "Front")
+aShot.note = "Taken on A"
+try jpeg(shade: 0.9).write(to: phoneA.appending(path: sarah.id.uuidString).appending(path: aShot.file))
+aSarah.shots.append(aShot)
+let update = try TeamPack.open(TeamPack.make(boards: [aSarah], content: .all, from: "Sam", passcode: nil, root: phoneA), passcode: nil)
+let merged = try TeamPack.install(update, into: phoneB, existing: [bSarah, first.boards.first { $0.id == tom.id }!])
+let m = merged.boards[0]
+expect(merged.report.newPhotos == 1 && merged.report.updatedBoards == 1 && merged.report.newBoards == 0, "only the new photo arrives (\(merged.report))")
+expect(m.shots.count == 6 && m.shots.contains { $0.id == bShot.id } && m.shots.contains { $0.id == aShot.id }, "B keeps its own photo and gets A's")
+expect(m.shots.first { $0.id == sarah.shots[0].id }?.note == "B's own note", "B's note on a shared photo is kept")
+expect(m.notes.hasPrefix("B: clip moved") && m.notes.contains(sarah.notes), "board notes kept, A's added below")
+let twice = TeamPack.merged(local: m, incoming: aSarah, accepted: Set(aSarah.shots.map(\.id)))
+expect(twice.notes == m.notes, "A's notes aren't added twice")
+expect(manager.fileExists(atPath: folderB.appending(path: aShot.thumbnailFile).path), "a photo with no thumbnail sent gets one")
+
+// An empty board (References only, nothing marked yet) still arrives, so the team has the slot.
+let empty = Board(scene: "14", subject: "Extra 3", department: .makeup, created: .now)
+let emptyPack = try TeamPack.open(TeamPack.make(boards: [empty], content: .references, from: "", passcode: nil, root: phoneA), passcode: nil)
+let emptyResult = try TeamPack.install(emptyPack, into: phoneB, existing: [])
+expect(emptyResult.boards.count == 1 && emptyResult.report.newBoards == 1, "an empty board arrives")
+
+// MARK: An imported photo's fit travels with it
+
+do {
+    var shot = Shot(taken: .now, take: 0, angle: "Front", source: .imported)
+    shot.fit = OverlayFit(scale: 0.62, x: 0.08, y: -0.03)
+    let decoded = try? TeamPack.decoder.decode(Shot.self, from: TeamPack.encoder.encode(shot))
+    expect(decoded?.fit == shot.fit, "an imported photo keeps its fit when saved and read back")
+    var wild = shot
+    wild.fit = OverlayFit(scale: 40, x: 0, y: 0)
+    expect((try? TeamPack.decoder.decode(Shot.self, from: TeamPack.encoder.encode(wild)))?.fit == nil, "a nonsense fit is dropped on reading")
+    var board = Board(scene: "1", subject: "Fit", department: .hair, created: .now)
+    var mine = shot
+    mine.fit = nil
+    board.shots = [mine]
+    var theirs = board
+    theirs.shots = [shot]
+    let merged = TeamPack.merged(local: board, incoming: theirs, accepted: [shot.id])
+    expect(merged.shots[0].fit == shot.fit, "a teammate's fit fills in one this phone hasn't worked out")
+}
+
+// MARK: The shot letter (QTAKE's middle level)
+
+do {
+    var board = Board(scene: "12", subject: "Sarah", department: .hair, created: .now)
+    board.shotLetter = "A"
+    let back = try? TeamPack.decoder.decode(Board.self, from: TeamPack.encoder.encode(board))
+    expect(back?.shotLetter == "A", "a board keeps its shot letter when saved and read back")
+    let old = try? TeamPack.decoder.decode(Board.self, from: Data(#"{"id":"\#(UUID().uuidString)","scene":"3","created":0}"#.utf8))
+    expect(old?.shotLetter == "", "a board saved before shots existed opens with no shot")
+    let messy = try? TeamPack.decoder.decode(Board.self, from: Data(#"{"id":"\#(UUID().uuidString)","scene":"3","shotLetter":" a-b/c d ","created":0}"#.utf8))
+    expect(messy?.shotLetter == "ABC", "a shot letter read back is cleaned to capitals and digits, three at most")
+    expect(Slate.cleanShot("aa1b") == "AA1", "typed shot letters are capitalised and cut to three")
+    expect(Slate.sceneLabel("12", shot: "A") == "Sc 12 \u{00B7} Shot A" && Slate.sceneLabel("12", shot: "") == "Sc 12", "the slate reads Sc 12 · Shot A, or just Sc 12")
+    var blank = board
+    blank.shotLetter = ""
+    let merged = TeamPack.merged(local: blank, incoming: board, accepted: [])
+    expect(merged.shotLetter == "A", "a teammate's shot letter fills in a blank one")
+    var different = board
+    different.shotLetter = "B"
+    expect(TeamPack.merged(local: board, incoming: different, accepted: []).shotLetter == "A", "a shot letter already set is kept")
+}
+
+// MARK: Smaller photos for Messages and Mail
+
+let big = jpeg(shade: 0.4, private: true, width: 3000, height: 2000)
+expect(TeamPack.smaller(jpeg(shade: 0.4), maxPixels: 1600) == nil, "a photo already small isn't made smaller")
+if let small = TeamPack.smaller(big, maxPixels: 1600) {
+    let p = properties(small)
+    expect((p[kCGImagePropertyPixelWidth] as? Int) == 1600 && (p[kCGImagePropertyPixelHeight] as? Int) == 1067,
+           "a big photo shrinks to 1600 on its long side, same shape (\(p[kCGImagePropertyPixelWidth] ?? 0)x\(p[kCGImagePropertyPixelHeight] ?? 0))")
+    expect(TeamPack.isClean(small), "the smaller photo has no location or camera details")
+    expect(small.count < big.count, "and is a smaller file")
+} else {
+    expect(false, "a big photo can be made smaller")
+}
+var wide = Board(scene: "20", subject: "Ana", department: .costume, created: .now)
+let wideShot = Shot(taken: .now, take: 0, angle: "Front")
+let wideFolder = phoneA.appending(path: wide.id.uuidString)
+try manager.createDirectory(at: wideFolder, withIntermediateDirectories: true)
+try big.write(to: wideFolder.appending(path: wideShot.file))
+try jpeg(shade: 0.4, private: true).write(to: wideFolder.appending(path: wideShot.thumbnailFile))
+wide.shots = [wideShot]
+let mailPack = try TeamPack.make(boards: [wide], content: .all, from: "", passcode: "blue-door-42", root: phoneA, maxPixels: 1600)
+let mailOpened = try TeamPack.open(mailPack, passcode: "blue-door-42")
+let mailPhoto = mailOpened.files["\(wide.id.uuidString)/\(wideShot.file)"]
+expect(mailPhoto.map { (properties($0)[kCGImagePropertyPixelWidth] as? Int) == 1600 } == true, "Messages and Mail pack carries the smaller photo")
+expect(mailPhoto.map(TeamPack.isClean) == true && mailOpened.files["\(wide.id.uuidString)/\(wideShot.thumbnailFile)"].map(TeamPack.isClean) == true,
+       "and it and its thumbnail are clean")
+let mailInstalled = try TeamPack.install(mailOpened, into: phoneB, existing: [])
+expect(mailInstalled.report.newPhotos == 1, "a smaller-photo pack installs like any other")
+
+print(failures == 0 ? "All pack tests passed" : "\(failures) pack test(s) failed")
+// Which reference a photo is compared with: the one on screen when it was taken, else (older
+// photos) the same angle, else the latest reference before it.
+do {
+    func shot(_ minute: Double, take: Int, ref: Bool = false, angle: String = "", against: UUID? = nil) -> Shot {
+        var s = Shot(taken: Date(timeIntervalSince1970: 1_800_000_000 + minute * 60), take: take, angle: angle)
+        s.isReference = ref
+        s.against = against
+        return s
+    }
+    let r1 = shot(0, take: 0, ref: true), r2 = shot(1, take: 0, ref: true)
+    let viaSecond = shot(5, take: 1, against: r2.id)
+    let plain = shot(6, take: 1)
+    var b = Board(scene: "1", subject: "Sarah", department: .hair, created: .now)
+    b.shots = [r1, r2, viaSecond, plain]
+    expect(b.reference(for: viaSecond)?.id == r2.id, "compare uses the reference it was checked against")
+    expect(b.reference(for: plain)?.id == r2.id, "without a record, the latest reference before it")
+    let later = shot(9, take: 2, against: UUID())
+    b.shots.append(later)
+    expect(b.reference(for: later)?.id == r2.id, "a deleted reference falls back to the latest one")
+    let old = shot(10, take: 2, angle: "Front"); var oldRef = shot(2, take: 0, ref: true, angle: "Front")
+    b.shots += [old, oldRef]
+    expect(b.reference(for: old)?.id == oldRef.id, "older photos still match by angle")
+    oldRef.against = r1.id
+    let data = try JSONEncoder().encode(oldRef)
+    expect(try JSONDecoder().decode(Shot.self, from: data).against == r1.id, "the checked-against reference survives saving")
+}
+
+do {
+    let lines = ["CALL SHEET", "Day 3 of 20", "CAST", "1. SARAH JONES", "2 Bob", "3) Detective Reyes", "Pages 4 3/8",
+                 "SC 12 INT. KITCHEN - DAY 1, 2", "14A EXT. PARK - NIGHT 1, 3", "15 INT. OFFICE - DAY 3"]
+    let scenes = DaySetup.parse(lines)
+    expect(scenes.map(\.scene) == ["12", "14A", "15"], "call sheet scenes read in order, got \(scenes.map(\.scene))")
+    expect(scenes.first?.characterList == ["Sarah Jones", "Bob"], "cast numbers become names, got \(scenes.first?.characterList ?? [])")
+    expect(scenes[1].characterList == ["Sarah Jones", "Detective Reyes"], "second scene cast")
+    expect(DaySetup.castTable(lines).count == 3, "only the cast rows are cast, got \(DaySetup.castTable(lines))")
+    let existing = Board(scene: "12", subject: "sarah jones", department: .hair, created: .now)
+    let made = DaySetup.boards(for: scenes, department: .hair, existing: [existing])
+    expect(made.count == 4, "four new boards, the existing one skipped, got \(made.count)")
+    expect(made.allSatisfy { $0.department == .hair }, "boards use the chosen department")
+    var off = scenes
+    off[0].include = false
+    expect(DaySetup.boards(for: off, department: .makeup, existing: []).count == 3, "an unticked scene makes no boards")
+    expect(DaySetup.parse(["no scenes here"]).isEmpty, "nothing found on an unrelated page")
+}
+
+// Call sheets laid out as a table, from where the text sits (Phil's Koh Tek Pier sheet, 2026-11-09).
+do {
+    func t(_ text: String, _ x: Double, _ y: Double, _ w: Double = 0.06) -> TextBox {
+        TextBox(text: text, x: x, y: y, width: w, height: 0.005)
+    }
+    let header = [t("SCENE", 0.08, 0.144, 0.04), t("SET DESCRIPTION / SYNOPSIS", 0.18, 0.144, 0.16), t("D/N", 0.41, 0.144, 0.02),
+                  t("PGS/TOD", 0.44, 0.144, 0.04), t("CAST", 0.52, 0.144, 0.03), t("STUNTS", 0.61, 0.144, 0.04),
+                  t("BACKGROUND", 0.71, 0.144, 0.07), t("NOTES", 0.83, 0.144, 0.04)]
+    let strips = [
+        t("EXT - VILLAGE NEAR DOCK", 0.12, 0.150, 0.13), t("94A", 0.095, 0.163, 0.025),
+        t("3 trucks pull in to park, traffickers exit and move toward the", 0.12, 0.163, 0.26), t("D5", 0.41, 0.165, 0.015),
+        t("1/8", 0.45, 0.165, 0.015), t("-", 0.53, 0.165, 0.005), t("100. STUNT COORD", 0.59, 0.155, 0.09),
+        t("3 x ND dock locals", 0.59, 0.160, 0.08), t("6 x Armed local", 0.59, 0.165, 0.08), t("5 x Fisherman", 0.72, 0.155, 0.07),
+        t("EXT - PENANG ISLAND COVE - APPROACHING A DOCK", 0.12, 0.182, 0.25), t("95", 0.095, 0.211, 0.015),
+        t("Lewis watches the blindfolds come off....grins as they", 0.12, 0.211, 0.26), t("9. ROSALIE", 0.5, 0.211),
+        t("100. STUNT COORD", 0.59, 0.186, 0.09), t("1 x Lewis' boat driver", 0.59, 0.214, 0.09),
+        t("EXT - DOCK - FRANKIE'S BOAT", 0.12, 0.245, 0.15), t("95aA", 0.092, 0.276, 0.025), t("9. ROSALIE", 0.5, 0.272),
+        t("10. FRANKIE", 0.5, 0.277), t("Reveal Frankie - hat pulled low - he announces the inbound", 0.12, 0.276, 0.26),
+        t("I/E - DOCK STRUCTURE", 0.12, 0.311, 0.11), t("95A, 96pt", 0.07, 0.325, 0.045), t("8. DALISAY", 0.5, 0.325),
+        t("Reveal Rake & Dalisay in a hide with sniper rifle", 0.12, 0.326, 0.22),
+        t("STRIPS CONTINUE OVER THE PAGE...", 0.78, 0.340, 0.15),
+        t("UPM - Paul Sullivan", 0.1, 0.350, 0.1),
+    ]
+    let second = [
+        t("EXT - DOCK - ALCOTT'S OLD VAN", 0.12, 0.452, 0.15), t("95C", 0.09, 0.483, 0.02), t("2. ALCOTT", 0.5, 0.483),
+        t("100. STUNT COORD", 0.6, 0.462, 0.09),
+        t("EXT - DOCK", 0.12, 0.647, 0.05), t("96", 0.1, 0.675, 0.015), t("6. TYGO", 0.5, 0.665), t("9. ROSALIE", 0.5, 0.670),
+        t("10. FRANKIE", 0.5, 0.675), t("13. TEDDY", 0.5, 0.680), t("Mercs begin unloading women, Rosalie among them, one", 0.12, 0.675, 0.26),
+        t("I/E - DOCK STRUCTURE", 0.12, 0.710, 0.11), t("96Apt,", 0.07, 0.728, 0.03), t("101pt,", 0.07, 0.733, 0.03),
+        t("104aApt", 0.07, 0.738, 0.035), t("2. ALCOTT", 0.5, 0.728), t("6. TYGO", 0.5, 0.733), t("8. DALISAY", 0.5, 0.738),
+        t("100. STUNT COORD", 0.6, 0.727, 0.09), t("101. RAKE DBL", 0.6, 0.732, 0.08),
+        t("EXT - DOCK", 0.12, 0.757, 0.05), t("104Apt", 0.07, 0.790, 0.035), t("8. DALISAY", 0.5, 0.786), t("9. ROSALIE", 0.5, 0.791),
+        t("102. ALCOTT DBL", 0.6, 0.765, 0.08),
+        t("TOTAL PAGE COUNT FOR SEQUENCE:", 0.3, 0.825, 0.15), t("2 6/8", 0.47, 0.825, 0.03),
+        t("CAST", 0.07, 0.832, 0.03), t("ID", 0.075, 0.838, 0.01), t("STAT", 0.1, 0.838, 0.02), t("CHARACTER", 0.14, 0.838, 0.07),
+        t("ARTIST", 0.24, 0.838, 0.04),
+        t("1", 0.075, 0.847, 0.005), t("2U", 0.105, 0.847, 0.01), t("RAKE", 0.14, 0.847, 0.03), t("Chris Hemsworth", 0.24, 0.847, 0.08),
+        t("8", 0.075, 0.882, 0.005), t("W", 0.105, 0.882, 0.008), t("DALISAY", 0.14, 0.882, 0.04), t("Siena Agudong", 0.24, 0.882, 0.08),
+        t("9", 0.075, 0.891, 0.005), t("W", 0.105, 0.891, 0.008), t("ROSALIE (k)", 0.14, 0.891, 0.05), t("Elisha Villa", 0.24, 0.891, 0.07),
+    ]
+    let whole = DaySetup.parse(pages: [header + strips + second])
+    let numbers = whole.map(\.scene)
+    expect(numbers == ["94A", "95", "95aA", "95A", "96", "95C", "96A", "101", "104aA", "104A"],
+           "table call sheet: scene numbers from their own column, got \(numbers)")
+    func cast(_ scene: String) -> [String] { whole.first { $0.scene == scene }?.characterList ?? ["(missing)"] }
+    expect(cast("94A").isEmpty, "table call sheet: stunt and background numbers are not cast, got \(cast("94A"))")
+    expect(cast("95") == ["Rosalie"], "table call sheet: cast cell read, got \(cast("95"))")
+    expect(cast("95aA") == ["Rosalie", "Frankie"], "table call sheet: two in a cast cell, got \(cast("95aA"))")
+    expect(cast("95A") == ["Dalisay"], "table call sheet: two scenes in one cell share the cast, got \(cast("95A"))")
+    expect(cast("96") == ["Dalisay", "Tygo", "Rosalie", "Frankie", "Teddy"], "table call sheet: a scene in parts gets everyone, got \(cast("96"))")
+    expect(cast("104aA") == ["Alcott", "Tygo", "Dalisay"], "table call sheet: stacked numbers, doubles skipped, got \(cast("104aA"))")
+    expect(whole.first?.title == "EXT - VILLAGE NEAR DOCK", "table call sheet: the set is the title, got \(whole.first?.title ?? "")")
+    expect(CallSheetTable.castList(on: second) == [1: "Rake", 8: "Dalisay", 9: "Rosalie"],
+           "table cast list by ID and character, got \(CallSheetTable.castList(on: second))")
+
+    // The same sheet as two screenshots: the second has no header row.
+    let split = DaySetup.parse(pages: [header + strips, second])
+    expect(split.map(\.scene) == numbers, "two screenshots read as one sheet, got \(split.map(\.scene))")
+    expect(split.first { $0.scene == "95C" }?.characterList == ["Alcott"], "second screenshot cast read without the header row")
+
+    // Cast given as numbers in the cast column, names from the cast list on another picture.
+    let numbered = [t("SCENE", 0.05, 0.1, 0.04), t("SET", 0.2, 0.1, 0.03), t("CAST", 0.6, 0.1, 0.03),
+                    t("INT. KITCHEN - DAY", 0.2, 0.15, 0.12), t("12", 0.05, 0.16, 0.015), t("1, 8", 0.6, 0.16, 0.02)]
+    let castPage = [t("ID", 0.05, 0.1, 0.01), t("CHARACTER", 0.1, 0.1, 0.07), t("1", 0.05, 0.12, 0.005), t("RAKE", 0.1, 0.12, 0.03),
+                    t("8", 0.05, 0.13, 0.005), t("DALISAY", 0.1, 0.13, 0.04)]
+    let fromNumbers = DaySetup.parse(pages: [numbered, castPage])
+    expect(fromNumbers.first?.characterList == ["Rake", "Dalisay"], "cast numbers matched to a cast list on another picture, got \(fromNumbers.first?.characterList ?? [])")
+
+    // Reset's second layout: a SC column, D/N, then the set with no INT/EXT, and an ID column in the cast list.
+    let columnPage = [
+        t("SC", 0.05, 0.10, 0.02), t("D/N", 0.12, 0.10, 0.03), t("SET", 0.2, 0.10, 0.04), t("PAGES", 0.6, 0.10),
+        t("12", 0.05, 0.13, 0.02), t("D1", 0.12, 0.13, 0.02), t("KITCHEN", 0.2, 0.13, 0.08), t("1 3/8", 0.6, 0.13),
+        t("14A, 15", 0.045, 0.16, 0.04), t("N2", 0.12, 0.16, 0.02), t("INT. GARAGE", 0.2, 0.16, 0.1), t("2/8", 0.6, 0.16),
+        t("ID", 0.05, 0.25, 0.02), t("1", 0.05, 0.27, 0.01), t("RAKE", 0.2, 0.27),
+    ]
+    let columnScenes = DaySetup.parse(pages: [columnPage])
+    expect(columnScenes.map(\.scene) == ["12", "14A", "15"], "column call sheet numbers, got \(columnScenes.map(\.scene))")
+    expect(columnScenes.map(\.title) == ["KITCHEN", "INT. GARAGE", "INT. GARAGE"], "column call sheet names, got \(columnScenes.map(\.title))")
+    expect(DaySetup.parse(pages: [header + strips + second]).map(\.title) == whole.map(\.title), "the column reader adds nothing wrong to the first sheet")
+
+    // Line-style sheets still read as before when given as pictures.
+    let lineStyle = [t("SC 12 INT. KITCHEN - DAY 1", 0.05, 0.2, 0.4), t("1. SARAH JONES", 0.05, 0.1, 0.2)]
+    expect(DaySetup.parse(pages: [lineStyle]).first?.characterList == ["Sarah Jones"], "line-style sheet from boxes still works")
+}
+
+exit(failures == 0 ? 0 : 1)
