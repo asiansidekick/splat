@@ -46,7 +46,8 @@ struct PhotoEditorSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Button("Cancel") { dismiss() }
+                // Phil, 2026-11-09: "Back" with the usual iPhone arrow, not Cancel; nothing here needs undoing on the way out.
+                Button { dismiss() } label: { Label("Back", systemImage: "chevron.left").labelStyle(.titleAndIcon) }
                 Spacer()
                 Text("Edit").font(Theme.headline)
                 Spacer()
