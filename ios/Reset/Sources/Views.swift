@@ -1685,13 +1685,9 @@ struct CaptureStage: View {
         }
         .overlay { MeasurePointer(measurer: recorder.measurer) }
         .overlay { MeasureEntry(measurer: recorder.measurer).hiddenInScreenshots() }
-        .overlay { CleanViewCatcher() }
-        // Without the controls, a volume button takes the snapshot and brings them back.
-        .modifier(CaptureButtonAction {
-            guard ScreenshotMode.shared.viewing else { return }
-            shutterOnce()
-            ScreenshotMode.shared.viewing = false
-        })
+        .overlay { CleanViewControls(snap: shutterOnce) }
+        // Without the controls, a volume button takes a snapshot too.
+        .modifier(CaptureButtonAction(action: volumeShutter))
         .confirmationDialog("Add to the room", isPresented: $choosingModel) {
             Button("3D model (USDZ file)") { importingModels = true }
             Button("Cut-out from photos") { makingCutout = true }
@@ -1753,6 +1749,10 @@ struct CaptureStage: View {
     }
 
     /// The button and the window's tap watcher can both fire for one tap: the second within 0.6 s is ignored.
+    private func volumeShutter() {
+        if ScreenshotMode.shared.viewing { shutterOnce() }
+    }
+
     private func shutterOnce() {
         guard !recorder.saving, Date().timeIntervalSince(lastShutter) > 0.6 else { return }
         lastShutter = Date()
@@ -1948,15 +1948,8 @@ struct ResetStage: View {
         }
         .overlay { MeasurePointer(measurer: restorer.measurer) }
         .overlay { MeasureEntry(measurer: restorer.measurer).hiddenInScreenshots() }
-        .modifier(CaptureButtonAction {
-            if ScreenshotMode.shared.viewing {
-                snapshotOnce()
-                ScreenshotMode.shared.viewing = false
-            } else {
-                togglePause()
-            }
-        })
-        .overlay { CleanViewCatcher() }
+        .modifier(CaptureButtonAction(action: volumePressed))
+        .overlay { CleanViewControls(snap: snapshotOnce) }
         .sheet(item: $notingTake) { take in
             TakeEditor(take: take, slate: reference.slate) { logged in
                 reference.takes.append(logged)
@@ -2185,7 +2178,7 @@ struct ResetStage: View {
                 Button {
                     Diagnostics.log("Clean view started")
                     ScreenshotMode.shared.viewing = true
-                } label: { Label("Hide controls (volume button snaps)", systemImage: "eye.slash") }
+                } label: { Label("Hide controls", systemImage: "eye.slash") }
                 Button { open(.help) } label: { Label("Help", systemImage: "questionmark.circle") }
             } label: {
                 Image(systemName: "ellipsis.circle").font(Theme.title3)
@@ -2449,6 +2442,11 @@ struct ResetStage: View {
 
     /// The button and the window's tap watcher can both fire for one tap (the button alone never gets it in
     /// landscape on some phones), so these act once per tap, and not while paused or still finding the room.
+    /// Without the controls a volume button takes a snapshot; with them it pauses and plays.
+    private func volumePressed() {
+        if ScreenshotMode.shared.viewing { snapshotOnce() } else { togglePause() }
+    }
+
     private func snapshotOnce() {
         let now = Date()
         guard !restorer.paused, restorer.status == .ready, now.timeIntervalSince(lastShutter.date) > 0.6 else { return }

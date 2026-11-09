@@ -56,35 +56,52 @@ final class ScreenshotMode: ObservableObject {
     @Published var viewing = false
 }
 
-/// Over everything while viewing without the controls: a tap brings them back. Says so for a moment.
-struct CleanViewCatcher: View {
+/// While viewing without the controls (Phil, 2026-11-09): it stays clean until "Show controls" is pressed, so it
+/// can't be lost by accident; a snapshot button (or a volume button) takes pictures without leaving it. Both
+/// buttons are left out of the pictures.
+struct CleanViewControls: View {
+    let snap: () -> Void
     @ObservedObject private var mode = ScreenshotMode.shared
-    @State private var hint = true
 
     var body: some View {
         if mode.viewing {
-            Color.black.opacity(0.001)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    Diagnostics.log("Clean view ended by a tap")
-                    mode.viewing = false
-                }
-                .overlay(alignment: .top) {
-                    if hint {
-                        Text("Volume button: snapshot. Tap: controls back.")
-                            .font(Theme.subheadline.bold())
-                            .foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.9), radius: 3)
-                            .padding(.top, 60)
-                            .transition(.opacity)
-                            .allowsHitTesting(false)
+            ZStack {
+                VStack {
+                    HStack {
+                        Button {
+                            Diagnostics.log("Clean view ended")
+                            mode.viewing = false
+                        } label: {
+                            Label("Show controls", systemImage: "eye")
+                                .font(Theme.subheadline.bold())
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .background(Color.black.opacity(0.45), in: Capsule())
+                                .foregroundStyle(.white)
+                                .fixedSize()
+                        }
+                        Spacer()
                     }
+                    Spacer()
+                    Button(action: snap) {
+                        Circle()
+                            .strokeBorder(Color.white, lineWidth: 4)
+                            .background(Circle().fill(Color.white.opacity(0.25)).padding(7))
+                            .frame(width: 70, height: 70)
+                            .shadow(color: .black.opacity(0.5), radius: 3)
+                    }
+                    .accessibilityLabel("Snapshot")
+                    Text("Volume button also takes a snapshot")
+                        .font(Theme.caption)
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.9), radius: 2)
                 }
-                .task {
-                    hint = true
-                    try? await Task.sleep(for: .seconds(2.5))
-                    withAnimation { hint = false }
-                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 20)
+            }
+            .opacity(mode.clean ? 0 : 1)
+            .animation(nil, value: mode.clean)
         }
     }
 }
