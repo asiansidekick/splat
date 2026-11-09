@@ -65,8 +65,17 @@ enum CutoutMask {
 }
 
 /// The painting surface: the photo faint behind, the kept part bright over a chequer, and the finger's brush.
+/// What one finger does on the canvas.
+enum MaskTool { case keep, erase, loop, pick }
+
 final class MaskCanvas: UIScrollView, UIScrollViewDelegate {
-    var keeping = true
+    var tool: MaskTool = .erase
+    private var keeping: Bool { tool == .keep }
+    /// Each subject the phone found on its own (people, things), for Tap subject; their coverage, one byte a pixel.
+    private var parts: [CGImage] = []
+    private var partCover: [[UInt8]] = []
+    private var loopPoints: [CGPoint] = []
+    private let loopLayer = CAShapeLayer()
     var onChange: (() -> Void)?
     private(set) var undoStack: [CGImage] = []
 
@@ -79,7 +88,7 @@ final class MaskCanvas: UIScrollView, UIScrollViewDelegate {
     private let photo: UIImage
     private var fitted = false
 
-    init(photo: UIImage, mask: CGImage) {
+    init(photo: UIImage, mask: CGImage, parts: [CGImage] = []) {
         self.photo = photo
         super.init(frame: .zero)
         let size = CGSize(width: photo.cgImage?.width ?? Int(photo.size.width), height: photo.cgImage?.height ?? Int(photo.size.height))
@@ -96,6 +105,12 @@ final class MaskCanvas: UIScrollView, UIScrollViewDelegate {
         kept.layer.mask = maskLayer
         content.addSubview(faint)
         content.addSubview(kept)
+        loopLayer.fillColor = UIColor(red: 0.4, green: 0.95, blue: 0.8, alpha: 0.18).cgColor
+        loopLayer.strokeColor = UIColor(red: 0.4, green: 0.95, blue: 0.8, alpha: 1).cgColor
+        loopLayer.lineDashPattern = [8, 5]
+        content.layer.addSublayer(loopLayer)
+        self.parts = parts
+        partCover = parts.map { Self.cover(of: $0, width: Int(size.width), height: Int(size.height)) }
         addSubview(content)
         contentSize = size
         delegate = self
@@ -139,6 +154,11 @@ final class MaskCanvas: UIScrollView, UIScrollViewDelegate {
 
     @objc private func painted(_ gesture: UIPanGestureRecognizer) {
         let point = gesture.location(in: content)
+        if tool == .pick { return }
+        if tool == .loop {
+            looped(gesture.state, at: point)
+            return
+        }
         switch gesture.state {
         case .began:
             remember()
@@ -155,10 +175,83 @@ final class MaskCanvas: UIScrollView, UIScrollViewDelegate {
 
     @objc private func dotted(_ gesture: UITapGestureRecognizer) {
         let point = gesture.location(in: content)
+        if tool == .pick {
+            pick(at: point)
+            return
+        }
+        if tool == .loop { return }
         remember()
         stroke(from: point, to: point)
         onChange?()
     }
+
+    /// Draw round something: when the finger lifts, only the inside is kept.
+    private func looped(_ state: UIGestureRecognizer.State, at point: CGPoint) {
+        switch state {
+        case .began:
+            loopPoints = [point]
+        case .changed:
+            loopPoints.append(point)
+        default:
+            if loopPoints.count > 4, let context {
+                remember()
+                let path = CGMutablePath()
+                path.addLines(between: loopPoints)
+                path.closeSubpath()
+                context.setBlendMode(.clear)
+                context.fill(CGRect(x: 0, y: 0, width: context.width, height: context.height))
+                context.setBlendMode(.normal)
+                context.setFillColor(UIColor.white.cgColor)
+                context.addPath(path)
+                context.fillPath()
+                show()
+                Diagnostics.log("Mask drawn round by hand")
+            }
+            loopPoints = []
+            onChange?()
+        }
+        let path = CGMutablePath()
+        if loopPoints.count > 1 { path.addLines(between: loopPoints) }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        loopLayer.lineWidth = 3 / max(zoomScale, 0.01)
+        loopLayer.path = path
+        CATransaction.commit()
+    }
+
+    /// Tap a subject the phone found: in if it is out, out if it is in.
+    private func pick(at point: CGPoint) {
+        guard let context, let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return }
+        let x = Int(point.x), y = Int(point.y)
+        guard x >= 0, y >= 0, x < context.width, y < context.height else { return }
+        guard let index = partCover.firstIndex(where: { $0[y * context.width + x] > 100 }) else { return }
+        let shown = data[y * context.bytesPerRow + x * 4 + 3] > 128
+        remember()
+        context.saveGState()
+        context.scaleBy(x: 1, y: -1)
+        context.translateBy(x: 0, y: -CGFloat(context.height))
+        context.setBlendMode(shown ? .destinationOut : .normal)
+        context.draw(parts[index], in: CGRect(x: 0, y: 0, width: context.width, height: context.height))
+        context.restoreGState()
+        show()
+        onChange?()
+    }
+
+    /// How much of each pixel a subject covers, rows from the top.
+    private static func cover(of part: CGImage, width: Int, height: Int) -> [UInt8] {
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CutoutMask.space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return [] }
+        context.draw(part, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return [] }
+        var cover = [UInt8](repeating: 0, count: width * height)
+        for y in 0..<height {
+            let row = data + y * context.bytesPerRow
+            for x in 0..<width { cover[y * width + x] = row[x * 4 + 3] }
+        }
+        return cover
+    }
+
+    var hasParts: Bool { !parts.isEmpty }
 
     private func remember() {
         guard let image = context?.makeImage() else { return }
@@ -225,29 +318,41 @@ final class MaskCanvasHolder: ObservableObject {
 private struct MaskCanvasView: UIViewRepresentable {
     let photo: UIImage
     let mask: CGImage
-    let keeping: Bool
+    let parts: [CGImage]
+    let tool: MaskTool
     let holder: MaskCanvasHolder
 
     func makeUIView(context: Context) -> MaskCanvas {
-        let canvas = MaskCanvas(photo: photo, mask: mask)
+        let canvas = MaskCanvas(photo: photo, mask: mask, parts: parts)
         canvas.onChange = { [weak canvas] in holder.canUndo = !(canvas?.undoStack.isEmpty ?? true) }
         holder.canvas = canvas
         return canvas
     }
 
-    func updateUIView(_ canvas: MaskCanvas, context: Context) { canvas.keeping = keeping }
+    func updateUIView(_ canvas: MaskCanvas, context: Context) { canvas.tool = tool }
 }
 
-/// Paint a mask by hand: Keep and Erase, Undo, Start again. `original` is what Start again goes back to.
+/// Paint a mask by hand: Keep and Erase, a loop round what you want, tap a subject the phone found; Undo,
+/// Start again. `original` is what Start again goes back to; `parts` are the subjects found one by one.
 struct MaskBrushSheet: View {
     let title: String
     let photo: UIImage
     let mask: CGImage
     let original: CGImage
+    var parts: [CGImage] = []
     let onDone: (CGImage) -> Void
     @Environment(\.dismiss) private var dismiss
     @StateObject private var holder = MaskCanvasHolder()
-    @State private var keeping = false
+    @State private var tool: MaskTool = .erase
+
+    private var help: String {
+        switch tool {
+        case .keep: return "Paint over what to keep. Two fingers zoom and move."
+        case .erase: return "Paint over what to remove. Two fingers zoom and move."
+        case .loop: return "Draw round what you want. Only the inside is kept."
+        case .pick: return "Tap a person or thing to add it. Tap again to take it out."
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -266,8 +371,8 @@ struct MaskBrushSheet: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             ZStack(alignment: .top) {
-                MaskCanvasView(photo: photo, mask: mask, keeping: keeping, holder: holder)
-                Text("Paint with one finger. Two fingers to zoom and move.")
+                MaskCanvasView(photo: photo, mask: mask, parts: parts, tool: tool, holder: holder)
+                Text(help)
                     .font(Theme.caption)
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
@@ -275,13 +380,20 @@ struct MaskBrushSheet: View {
                     .padding(.top, 8)
                     .allowsHitTesting(false)
             }
-            HStack(spacing: 10) {
-                choice("Keep", symbol: "paintbrush.pointed.fill", on: keeping) { keeping = true }
-                choice("Erase", symbol: "eraser.fill", on: !keeping) { keeping = false }
-                Spacer(minLength: 4)
-                Button { holder.canvas?.undo() } label: { Label("Undo", systemImage: "arrow.uturn.backward") }
-                    .disabled(!holder.canUndo)
-                Button("Start again") { holder.canvas?.startAgain(with: original) }
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    choice("Keep", symbol: "paintbrush.pointed.fill", on: tool == .keep) { tool = .keep }
+                    choice("Erase", symbol: "eraser.fill", on: tool == .erase) { tool = .erase }
+                    choice("Loop", symbol: "lasso", on: tool == .loop) { tool = .loop }
+                    if !parts.isEmpty {
+                        choice("Tap subject", symbol: "hand.tap", on: tool == .pick) { tool = .pick }
+                    }
+                }
+                HStack(spacing: 10) {
+                    Button { holder.canvas?.undo() } label: { Label("Undo", systemImage: "arrow.uturn.backward") }
+                        .disabled(!holder.canUndo)
+                    Button("Start again") { holder.canvas?.startAgain(with: original) }
+                }
             }
             .buttonStyle(.bordered)
             .font(Theme.subheadline)
@@ -295,7 +407,14 @@ struct MaskBrushSheet: View {
     }
 
     private func choice(_ word: String, symbol: String, on: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Label(word, systemImage: symbol).fontWeight(on ? .bold : .regular) }
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Image(systemName: symbol)
+                Text(word).fixedSize()
+            }
+            .fontWeight(on ? .bold : .regular)
+            .frame(minWidth: 56)
+        }
             .tint(on ? Theme.accent : .gray)
     }
 }

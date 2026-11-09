@@ -18,6 +18,8 @@ enum CutoutLift {
         var preview: UIImage
         /// No subject was found, so the whole photo was kept.
         var whole: Bool
+        /// Each subject on its own, for Tap subject.
+        var parts: [CGImage] = []
     }
 
     /// The subject on a transparent background, cropped to it, as PNG, with its width over height. With no clear
@@ -32,6 +34,7 @@ enum CutoutLift {
         let upright = UIGraphicsImageRenderer(size: size, format: format).image { _ in original.draw(in: CGRect(origin: .zero, size: size)) }
         guard let cg = upright.cgImage else { return nil }
         var mask: CGImage?
+        var parts: [CGImage] = []
         let handler = VNImageRequestHandler(cgImage: cg)
         let request = VNGenerateForegroundInstanceMaskRequest()
         do {
@@ -39,8 +42,14 @@ enum CutoutLift {
             if let result = request.results?.first, !result.allInstances.isEmpty {
                 let buffer = try result.generateScaledMaskForImage(forInstances: result.allInstances, from: handler)
                 let alpha = CIImage(cvPixelBuffer: buffer).applyingFilter("CIMaskToAlpha")
-                mask = CIContext().createCGImage(alpha, from: CGRect(x: 0, y: 0, width: cg.width, height: cg.height),
-                                                 format: .RGBA8, colorSpace: CutoutMask.space)
+                let whole = CGRect(x: 0, y: 0, width: cg.width, height: cg.height)
+                let context = CIContext()
+                mask = context.createCGImage(alpha, from: whole, format: .RGBA8, colorSpace: CutoutMask.space)
+                for instance in result.allInstances.prefix(8) {
+                    let one = try result.generateScaledMaskForImage(forInstances: IndexSet(integer: instance), from: handler)
+                    if let part = context.createCGImage(CIImage(cvPixelBuffer: one).applyingFilter("CIMaskToAlpha"), from: whole,
+                                                        format: .RGBA8, colorSpace: CutoutMask.space) { parts.append(part) }
+                }
             }
         } catch {
             Diagnostics.log("Cut-out lift failed: \(error)")
@@ -48,7 +57,7 @@ enum CutoutLift {
         let whole = mask == nil
         guard let used = mask ?? CutoutMask.full(width: cg.width, height: cg.height),
               let made = CutoutMask.compose(cg, mask: used) else { return nil }
-        return Lifted(photo: upright, mask: used, found: used, png: made.png, aspect: made.aspect, preview: made.preview, whole: whole)
+        return Lifted(photo: upright, mask: used, found: used, png: made.png, aspect: made.aspect, preview: made.preview, whole: whole, parts: parts)
     }
 }
 
@@ -109,6 +118,7 @@ struct CutoutMaker: View {
         var photo: UIImage
         var mask: CGImage
         var found: CGImage
+        var parts: [CGImage]
     }
 
     /// The sides on offer: what the photo shows, as the thing itself would say it.
@@ -168,7 +178,7 @@ struct CutoutMaker: View {
                         Label(items.isEmpty ? "Pick photos from different sides" : "Add more photos", systemImage: "photo.stack")
                     }
                     if working > 0 { HStack { ProgressView(); Text("Cutting out \(working) photo\(working == 1 ? "" : "s")…").foregroundStyle(.secondary) } }
-                    if skipped > 0 { Text("\(skipped) photo\(skipped == 1 ? "" : "s") had no clear subject, so the whole photo was kept. Tap Touch up edges to erase the background.").font(Theme.footnote).foregroundStyle(.orange) }
+                    if skipped > 0 { Text("\(skipped) photo\(skipped == 1 ? "" : "s") had no clear subject, so the whole photo was kept. Tap Touch up to erase the background or loop round the subject.").font(Theme.footnote).foregroundStyle(.orange) }
                     if let message { Text(message).font(Theme.footnote).foregroundStyle(.orange) }
                 } footer: {
                     Text("One clear subject per photo. Front, side and back work best. Choose the side each photo shows, and touch up any edge the phone got wrong.")
@@ -189,7 +199,7 @@ struct CutoutMaker: View {
                                         ForEach(Self.sides, id: \.angle) { side in Text(side.name).tag(side.angle) }
                                     }
                                     .pickerStyle(.menu)
-                                    Button { touching = item.id } label: { Label("Touch up edges", systemImage: "paintbrush.pointed") }
+                                    Button { touching = item.id } label: { Label("Touch up", systemImage: "paintbrush.pointed") }
                                         .buttonStyle(.borderless)
                                         .font(Theme.subheadline)
                                 }
@@ -220,7 +230,7 @@ struct CutoutMaker: View {
             .onAppear { saved = CutoutLibrary.all() }
             .fullScreenCover(item: Binding(get: { touching.flatMap { id in items.first { $0.id == id } }.map(Touch.init) },
                                            set: { touching = $0?.id })) { touch in
-                MaskBrushSheet(title: "Touch up", photo: touch.item.photo, mask: touch.item.mask, original: touch.item.found) { mask in
+                MaskBrushSheet(title: "Touch up", photo: touch.item.photo, mask: touch.item.mask, original: touch.item.found, parts: touch.item.parts) { mask in
                     retouch(touch.item.id, mask: mask)
                 }
             }
@@ -247,7 +257,7 @@ struct CutoutMaker: View {
                 if let result {
                     let angle = Self.suggested.first { want in !items.contains { $0.angle == want } } ?? 0
                     items.append(Item(preview: result.preview, png: result.png, aspect: result.aspect, angle: angle,
-                                      photo: result.photo, mask: result.mask, found: result.found))
+                                      photo: result.photo, mask: result.mask, found: result.found, parts: result.parts))
                     if result.whole { skipped += 1 }
                 } else {
                     message = "Couldn't read that photo."

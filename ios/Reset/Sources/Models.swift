@@ -38,6 +38,10 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// The saved description of each cut-out, kept so a new pose can be written back to its file.
     private var cutoutPackages: [UUID: CutoutPackage] = [:]
     private var cutoutTimer: Timer?
+    /// The colour cut-outs are multiplied by to sit in the room's light, eased from frame to frame.
+    private var lightTint = SIMD3<Float>(1, 1, 1)
+    /// Phil, 2026-11-09: cut-outs take on the room's brightness and warmth (Help, Cut-outs). On unless turned off.
+    static var matchesLight: Bool { UserDefaults.standard.object(forKey: "cutoutMatchLight") as? Bool ?? true }
     /// Each model's box in its own coordinates, measured on loading, before any arrows are hung
     /// on it (they would make it look bigger).
     private var boxes: [UUID: (low: SIMD3<Float>, high: SIMD3<Float>)] = [:]
@@ -539,6 +543,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         geometry.materials = [material]
         let plane = SCNNode(geometry: geometry)
         plane.name = "cutout-plane"
+        plane.renderingOrder = 1
         // The card's origin is the middle of its foot.
         plane.pivot = SCNMatrix4MakeTranslation(0, -Float(height) / 2, 0)
         plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew)
@@ -553,6 +558,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         node.addChildNode(holder)
         cutoutPackages[model.id] = package
         let widest = (aspects.max() ?? 1) * height
+        node.addChildNode(Self.shadow(width: max(widest, height * 0.3)))
         boxes[model.id] = (SIMD3(-widest / 2, 0, -0.01), SIMD3(widest / 2, height, 0.01))
         node.simdTransform = matrix4(model.transform)
         root.addChildNode(node)
@@ -583,8 +589,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             return
         }
         // ARKit's ambient light reading is about 1000 in a lit room; under 250 is dim.
-        let dim = (session.currentFrame?.lightEstimate?.ambientIntensity ?? 1000) < 250
+        let estimate = session.currentFrame?.lightEstimate
+        let dim = (estimate?.ambientIntensity ?? 1000) < 250
         if dim != dimLight { dimLight = dim }
+        let wanted = Self.matchesLight ? Self.tint(intensity: Float(estimate?.ambientIntensity ?? 1000),
+                                                    kelvin: Float(estimate?.ambientColorTemperature ?? 6500)) : SIMD3<Float>(1, 1, 1)
+        lightTint += (wanted - lightTint) * 0.15
+        let colour = UIColor(red: CGFloat(lightTint.x), green: CGFloat(lightTint.y), blue: CGFloat(lightTint.z), alpha: 1)
+        for state in cutouts.values { state.plane.geometry?.firstMaterial?.multiply.contents = colour }
         for (id, state) in cutouts {
             guard let node = modelNodes[id] else { continue }
             let transform = node.simdWorldTransform
@@ -598,6 +610,49 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             if showDimensions { refreshDimensions(id) }
         }
     }
+
+    /// How to colour a cut-out for the room: darker in dim light, warmer under tungsten, cooler in shade. Gentle,
+    /// so a photo never turns black or orange.
+    static func tint(intensity: Float, kelvin: Float) -> SIMD3<Float> {
+        let bright = min(max(intensity / 1000, 0.45), 1)
+        let t = min(max(kelvin, 2500), 10000)
+        var colour = SIMD3<Float>(1, 1, 1)
+        if t < 6500 {
+            let warm = (6500 - t) / 4000
+            colour = SIMD3(1, 1 - 0.12 * warm, 1 - 0.3 * warm)
+        } else {
+            let cool = (t - 6500) / 3500
+            colour = SIMD3(1 - 0.15 * cool, 1 - 0.05 * cool, 1)
+        }
+        return colour * bright
+    }
+
+    /// A soft dark patch on the ground under a cut-out, so it stands on the floor instead of floating over it.
+    private static func shadow(width: Float) -> SCNNode {
+        let plane = SCNPlane(width: CGFloat(width * 1.3), height: CGFloat(width * 0.55))
+        let material = SCNMaterial()
+        material.diffuse.contents = shadowImage
+        material.lightingModel = .constant
+        material.writesToDepthBuffer = false
+        material.isDoubleSided = true
+        plane.materials = [material]
+        let node = SCNNode(geometry: plane)
+        node.name = "cutout-shadow"
+        node.eulerAngles.x = -.pi / 2
+        node.position.y = 0.003
+        node.renderingOrder = 0
+        return node
+    }
+
+    private static let shadowImage: UIImage = {
+        let size = CGSize(width: 128, height: 128)
+        return UIGraphicsImageRenderer(size: size).image { context in
+            let colours = [UIColor.black.withAlphaComponent(0.5).cgColor, UIColor.black.withAlphaComponent(0).cgColor] as CFArray
+            guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colours, locations: [0, 1]) else { return }
+            let middle = CGPoint(x: 64, y: 64)
+            context.cgContext.drawRadialGradient(gradient, startCenter: middle, startRadius: 0, endCenter: middle, endRadius: 64, options: [])
+        }
+    }()
 
     /// Hangs fresh arrows on the model for its size now, or takes them off when turned off.
     private func refreshDimensions(_ id: UUID) {

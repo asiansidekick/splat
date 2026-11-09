@@ -7,6 +7,7 @@ struct HelpView: View {
     @AppStorage("saveToPhotos") private var saveToPhotos = true
     @AppStorage(PhotoMetadata.key) private var stampMetadata = true
     @AppStorage("leftHanded") private var leftHanded = false
+    @AppStorage("cutoutMatchLight") private var cutoutMatchLight = true
     @AppStorage("measureRaycast") private var measureRaycast = true
     /// Made again each time this page shows, so a test just run (Surface test) is in the log sent.
     @State private var report = Diagnostics.reportURL()
@@ -65,6 +66,11 @@ struct HelpView: View {
                 Section("Controls") {
                     Toggle("Left-handed controls", isOn: $leftHanded)
                     step("hand.raised", "Puts the controls down the left edge when the phone is turned sideways, and swaps Pause and Log.")
+                }
+                Section("Cut-outs") {
+                    Toggle("Match cut-outs to the room's light", isOn: $cutoutMatchLight)
+                    step("sun.max", "On, a cut-out darkens in dim light and warms or cools with the room's lamps, so it sits in the shot. Each stands on a soft shadow.")
+                    step("paintbrush.pointed", "Touch up, under each photo when making a cut-out, fixes its edges: Keep, Erase, Loop round what you want, or Tap subject to pick one person or thing.")
                 }
                 Section("Measuring") {
                     Toggle("Measure with ARKit surfaces", isOn: $measureRaycast)
