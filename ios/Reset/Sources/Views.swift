@@ -92,6 +92,11 @@ struct CameraHome: View {
     /// Whether anything has been saved since the app opened, for the "not saved yet" reminder.
     @State private var anySaved = false
     @State private var nudgeTask: Task<Void, Never>?
+    /// Phil, 2026-11-09: a snapshot becomes the overlay in one tap. "Use as overlay" shows for a few seconds after
+    /// one saves; the Recent strip by the thumbnail offers the last few.
+    @State private var justSaved: UUID?
+    @State private var justSavedTask: Task<Void, Never>?
+    @State private var showingRecent = false
 
     enum Panel: Identifiable {
         case takeLog(UUID), compare(UUID), review(UUID), explore(UUID), slate(UUID), pdf(UUID), cutoutScan(UUID), nextSlate, help, gallery, sharePhoto, sync, sketch
@@ -143,6 +148,33 @@ struct CameraHome: View {
                     .padding(.top, 52)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .allowsHitTesting(false)
+                    .hiddenInScreenshots()
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if let id = justSaved, selectedID == nil, !showingRecent {
+                Button { useAsOverlay(id, from: "the button after a snapshot") } label: {
+                    Label("Use as overlay", systemImage: "square.on.square")
+                        .font(Theme.subheadline.bold())
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Theme.accent, in: Capsule())
+                        .foregroundStyle(.black)
+                        .fixedSize()
+                }
+                .padding(.leading, 16)
+                .padding(.top, 166)
+                .transition(.opacity)
+                .hiddenInScreenshots()
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if showingRecent, selectedID == nil {
+                RecentStrip(references: Array(references.prefix(8)), thumbnails: thumbnails,
+                            pick: { useAsOverlay($0, from: "the Recent strip") },
+                            close: { withAnimation(.snappy) { showingRecent = false } })
+                    .padding(.bottom, 150)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                     .hiddenInScreenshots()
             }
         }
@@ -240,6 +272,23 @@ struct CameraHome: View {
                 }
         }
         .buttonStyle(PressScale())
+        .overlay(alignment: .top) {
+            if references.count > 1 {
+                Button {
+                    Haptics.tap()
+                    withAnimation(.snappy) { showingRecent.toggle() }
+                } label: {
+                    Text("Recent")
+                        .font(Theme.font(size: 13, weight: .semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(showingRecent ? Theme.accent : Color.black.opacity(0.45), in: Capsule())
+                        .foregroundStyle(showingRecent ? Theme.onAccent : Color.white)
+                        .fixedSize()
+                }
+                .offset(y: -34)
+            }
+        }
         .holdHint("captureThumb", "Hold: options", above: true, delay: 4)
         .contextMenu {
             // Hold the thumbnail for the newest reference's options, the same ones the gallery has.
@@ -339,6 +388,22 @@ struct CameraHome: View {
         show("Saved \(reference.slate.isEmpty ? "reference" : reference.slate)")
         nextSetup = Slate.nextSetup(scene: nextScene, in: references)
         nextName = ""
+        justSavedTask?.cancel()
+        withAnimation(.snappy) { justSaved = reference.id }
+        justSavedTask = Task {
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { return }
+            withAnimation(.snappy) { justSaved = nil }
+        }
+    }
+
+    /// Opens a reference over the camera, from the Use as overlay button or the Recent strip.
+    private func useAsOverlay(_ id: UUID, from place: String) {
+        Diagnostics.log("Reference used as the overlay from \(place)")
+        endNudge()
+        justSaved = nil
+        showingRecent = false
+        selectedID = id
     }
 
     /// A shutter photo (with any 3D models in it): saved to Photos and offered for sending.
@@ -852,6 +917,45 @@ struct Banner: View {
 // MARK: - Thumbnails
 
 /// One reference's first photo, square, with its slate on it.
+/// The last few references in a row over the camera: tap one and it is the overlay (Phil, 2026-11-09).
+private struct RecentStrip: View {
+    let references: [Reference]
+    @ObservedObject var thumbnails: Thumbnails
+    let pick: (UUID) -> Void
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Tap one to use as the overlay")
+                    .font(Theme.subheadline.bold())
+                Spacer()
+                Button("Close", action: close).font(Theme.subheadline)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(references) { reference in
+                        Button { pick(reference.id) } label: {
+                            VStack(spacing: 4) {
+                                ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 64)
+                                Text(reference.slate.isEmpty ? "Reference" : reference.slate)
+                                    .font(Theme.font(size: 12, weight: .semibold))
+                                    .lineLimit(1)
+                                    .fixedSize()
+                            }
+                        }
+                        .buttonStyle(PressScale())
+                    }
+                }
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 12)
+    }
+}
+
 struct ReferenceThumbnail: View {
     let reference: Reference?
     @ObservedObject var thumbnails: Thumbnails
