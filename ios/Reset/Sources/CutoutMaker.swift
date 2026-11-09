@@ -61,6 +61,22 @@ enum CutoutLift {
     }
 }
 
+extension CutoutLift {
+    /// Each subject the phone finds in the picture on its own, as masks the picture's size, for Tap subject.
+    nonisolated static func parts(of cg: CGImage) -> [CGImage] {
+        let handler = VNImageRequestHandler(cgImage: cg)
+        let request = VNGenerateForegroundInstanceMaskRequest()
+        guard (try? handler.perform([request])) != nil, let result = request.results?.first else { return [] }
+        let whole = CGRect(x: 0, y: 0, width: cg.width, height: cg.height)
+        let context = CIContext()
+        return result.allInstances.prefix(12).compactMap { instance in
+            guard let one = try? result.generateScaledMaskForImage(forInstances: IndexSet(integer: instance), from: handler) else { return nil }
+            return context.createCGImage(CIImage(cvPixelBuffer: one).applyingFilter("CIMaskToAlpha"), from: whole,
+                                         format: .RGBA8, colorSpace: CutoutMask.space)
+        }
+    }
+}
+
 /// Every cut-out made on this phone, kept so it can be stood in any reference later (Phil, 2026-11-07).
 enum CutoutLibrary {
     struct Entry: Identifiable {

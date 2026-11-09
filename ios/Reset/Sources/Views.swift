@@ -86,6 +86,8 @@ struct CameraHome: View {
     @State private var lastPhotoTask: Task<Void, Never>?
     @State private var sharingPhoto: UIImage?
     @State private var sketching: SketchPhoto?
+    /// The Edit window (PhotoEditor.swift), on a snapshot or a reference's photo.
+    @State private var editing: EditTarget?
     @AppStorage("saveToPhotos") private var saveToPhotos = true
     /// The newest reference jiggles after it is recorded, to say "load me" (Phil, 2026-11-05).
     @State private var nudgeLoad = false
@@ -124,7 +126,7 @@ struct CameraHome: View {
         Group {
             if let id = selectedID, let reference = binding(for: id) {
                 ResetStage(
-                    reference: reference, others: references.filter { $0.id != id }, thumbnails: thumbnails, open: { panel = $0 },
+                    reference: reference, others: references.filter { $0.id != id }, added: added, thumbnails: thumbnails, open: { panel = $0 },
                     close: { selectedID = nil }, showToast: show, onPhoto: took)
                     .id(id)
             } else {
@@ -182,6 +184,16 @@ struct CameraHome: View {
             if lastPhoto != nil {
                 HStack(spacing: 8) {
                     Button {
+                        if let lastPhoto { editing = EditTarget(photo: lastPhoto) }
+                    } label: {
+                        Label("Edit", systemImage: "wand.and.stars")
+                            .font(Theme.subheadline.bold())
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Color.white, in: Capsule())
+                            .foregroundStyle(.black)
+                    }
+                    Button {
                         if let lastPhoto { sketching = SketchPhoto(image: lastPhoto) }
                     } label: {
                         Label("Sketch", systemImage: "pencil.tip")
@@ -211,6 +223,9 @@ struct CameraHome: View {
         }
         .sheet(item: $panel, onDismiss: { reviewMeasuring = false }) { panel in sheet(for: panel).themed() }
         .sheet(item: $sketching) { SketchEditor(photo: $0.image).themed() }
+        .fullScreenCover(item: $editing) { target in
+            PhotoEditorSheet(target: target, scene: nextScene, setup: nextSetup, onNewReference: { added($0) })
+        }
         .confirmationDialog(
             "Delete \(deleting?.title ?? "reference")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
             titleVisibility: .visible
@@ -329,7 +344,17 @@ struct CameraHome: View {
             if let photo = PhotoLibrary.images(of: reference).first {
                 sketching = SketchPhoto(image: photo)
             }
+        case .edit:
+            if let photo = PhotoLibrary.images(of: reference).first {
+                editing = EditTarget(photo: photo, reference: reference)
+            }
         }
+    }
+
+    /// A reference made elsewhere (the Edit window): shown first, without the "saved" fuss of a recording.
+    private func added(_ reference: Reference) {
+        guard !references.contains(where: { $0.id == reference.id }) else { return }
+        references.insert(reference, at: 0)
     }
 
     /// Stars a reference as a hero, or takes the star off.
@@ -1039,7 +1064,7 @@ struct ReferenceThumbnail: View {
 /// older ones, tap Load (or double-tap the photo) to bring up its ghost. The grid button shows them
 /// all by scene. Press and hold a photo for its take log, compare, report, slate or delete.
 struct Gallery: View {
-    enum Action { case takeLog, compare, review, measure, explore, slate, pdf, delete, photos, sketch, hero, cutout }
+    enum Action { case takeLog, compare, review, measure, explore, slate, pdf, delete, photos, sketch, hero, cutout, edit }
 
     @Environment(\.dismiss) private var dismiss
     /// Oldest first, so the newest is the last page, as in Photos.
@@ -1198,6 +1223,10 @@ struct Gallery: View {
                     .buttonStyle(.bordered)
                     Button { dismiss(); action(.sketch, shown) } label: {
                         Image(systemName: "pencil.tip.crop.circle").font(Theme.font(size: 22, weight: .semibold)).frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.bordered)
+                    Button { dismiss(); action(.edit, shown) } label: {
+                        Image(systemName: "wand.and.stars").font(Theme.font(size: 22, weight: .semibold)).frame(width: 30, height: 30)
                     }
                     .buttonStyle(.bordered)
                     Button {
@@ -1396,6 +1425,7 @@ struct Gallery: View {
         Button { dismiss(); action(.hero, reference) } label: { Label(reference.hero ? "Remove hero star" : "Hero", systemImage: reference.hero ? "star.slash" : "star") }
         Button { dismiss(); action(.review, reference) } label: { Label("Review frames", systemImage: "rectangle.stack") }
         Button { dismiss(); action(.sketch, reference) } label: { Label("Sketch", systemImage: "pencil.tip.crop.circle") }
+        Button { dismiss(); action(.edit, reference) } label: { Label("Edit photo (select, cut out)", systemImage: "wand.and.stars") }
         Button { dismiss(); action(.slate, reference) } label: { Label("Edit slate", systemImage: "pencil") }
         // The long menu scrolled badly and snapped back to the top (Phil, 2026-11-08), so the rarer ones are tucked away.
         Menu {
@@ -1837,6 +1867,8 @@ struct ResetStage: View {
     @State private var maskingGhost = false
     /// Other references laid over this one (Layers.swift).
     let others: [Reference]
+    let added: (Reference) -> Void
+    @State private var editingPhoto: EditTarget?
     @State private var layers: [OverlayLayer] = []
     @State private var layerPictures: [UUID: (photo: UIImage, mask: UIImage?)] = [:]
     @State private var addingLayer = false
@@ -1861,12 +1893,13 @@ struct ResetStage: View {
     @State private var lastLog = LastTime()
 
     init(
-        reference: Binding<Reference>, others: [Reference] = [], thumbnails: Thumbnails,
+        reference: Binding<Reference>, others: [Reference] = [], added: @escaping (Reference) -> Void = { _ in }, thumbnails: Thumbnails,
         open: @escaping (CameraHome.Panel) -> Void, close: @escaping () -> Void,
         showToast: @escaping (String) -> Void, onPhoto: @escaping (UIImage) -> Void
     ) {
         _reference = reference
         self.others = others
+        self.added = added
         _restorer = StateObject(wrappedValue: Restorer(reference: reference.wrappedValue))
         self.thumbnails = thumbnails
         self.open = open
@@ -1921,6 +1954,9 @@ struct ResetStage: View {
         .onChange(of: layers) { _, now in
             OverlayLayer.save(now, for: reference.id)
             loadLayerPictures()
+        }
+        .fullScreenCover(item: $editingPhoto) { target in
+            PhotoEditorSheet(target: target, onNewReference: added, onMaskChanged: { ghostMask = GhostMask.load(reference.id) })
         }
         .fullScreenCover(isPresented: $maskingGhost) {
             if let photo = restorer.startPhoto.flatMap(GhostMask.editable), let whole = CutoutMask.full(width: photo.cgImage?.width ?? 1, height: photo.cgImage?.height ?? 1) {
@@ -2092,7 +2128,9 @@ struct ResetStage: View {
                             photoPose.save(reference.id)
                         } label: { Label("Put photo back", systemImage: "arrow.uturn.backward") }
                     }
-                    Button { maskingGhost = true } label: { Label(ghostMask == nil ? "Show only part of the photo" : "Change the part shown", systemImage: "paintbrush.pointed") }
+                    Button {
+                        if let photo = restorer.startPhoto { editingPhoto = EditTarget(photo: photo, reference: reference) }
+                    } label: { Label("Edit photo (select, show only part)", systemImage: "wand.and.stars") }
                     if ghostMask != nil {
                         Button {
                             GhostMask.remove(reference.id)

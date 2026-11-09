@@ -66,7 +66,7 @@ enum CutoutMask {
 
 /// The painting surface: the photo faint behind, the kept part bright over a chequer, and the finger's brush.
 /// What one finger does on the canvas.
-enum MaskTool { case keep, erase, loop, pick }
+enum MaskTool { case keep, erase, loop, pick, magic }
 
 final class MaskCanvas: UIScrollView, UIScrollViewDelegate {
     var tool: MaskTool = .erase
@@ -154,7 +154,7 @@ final class MaskCanvas: UIScrollView, UIScrollViewDelegate {
 
     @objc private func painted(_ gesture: UIPanGestureRecognizer) {
         let point = gesture.location(in: content)
-        if tool == .pick { return }
+        if tool == .pick || tool == .magic { return }
         if tool == .loop {
             looped(gesture.state, at: point)
             return
@@ -177,6 +177,10 @@ final class MaskCanvas: UIScrollView, UIScrollViewDelegate {
         let point = gesture.location(in: content)
         if tool == .pick {
             pick(at: point)
+            return
+        }
+        if tool == .magic {
+            magic(at: point)
             return
         }
         if tool == .loop { return }
@@ -252,6 +256,89 @@ final class MaskCanvas: UIScrollView, UIScrollViewDelegate {
     }
 
     var hasParts: Bool { !parts.isEmpty }
+    var partCount: Int { parts.count }
+
+    /// The subjects arrive after the canvas opens (finding them takes a moment).
+    func setParts(_ found: [CGImage]) {
+        guard let context else { return }
+        parts = found
+        partCover = found.map { Self.cover(of: $0, width: context.width, height: context.height) }
+    }
+
+    /// The photo's colours, one RGBA pixel each, rows from the top; read once for Magic select.
+    private lazy var pixels: [UInt8] = {
+        guard let cg = photo.cgImage, let context else { return [] }
+        let width = context.width, height = context.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        bytes.withUnsafeMutableBytes { buffer in
+            guard let drawing = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                          space: CutoutMask.space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return }
+            drawing.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        return bytes
+    }()
+
+    /// Like the magic wand: everything joined to the tapped spot in about the same colour joins the selection.
+    private func magic(at point: CGPoint) {
+        guard let context, let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return }
+        let width = context.width, height = context.height, row = context.bytesPerRow
+        let x0 = Int(point.x), y0 = Int(point.y)
+        guard x0 >= 0, y0 >= 0, x0 < width, y0 < height, pixels.count == width * height * 4 else { return }
+        remember()
+        let seed = (y0 * width + x0) * 4
+        let r = Int(pixels[seed]), g = Int(pixels[seed + 1]), b = Int(pixels[seed + 2])
+        let tolerance = 34 * 34 * 3
+        var seen = [Bool](repeating: false, count: width * height)
+        var stack = [y0 * width + x0]
+        seen[y0 * width + x0] = true
+        var filled = 0
+        while let index = stack.popLast() {
+            let x = index % width, y = index / width
+            let p = index * 4
+            let dr = Int(pixels[p]) - r, dg = Int(pixels[p + 1]) - g, db = Int(pixels[p + 2]) - b
+            guard dr * dr + dg * dg + db * db <= tolerance else { continue }
+            let m = y * row + x * 4
+            data[m] = 255; data[m + 1] = 255; data[m + 2] = 255; data[m + 3] = 255
+            filled += 1
+            if x > 0, !seen[index - 1] { seen[index - 1] = true; stack.append(index - 1) }
+            if x < width - 1, !seen[index + 1] { seen[index + 1] = true; stack.append(index + 1) }
+            if y > 0, !seen[index - width] { seen[index - width] = true; stack.append(index - width) }
+            if y < height - 1, !seen[index + width] { seen[index + width] = true; stack.append(index + width) }
+        }
+        Diagnostics.log("Magic select took \(filled) pixels")
+        show()
+        onChange?()
+    }
+
+    /// Selected becomes unselected and the other way round.
+    func invert() {
+        guard let context, let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return }
+        remember()
+        for y in 0..<context.height {
+            let row = data + y * context.bytesPerRow
+            for x in 0..<context.width {
+                let a = 255 - row[x * 4 + 3]
+                row[x * 4] = a; row[x * 4 + 1] = a; row[x * 4 + 2] = a; row[x * 4 + 3] = a
+            }
+        }
+        show()
+        onChange?()
+    }
+
+    /// Feathers the selection's edge a few pixels.
+    func soften() {
+        guard let current = context?.makeImage() else { return }
+        let image = CIImage(cgImage: current)
+        let blurred = image.clampedToExtent().applyingGaussianBlur(sigma: 3).cropped(to: image.extent)
+        guard let out = CIContext().createCGImage(blurred, from: image.extent, format: .RGBA8, colorSpace: CutoutMask.space) else { return }
+        remember()
+        replace(with: out)
+    }
+
+    /// Nothing selected yet, to start a selection from scratch.
+    static func empty(width: Int, height: Int) -> CGImage? {
+        CutoutMask.context(width: width, height: height, mask: nil)?.makeImage()
+    }
 
     private func remember() {
         guard let image = context?.makeImage() else { return }
@@ -315,7 +402,7 @@ final class MaskCanvasHolder: ObservableObject {
     @Published var canUndo = false
 }
 
-private struct MaskCanvasView: UIViewRepresentable {
+struct MaskCanvasView: UIViewRepresentable {
     let photo: UIImage
     let mask: CGImage
     let parts: [CGImage]
@@ -329,7 +416,10 @@ private struct MaskCanvasView: UIViewRepresentable {
         return canvas
     }
 
-    func updateUIView(_ canvas: MaskCanvas, context: Context) { canvas.tool = tool }
+    func updateUIView(_ canvas: MaskCanvas, context: Context) {
+        canvas.tool = tool
+        if canvas.partCount != parts.count { canvas.setParts(parts) }
+    }
 }
 
 /// Paint a mask by hand: Keep and Erase, a loop round what you want, tap a subject the phone found; Undo,
