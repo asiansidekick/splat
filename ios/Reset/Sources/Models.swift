@@ -798,7 +798,7 @@ struct ModelOverlay: View {
         case .move: return "arrow.up.and.down.and.arrow.left.and.right"
         case .turn: return "arrow.triangle.2.circlepath"
         case .size: return "arrow.up.left.and.arrow.down.right"
-        case .tilt: return "skew"
+        case .tilt: return "rotate.3d"
         }
     }
 
