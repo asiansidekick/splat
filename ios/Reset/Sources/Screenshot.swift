@@ -51,6 +51,42 @@ enum Screenshot {
 final class ScreenshotMode: ObservableObject {
     static let shared = ScreenshotMode()
     @Published var clean = false
+    /// Phil, 2026-11-09: viewing without the controls. Everything marked hiddenInScreenshots goes; a volume button
+    /// takes the snapshot and brings them back, and so does a tap on the screen.
+    @Published var viewing = false
+}
+
+/// Over everything while viewing without the controls: a tap brings them back. Says so for a moment.
+struct CleanViewCatcher: View {
+    @ObservedObject private var mode = ScreenshotMode.shared
+    @State private var hint = true
+
+    var body: some View {
+        if mode.viewing {
+            Color.black.opacity(0.001)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    Diagnostics.log("Clean view ended by a tap")
+                    mode.viewing = false
+                }
+                .overlay(alignment: .top) {
+                    if hint {
+                        Text("Volume button: snapshot. Tap: controls back.")
+                            .font(Theme.subheadline.bold())
+                            .foregroundStyle(.white)
+                            .shadow(color: .black.opacity(0.9), radius: 3)
+                            .padding(.top, 60)
+                            .transition(.opacity)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .task {
+                    hint = true
+                    try? await Task.sleep(for: .seconds(2.5))
+                    withAnimation { hint = false }
+                }
+        }
+    }
 }
 
 /// Hides a control or overlay while a screenshot is being taken.
@@ -59,7 +95,8 @@ struct HiddenInScreenshots: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .opacity(mode.clean ? 0 : 1)
+            .opacity(mode.clean || mode.viewing ? 0 : 1)
+            .allowsHitTesting(!mode.viewing)
             .animation(nil, value: mode.clean)
     }
 }

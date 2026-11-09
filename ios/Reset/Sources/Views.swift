@@ -1592,6 +1592,11 @@ struct CaptureStage: View {
                         .disabled(recorder.capturing)
                         .accessibilityLabel("Scan")
                 }
+                Button {
+                    Diagnostics.log("Clean view started")
+                    ScreenshotMode.shared.viewing = true
+                } label: { Image(systemName: "eye.slash").font(Theme.title3) }
+                    .accessibilityLabel("Hide controls")
                 Button { open(.help) } label: { Image(systemName: "questionmark.circle").font(Theme.title3) }
                     .accessibilityLabel("Help")
             }
@@ -1680,6 +1685,13 @@ struct CaptureStage: View {
         }
         .overlay { MeasurePointer(measurer: recorder.measurer) }
         .overlay { MeasureEntry(measurer: recorder.measurer).hiddenInScreenshots() }
+        .overlay { CleanViewCatcher() }
+        // Without the controls, a volume button takes the snapshot and brings them back.
+        .modifier(CaptureButtonAction {
+            guard ScreenshotMode.shared.viewing else { return }
+            shutterOnce()
+            ScreenshotMode.shared.viewing = false
+        })
         .confirmationDialog("Add to the room", isPresented: $choosingModel) {
             Button("3D model (USDZ file)") { importingModels = true }
             Button("Cut-out from photos") { makingCutout = true }
@@ -1702,6 +1714,7 @@ struct CaptureStage: View {
         }
         .onAppear { tapCatcher.install() }
         .onDisappear {
+            ScreenshotMode.shared.viewing = false
             tapCatcher.remove()
             recorder.stop()
         }
@@ -1935,7 +1948,15 @@ struct ResetStage: View {
         }
         .overlay { MeasurePointer(measurer: restorer.measurer) }
         .overlay { MeasureEntry(measurer: restorer.measurer).hiddenInScreenshots() }
-        .modifier(CaptureButtonAction { togglePause() })
+        .modifier(CaptureButtonAction {
+            if ScreenshotMode.shared.viewing {
+                snapshotOnce()
+                ScreenshotMode.shared.viewing = false
+            } else {
+                togglePause()
+            }
+        })
+        .overlay { CleanViewCatcher() }
         .sheet(item: $notingTake) { take in
             TakeEditor(take: take, slate: reference.slate) { logged in
                 reference.takes.append(logged)
@@ -2014,6 +2035,7 @@ struct ResetStage: View {
             }
         }
         .onDisappear {
+            ScreenshotMode.shared.viewing = false
             tapCatcher.remove()
             restorer.stop()
         }
@@ -2160,6 +2182,10 @@ struct ResetStage: View {
                     HintStore.resetAll()
                     showToast("Tips will show again")
                 } label: { Label("Show tips again", systemImage: "lightbulb") }
+                Button {
+                    Diagnostics.log("Clean view started")
+                    ScreenshotMode.shared.viewing = true
+                } label: { Label("Hide controls (volume button snaps)", systemImage: "eye.slash") }
                 Button { open(.help) } label: { Label("Help", systemImage: "questionmark.circle") }
             } label: {
                 Image(systemName: "ellipsis.circle").font(Theme.title3)
