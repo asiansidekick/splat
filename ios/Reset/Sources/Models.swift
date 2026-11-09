@@ -10,7 +10,13 @@ import UIKit
 final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate {
     @Published var models: [PlacedModel] = []
     @Published var selectedModel: UUID? {
-        didSet { updateSize() }
+        didSet {
+            updateSize()
+            if selectedModel != oldValue {
+                stopCarrying()
+                cutoutJob = .move
+            }
+        }
     }
     @Published var modelError: String?
     /// The selected model's real size, for example "62 × 40 × 75 cm · 100%".
@@ -50,6 +56,13 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private var dragTarget: SIMD3<Float>?
     /// One-finger drags move the selected model up and down instead of across (Phil, 2026-10-31).
     @Published var lifting = false
+    /// Phil, 2026-11-09: cut-outs are handled one job at a time, each with one finger, and carried by holding Carry.
+    enum CutoutJob: String, CaseIterable { case move = "Move", turn = "Turn", size = "Size", tilt = "Tilt" }
+    @Published var cutoutJob: CutoutJob = .move
+    @Published private(set) var carrying = false
+    private var carryTimer: Timer?
+    private var carryDistance: Float = 1.5
+    private var carried: UUID?
     /// The room is dim enough that the phone may lose its place, so cut-outs can drift (Phil, 2026-11-07).
     @Published private(set) var dimLight = false
     private weak var cameraView: SCNView?
@@ -263,6 +276,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     @objc private func handlePose(_ gesture: UIPanGestureRecognizer) {
+        // Cut-outs tilt with the Tilt job and one finger now; two fingers no longer do it.
+        if selectedIsCutout { return }
         let moved = gesture.translation(in: gesture.view)
         gesture.setTranslation(.zero, in: gesture.view)
         guard !pinching, let id = selectedModel, var package = cutoutPackages[id], let plane = cutouts[id]?.plane,
@@ -297,6 +312,11 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             }
         }
         guard let id = selectedModel, let node = modelNodes[id] else { return }
+        if cutoutPackages[id] != nil, cutoutJob != .move, !carrying {
+            doCutoutJob(gesture, id: id, node: node)
+            return
+        }
+        if carrying { return }
         if lifting {
             switch gesture.state {
             case .changed:
@@ -394,6 +414,78 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         node.simdWorldPosition.y = floor.y - (boxes[id]?.low.y ?? 0) * node.simdScale.y
         Haptics.success()
         commit(id)
+    }
+
+    /// One finger doing the chosen job on a cut-out: Turn (sideways), Size (up grows), Tilt (up tips, sideways slants).
+    private func doCutoutJob(_ gesture: UIPanGestureRecognizer, id: UUID, node: SCNNode) {
+        let moved = gesture.translation(in: gesture.view)
+        gesture.setTranslation(.zero, in: gesture.view)
+        switch cutoutJob {
+        case .turn:
+            let step = Float(moved.x) * 0.012
+            node.simdEulerAngles.y += step
+            if let package = cutoutPackages[id], let plane = cutouts[id]?.plane {
+                let turn = (cutoutTurn[id] ?? 0) + step
+                let wrapped = atan2(sin(turn), cos(turn))
+                cutoutTurn[id] = wrapped
+                plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: wrapped)
+            }
+        case .size:
+            let factor = exp(-Float(moved.y) * 0.004)
+            let next = node.simdScale * factor
+            if next.x > 0.05, next.x < 20 { node.simdScale = next }
+            updateSize()
+            refreshDimensions(id)
+        case .tilt:
+            guard var package = cutoutPackages[id], let plane = cutouts[id]?.plane, let model = models.first(where: { $0.id == id }) else { return }
+            package.tilt = min(max(package.tilt - Float(moved.y) * 0.3, -80), 80)
+            package.skew = min(max(package.skew + Float(moved.x) * 0.2, -60), 60)
+            cutoutPackages[id] = package
+            plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: cutoutTurn[id] ?? 0)
+            if gesture.state == .ended { savePose(package, id: id, file: model.file, plane: plane) }
+        case .move:
+            break
+        }
+        if gesture.state == .ended || gesture.state == .cancelled { commit(id) }
+    }
+
+    /// While Carry is held the selected cut-out (or model) stays in front of the phone at the distance it was
+    /// picked up from, at its own height, so walking and turning take it along; letting go drops it there.
+    func startCarrying() {
+        guard !carrying, let id = selectedModel, let node = modelNodes[id], let camera = session.currentFrame?.camera.transform else { return }
+        var away = node.simdWorldPosition - camera.columns.3.xyz
+        away.y = 0
+        carryDistance = min(max(simd_length(away), 0.5), 8)
+        carrying = true
+        carried = id
+        Haptics.tap()
+        Diagnostics.log(String(format: "Carry started at %.1f m", carryDistance))
+        carryTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.carryStep() }
+        }
+    }
+
+    func stopCarrying() {
+        guard carrying else { return }
+        carryTimer?.invalidate()
+        carryTimer = nil
+        carrying = false
+        if let id = carried {
+            commit(id)
+            Haptics.success()
+        }
+        carried = nil
+    }
+
+    private func carryStep() {
+        guard let id = carried, let node = modelNodes[id], let camera = session.currentFrame?.camera.transform else { return }
+        var forward = -camera.columns.2.xyz
+        forward.y = 0
+        guard simd_length(forward) > 0.05 else { return }
+        forward = simd_normalize(forward)
+        var target = camera.columns.3.xyz + forward * carryDistance
+        target.y = node.simdWorldPosition.y
+        node.simdWorldPosition = simd_mix(node.simdWorldPosition, target, SIMD3(repeating: 0.25))
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
@@ -691,6 +783,25 @@ struct ModelOverlay: View {
     var showsFloor = true
     @State private var showsCutoutHelp = true
 
+    private var cutoutHelp: String {
+        if placer.carrying { return "Walk and point the phone. Let go to put it down." }
+        switch placer.cutoutJob {
+        case .move: return "Drag to move it. Up the screen is further, down is nearer."
+        case .turn: return "Drag sideways to turn it."
+        case .size: return "Drag up to make it bigger, down to make it smaller."
+        case .tilt: return "Drag up or down to tip it, sideways to slant it."
+        }
+    }
+
+    private static func symbol(_ job: ModelPlacer.CutoutJob) -> String {
+        switch job {
+        case .move: return "arrow.up.and.down.and.arrow.left.and.right"
+        case .turn: return "arrow.triangle.2.circlepath"
+        case .size: return "arrow.up.left.and.arrow.down.right"
+        case .tilt: return "skew"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 6) {
             if placer.dimLight {
@@ -712,15 +823,26 @@ struct ModelOverlay: View {
                 // Phil, 2026-11-08: the cut-out controls covered too much of the middle of the picture. One slim row
                 // along the bottom, a small picture with its word under it (the words stay whole), no panel; the
                 // help line shows for a few seconds when a cut-out is picked, then goes.
+                // Phil, 2026-11-09: gestures were not intuitive. Pick one job (Move, Turn, Size, Tilt) and one finger does
+                // only that; hold Carry and walk to take it along.
                 VStack(spacing: 2) {
-                    if showsCutoutHelp {
-                        Text("Drag, pinch, twist. Two fingers to tilt or slant.")
+                    if showsCutoutHelp || placer.carrying {
+                        Text(cutoutHelp)
                             .font(Theme.caption)
                             .foregroundStyle(.white)
                             .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
                             .shadow(color: .black.opacity(0.5), radius: 6)
                             .allowsHitTesting(false)
                             .transition(.opacity)
+                    }
+                    HStack(spacing: 2) {
+                        ForEach(ModelPlacer.CutoutJob.allCases, id: \.self) { job in
+                            CutoutTool(word: job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
+                        }
+                        CutoutTool(word: placer.carrying ? "Carrying" : "Hold to carry", symbol: "figure.walk", on: placer.carrying) {}
+                            .simultaneousGesture(DragGesture(minimumDistance: 0)
+                                .onChanged { _ in placer.startCarrying() }
+                                .onEnded { _ in placer.stopCarrying() })
                     }
                     HStack(spacing: 2) {
                         CutoutTool(word: "Place here", symbol: "scope") { placer.bringToView() }
@@ -730,7 +852,7 @@ struct ModelOverlay: View {
                         CutoutTool(word: "Done", symbol: "checkmark") { placer.selectedModel = nil }
                     }
                 }
-                .task(id: placer.selectedModel) {
+                .task(id: "\(placer.selectedModel?.uuidString ?? "")-\(placer.cutoutJob.rawValue)") {
                     withAnimation { showsCutoutHelp = true }
                     try? await Task.sleep(for: .seconds(4))
                     withAnimation { showsCutoutHelp = false }
@@ -804,6 +926,7 @@ private struct CutoutTool: View {
     let word: String
     let symbol: String
     var tint: Color = .white
+    var on = false
     let action: () -> Void
 
     var body: some View {
@@ -812,7 +935,8 @@ private struct CutoutTool: View {
                 Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
                 Text(word).font(.system(size: 11, weight: .semibold)).lineLimit(1).fixedSize()
             }
-            .foregroundStyle(tint)
+            .foregroundStyle(on ? Theme.accent : tint)
+            .fontWeight(on ? .heavy : .semibold)
             .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
             .shadow(color: .black.opacity(0.5), radius: 6)
             .frame(minWidth: 58, minHeight: 44)
