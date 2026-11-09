@@ -1923,7 +1923,7 @@ struct ResetStage: View {
 
     // The layer picker, the Edit window and the photo mask are added apart from the rest, so the compiler can check
     // the body in time.
-    var body: some View { editingSheets(stage) }
+    var body: some View { editingSheets(watching(stage)) }
 
     private var stage: some View {
         CameraLayout(bars: false, shutterSecond: true) {
@@ -1952,8 +1952,6 @@ struct ResetStage: View {
         }
         .overlay { MeasurePointer(measurer: restorer.measurer) }
         .overlay { MeasureEntry(measurer: restorer.measurer).hiddenInScreenshots() }
-        .modifier(CaptureButtonAction(action: volumePressed))
-        .overlay { CleanViewControls(snap: snapshotOnce) }
         .sheet(item: $notingTake) { take in
             TakeEditor(take: take, slate: reference.slate) { logged in
                 reference.takes.append(logged)
@@ -1964,36 +1962,6 @@ struct ResetStage: View {
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: restorer.placer).themed() }
         .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { restorer.placer.add(from: urls) }
-        }
-        .onReceive(restorer.placer.$models.dropFirst()) { models in
-            reference.models = models
-            save()
-        }
-        .onReceive(restorer.measurer.$active) { measuring = $0 }
-        .onReceive(restorer.measurer.$revision.dropFirst()) { _ in
-            if !restorer.measurer.measurements.isEmpty {
-                showTip("Tap Exact in the ruler bar to make sizes exact. Hold a line's end, then drag, to move it.", key: "tip.measure")
-            }
-            reference.measurements = restorer.measurer.measurements
-            reference.notes = restorer.measurer.notes
-            reference.removedMarks = restorer.measurer.removed
-            save()
-        }
-        .onChange(of: reference.measurements) { _, _ in followSyncedMarks() }
-        .onChange(of: reference.notes) { _, _ in followSyncedMarks() }
-        .onChange(of: restorer.paused) { _, paused in
-            if paused {
-                restorer.measurer.active = false
-                showTip("Paused. Swipe left or right to compare THEN and NOW. Tap the same button to carry on.", key: "tip.pause")
-            }
-        }
-        .onChange(of: restorer.status) { _, status in
-            if status == .ready, !reference.photoOnly {
-                showTip("Move or turn the phone until all four edge marks go green.", key: "tip.guides")
-            }
-        }
-        .onChange(of: restorer.matched) { _, matched in
-            if matched { Diagnostics.log("Edge guides all seated") }
         }
         .onAppear {
             tapCatcher.install()
@@ -2425,8 +2393,45 @@ struct ResetStage: View {
 
     /// The button and the window's tap watcher can both fire for one tap (the button alone never gets it in
     /// landscape on some phones), so these act once per tap, and not while paused or still finding the room.
+    /// What the Reset screen keeps an eye on: models, marks, pause, status.
+    private func watching<V: View>(_ content: V) -> some View {
+        content
+            .onReceive(restorer.placer.$models.dropFirst()) { models in
+                reference.models = models
+                save()
+            }
+            .onReceive(restorer.measurer.$active) { measuring = $0 }
+            .onReceive(restorer.measurer.$revision.dropFirst()) { _ in
+                if !restorer.measurer.measurements.isEmpty {
+                    showTip("Tap Exact in the ruler bar to make sizes exact. Hold a line's end, then drag, to move it.", key: "tip.measure")
+                }
+                reference.measurements = restorer.measurer.measurements
+                reference.notes = restorer.measurer.notes
+                reference.removedMarks = restorer.measurer.removed
+                save()
+            }
+            .onChange(of: reference.measurements) { _, _ in followSyncedMarks() }
+            .onChange(of: reference.notes) { _, _ in followSyncedMarks() }
+            .onChange(of: restorer.paused) { _, paused in
+                if paused {
+                    restorer.measurer.active = false
+                    showTip("Paused. Swipe left or right to compare THEN and NOW. Tap the same button to carry on.", key: "tip.pause")
+                }
+            }
+            .onChange(of: restorer.status) { _, status in
+                if status == .ready, !reference.photoOnly {
+                    showTip("Move or turn the phone until all four edge marks go green.", key: "tip.guides")
+                }
+            }
+            .onChange(of: restorer.matched) { _, matched in
+                if matched { Diagnostics.log("Edge guides all seated") }
+            }
+    }
+
     private func editingSheets<V: View>(_ content: V) -> some View {
         content
+            .modifier(CaptureButtonAction { volumePressed() })
+            .overlay { CleanViewControls { snapshotOnce() } }
             .sheet(isPresented: $addingLayer) {
                 LayerPicker(references: others.filter { other in !layers.contains { $0.reference == other.id } }, thumbnails: thumbnails) { id in
                     layers.append(OverlayLayer(reference: id))
