@@ -124,7 +124,7 @@ struct CameraHome: View {
         Group {
             if let id = selectedID, let reference = binding(for: id) {
                 ResetStage(
-                    reference: reference, thumbnails: thumbnails, open: { panel = $0 },
+                    reference: reference, others: references.filter { $0.id != id }, thumbnails: thumbnails, open: { panel = $0 },
                     close: { selectedID = nil }, showToast: show, onPhoto: took)
                     .id(id)
             } else {
@@ -1796,6 +1796,11 @@ struct ResetStage: View {
     /// shows over the camera. White where it shows; saved beside the photo.
     @State private var ghostMask: UIImage?
     @State private var maskingGhost = false
+    /// Other references laid over this one (Layers.swift).
+    let others: [Reference]
+    @State private var layers: [OverlayLayer] = []
+    @State private var layerPictures: [UUID: (photo: UIImage, mask: UIImage?)] = [:]
+    @State private var addingLayer = false
     /// While swiping the ghost strength, the cursor shows.
     @State private var swipingStrength = false
     /// While swiping, how far towards now the view is, for the THEN and NOW tags; nil hides them.
@@ -1817,11 +1822,12 @@ struct ResetStage: View {
     @State private var lastLog = LastTime()
 
     init(
-        reference: Binding<Reference>, thumbnails: Thumbnails,
+        reference: Binding<Reference>, others: [Reference] = [], thumbnails: Thumbnails,
         open: @escaping (CameraHome.Panel) -> Void, close: @escaping () -> Void,
         showToast: @escaping (String) -> Void, onPhoto: @escaping (UIImage) -> Void
     ) {
         _reference = reference
+        self.others = others
         _restorer = StateObject(wrappedValue: Restorer(reference: reference.wrappedValue))
         self.thumbnails = thumbnails
         self.open = open
@@ -1866,6 +1872,17 @@ struct ResetStage: View {
             .themed()
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: restorer.placer).themed() }
+        .sheet(isPresented: $addingLayer) {
+            LayerPicker(references: others.filter { other in !layers.contains { $0.reference == other.id } }, thumbnails: thumbnails) { id in
+                layers.append(OverlayLayer(reference: id))
+                Diagnostics.log("Layer added (\(layers.count) now)")
+            }
+            .themed()
+        }
+        .onChange(of: layers) { _, now in
+            OverlayLayer.save(now, for: reference.id)
+            loadLayerPictures()
+        }
         .fullScreenCover(isPresented: $maskingGhost) {
             if let photo = restorer.startPhoto.flatMap(GhostMask.editable), let whole = CutoutMask.full(width: photo.cgImage?.width ?? 1, height: photo.cgImage?.height ?? 1) {
                 MaskBrushSheet(title: "Show only part", photo: photo, mask: GhostMask.fitted(ghostMask, to: photo) ?? whole, original: whole) { mask in
@@ -1908,6 +1925,8 @@ struct ResetStage: View {
         }
         .onAppear {
             tapCatcher.install()
+            layers = OverlayLayer.load(for: reference.id).filter { layer in others.contains { $0.id == layer.reference } }
+            loadLayerPictures()
             if reference.photoOnly {
                 photoPose = PhotoPose.load(reference.id)
                 ghostMask = GhostMask.load(reference.id)
@@ -1926,6 +1945,19 @@ struct ResetStage: View {
     }
 
     /// Shows a tip once ever (per key), for nine seconds.
+    /// Reads each layer's photo once, off the main thread.
+    private func loadLayerPictures() {
+        let wanted = layers.compactMap { layer in others.first { $0.id == layer.reference } }
+            .filter { layerPictures[$0.id] == nil }
+        guard !wanted.isEmpty else { return }
+        Task {
+            for reference in wanted {
+                let picture = await Task.detached(priority: .userInitiated) { OverlayLayer.picture(of: reference) }.value
+                if let picture { layerPictures[reference.id] = picture }
+            }
+        }
+    }
+
     private func showTip(_ text: String, key: String) {
         guard !UserDefaults.standard.bool(forKey: key), tip == nil else { return }
         UserDefaults.standard.set(true, forKey: key)
@@ -2030,6 +2062,9 @@ struct ResetStage: View {
                     }
                 }
                 Button { open(.gallery) } label: { Label("References", systemImage: "photo.on.rectangle") }
+                if !others.isEmpty {
+                    Button { addingLayer = true } label: { Label("Add a layer", systemImage: "square.3.layers.3d") }
+                }
                 Button { importingModel = true } label: { Label("Add 3D model", systemImage: "cube") }
                     .disabled(restorer.status != .ready)
                 Button { makingCutout = true } label: { Label("Add cut-out from photos", systemImage: "figure.stand") }
@@ -2095,6 +2130,9 @@ struct ResetStage: View {
                             .allowsHitTesting(false)
                     }
                 }
+                if ghostShown, !layers.isEmpty {
+                    LayerPictures(layers: layers, pictures: layerPictures, size: geometry.size)
+                }
                 if !restorer.paused, reference.models.isEmpty, !measuring, reference.photoOnly {
                     // An imported photo: one finger sideways for strength, two fingers to move, pinch, twist; double tap resets.
                     PhotoAdjustLayer(
@@ -2133,6 +2171,14 @@ struct ResetStage: View {
                     HeldCompare(
                         held: restorer.held, plainReference: reference.photoOnly ? restorer.startPhoto : restorer.heldPhoto,
                         toNow: $toNow, wipe: wipe)
+                }
+                if !layers.isEmpty, !restorer.paused {
+                    HStack {
+                        Spacer()
+                        LayerChips(layers: $layers, references: others, thumbnails: thumbnails)
+                            .padding(.trailing, 10)
+                    }
+                    .frame(maxHeight: .infinity)
                 }
                 VStack(spacing: 8) {
                     if restorer.status == .relocalizing, !reference.photoOnly, let photo = restorer.startPhoto, !restorer.paused {
