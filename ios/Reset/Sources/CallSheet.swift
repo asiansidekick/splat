@@ -116,12 +116,72 @@ enum CallSheetParser {
         var found = parse(pages.flatMap { $0.map(\.text) })
         var seen = Set(found.map { $0.scene.uppercased() })
         for page in pages {
-            for item in parseTable(page) where !seen.contains(item.scene.uppercased()) {
+            for item in parseTable(page) + parseColumns(page) where !seen.contains(item.scene.uppercased()) {
                 seen.insert(item.scene.uppercased())
                 found.append(item)
             }
         }
         return found
+    }
+
+    /// Any table with a scene-number column (Phil, 2026-11-09: "call sheets can differ"): finds the column by its
+    /// heading ("SC", "SCENE", "SC #", "SCN"), takes each cell below that holds only scene numbers, and names
+    /// each from its row: an "INT./EXT." cell if there is one, else the nearest wordy cell to the right (the set).
+    static func parseColumns(_ pieces: [CallSheetText]) -> [CallSheetScene] {
+        let headers = pieces.filter { isSceneHeader($0.text) }
+        var found: [CallSheetScene] = []
+        var seen = Set<String>()
+        for header in headers {
+            let width = header.maxX - header.minX
+            let left = header.minX - max(0.02, width), right = header.maxX + max(0.02, width)
+            let end = pieces.filter { $0.minY > header.maxY && isTableEnd($0.text) }.map(\.minY).min() ?? 2
+            let cells = pieces.filter { piece in
+                let middle = (piece.minX + piece.maxX) / 2
+                return piece.minY > header.maxY - 0.002 && piece.minY < end && middle > left && middle < right
+            }.sorted { $0.minY < $1.minY }
+            for cell in cells {
+                // Another table's heading under this column ("ID", "CAST") ends it.
+                let word = cell.text.trimmingCharacters(in: CharacterSet(charactersIn: " .:#"))
+                if word.count >= 2, word.count <= 12, word.allSatisfy({ $0.isUppercase || $0 == " " }), cell.minY > header.maxY + 0.002 { break }
+                let numbers = sceneNumbers(whole: cell.text)
+                guard !numbers.isEmpty else { continue }
+                let row = (cell.minY + cell.maxY) / 2
+                let height = max(cell.maxY - cell.minY, 0.004)
+                let beside = pieces.filter { piece in
+                    abs((piece.minY + piece.maxY) / 2 - row) < height * 1.6 && piece.minX > cell.maxX - 0.002 && isName(piece.text)
+                }.sorted { $0.minX < $1.minX }
+                let heading = beside.first { piece in
+                    headingCell.firstMatch(in: piece.text, range: NSRange(piece.text.startIndex..., in: piece.text)) != nil
+                }
+                let title = clean((heading ?? beside.first)?.text ?? "")
+                for number in numbers where !seen.contains(number.uppercased()) {
+                    seen.insert(number.uppercased())
+                    found.append(CallSheetScene(scene: number, title: title))
+                }
+            }
+        }
+        return found
+    }
+
+    private static func isSceneHeader(_ text: String) -> Bool {
+        let upper = text.uppercased().trimmingCharacters(in: CharacterSet(charactersIn: " .:#"))
+        return ["SC", "SCN", "SCS", "SCENE", "SCENES", "SC NO", "SCENE NO", "SC NUMBER", "SCENE NUMBER", "SC.NO"].contains(upper)
+    }
+
+    /// Text that names a set: at least three letters, and not a time of day, a page count or "D5".
+    private static func isName(_ text: String) -> Bool {
+        let letters = text.filter(\.isLetter).count
+        guard letters >= 3 else { return false }
+        let upper = text.uppercased().trimmingCharacters(in: .whitespaces)
+        return !["DAY", "NIGHT", "DUSK", "DAWN", "MORNING", "EVENING", "INT", "EXT", "INT.", "EXT."].contains(upper)
+    }
+
+    /// The scene numbers of a cell that holds nothing else ("12", "14A, 15", "96pt"), or none.
+    static func sceneNumbers(whole text: String) -> [String] {
+        let tokens = text.split(whereSeparator: { $0 == "," || $0 == "&" || $0 == "/" || $0.isWhitespace })
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".;:)(")) }.filter { !$0.isEmpty }
+        let numbers = sceneNumbers(leading: text.replacingOccurrences(of: "/", with: ","))
+        return numbers.count == tokens.count ? numbers : []
     }
 
     /// One tidy line: spaces collapsed, stray dashes and dots trimmed from the ends.

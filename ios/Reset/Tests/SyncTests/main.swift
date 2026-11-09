@@ -467,6 +467,18 @@ let tableScenes = CallSheetParser.parse(pages: [tablePage])
 expect(tableScenes.map(\.scene) == ["94A", "95", "95A", "96", "96A", "101", "104aA"], "table call sheet numbers: \(tableScenes.map(\.scene))")
 expect(tableScenes.first?.title == "EXT - VILLAGE NEAR DOCK" && tableScenes.last?.title == "EXT - DOCK", "table call sheet names: \(tableScenes.map(\.title))")
 
+// Another layout: a SC column, a D/N column, then the set with no INT/EXT, and an ID column in the cast list.
+let columnPage = [
+    cell("SC", 0.05, 0.10, 0.02), cell("D/N", 0.12, 0.10, 0.03), cell("SET", 0.2, 0.10, 0.04), cell("PAGES", 0.6, 0.10),
+    cell("12", 0.05, 0.13, 0.02), cell("D1", 0.12, 0.13, 0.02), cell("KITCHEN", 0.2, 0.13, 0.08), cell("1 3/8", 0.6, 0.13),
+    cell("14A, 15", 0.045, 0.16, 0.04), cell("N2", 0.12, 0.16, 0.02), cell("INT. GARAGE", 0.2, 0.16, 0.1), cell("2/8", 0.6, 0.16),
+    cell("ID", 0.05, 0.25, 0.02), cell("1", 0.05, 0.27, 0.01), cell("RAKE", 0.2, 0.27),
+]
+let columnScenes = CallSheetParser.parse(pages: [columnPage])
+expect(columnScenes.map(\.scene) == ["12", "14A", "15"], "column call sheet numbers: \(columnScenes.map(\.scene))")
+expect(columnScenes.map(\.title) == ["KITCHEN", "INT. GARAGE", "INT. GARAGE"], "column call sheet names: \(columnScenes.map(\.title))")
+expect(CallSheetParser.parse(pages: [tablePage]).count == tableScenes.count, "the column reader adds nothing wrong to the first sheet")
+
 // Scrapbook cut-outs
 let cutId = UUID()
 expect(ReferenceSyncLibrary.kind("model-\(cutId.uuidString).cutout") == .model && ReferenceSyncLibrary.path("model-\(cutId.uuidString).cutout") == "models/\(cutId.uuidString).cutout"
