@@ -1921,7 +1921,11 @@ struct ResetStage: View {
         self.onPhoto = onPhoto
     }
 
-    var body: some View {
+    // The layer picker, the Edit window and the photo mask are added apart from the rest, so the compiler can check
+    // the body in time.
+    var body: some View { editingSheets(stage) }
+
+    private var stage: some View {
         CameraLayout(bars: false, shutterSecond: true) {
             topBar
         } preview: {
@@ -1958,27 +1962,6 @@ struct ResetStage: View {
             .themed()
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: restorer.placer).themed() }
-        .sheet(isPresented: $addingLayer) {
-            LayerPicker(references: others.filter { other in !layers.contains { $0.reference == other.id } }, thumbnails: thumbnails) { id in
-                layers.append(OverlayLayer(reference: id))
-                Diagnostics.log("Layer added (\(layers.count) now)")
-            }
-            .themed()
-        }
-        .onChange(of: layers) { _, now in
-            OverlayLayer.save(now, for: reference.id)
-            loadLayerPictures()
-        }
-        .fullScreenCover(item: $editingPhoto) { target in
-            PhotoEditorSheet(target: target, onNewReference: added, onMaskChanged: { ghostMask = GhostMask.load(reference.id) })
-        }
-        .fullScreenCover(isPresented: $maskingGhost) {
-            if let photo = restorer.startPhoto.flatMap(GhostMask.editable), let whole = CutoutMask.full(width: photo.cgImage?.width ?? 1, height: photo.cgImage?.height ?? 1) {
-                MaskBrushSheet(title: "Show only part", photo: photo, mask: GhostMask.fitted(ghostMask, to: photo) ?? whole, original: whole) { mask in
-                    ghostMask = GhostMask.save(mask, reference: reference.id)
-                }
-            }
-        }
         .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { restorer.placer.add(from: urls) }
         }
@@ -2442,6 +2425,31 @@ struct ResetStage: View {
 
     /// The button and the window's tap watcher can both fire for one tap (the button alone never gets it in
     /// landscape on some phones), so these act once per tap, and not while paused or still finding the room.
+    private func editingSheets<V: View>(_ content: V) -> some View {
+        content
+            .sheet(isPresented: $addingLayer) {
+                LayerPicker(references: others.filter { other in !layers.contains { $0.reference == other.id } }, thumbnails: thumbnails) { id in
+                    layers.append(OverlayLayer(reference: id))
+                    Diagnostics.log("Layer added (\(layers.count) now)")
+                }
+                .themed()
+            }
+            .onChange(of: layers) { _, now in
+                OverlayLayer.save(now, for: reference.id)
+                loadLayerPictures()
+            }
+            .fullScreenCover(item: $editingPhoto) { target in
+                PhotoEditorSheet(target: target, onNewReference: added, onMaskChanged: { ghostMask = GhostMask.load(reference.id) })
+            }
+            .fullScreenCover(isPresented: $maskingGhost) {
+                if let photo = restorer.startPhoto.flatMap(GhostMask.editable), let whole = CutoutMask.full(width: photo.cgImage?.width ?? 1, height: photo.cgImage?.height ?? 1) {
+                    MaskBrushSheet(title: "Show only part", photo: photo, mask: GhostMask.fitted(ghostMask, to: photo) ?? whole, original: whole) { mask in
+                        ghostMask = GhostMask.save(mask, reference: reference.id)
+                    }
+                }
+            }
+    }
+
     /// Without the controls a volume button takes a snapshot; with them it pauses and plays.
     private func volumePressed() {
         if ScreenshotMode.shared.viewing { snapshotOnce() } else { togglePause() }
@@ -2671,3 +2679,4 @@ struct LoadNudge: ViewModifier {
         }
     }
 }
+
