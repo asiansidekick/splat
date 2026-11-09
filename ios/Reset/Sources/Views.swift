@@ -1688,6 +1688,10 @@ struct ResetStage: View {
     @State private var ghostShown = true
     /// Where an imported photo sits over the camera (moved, scaled, turned, mirrored by hand).
     @State private var photoPose = PhotoPose()
+    /// Phil, 2026-11-09: an imported photo can be masked by hand so only part of it (the props on the table)
+    /// shows over the camera. White where it shows; saved beside the photo.
+    @State private var ghostMask: UIImage?
+    @State private var maskingGhost = false
     /// While swiping the ghost strength, the cursor shows.
     @State private var swipingStrength = false
     /// While swiping, how far towards now the view is, for the THEN and NOW tags; nil hides them.
@@ -1758,6 +1762,13 @@ struct ResetStage: View {
             .themed()
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: restorer.placer).themed() }
+        .fullScreenCover(isPresented: $maskingGhost) {
+            if let photo = restorer.startPhoto.flatMap(GhostMask.editable), let whole = CutoutMask.full(width: photo.cgImage?.width ?? 1, height: photo.cgImage?.height ?? 1) {
+                MaskBrushSheet(title: "Show only part", photo: photo, mask: GhostMask.fitted(ghostMask, to: photo) ?? whole, original: whole) { mask in
+                    ghostMask = GhostMask.save(mask, reference: reference.id)
+                }
+            }
+        }
         .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { restorer.placer.add(from: urls) }
         }
@@ -1795,6 +1806,7 @@ struct ResetStage: View {
             tapCatcher.install()
             if reference.photoOnly {
                 photoPose = PhotoPose.load(reference.id)
+                ghostMask = GhostMask.load(reference.id)
                 showTip("Line the photo up: two fingers move it, pinch to size, twist to turn. Double tap puts it back. Flip is in the ••• menu.", key: "tip.photoPose")
             }
             // Checked under the same light it was shot with.
@@ -1905,6 +1917,13 @@ struct ResetStage: View {
                             photoPose.save(reference.id)
                         } label: { Label("Put photo back", systemImage: "arrow.uturn.backward") }
                     }
+                    Button { maskingGhost = true } label: { Label(ghostMask == nil ? "Show only part of the photo" : "Change the part shown", systemImage: "paintbrush.pointed") }
+                    if ghostMask != nil {
+                        Button {
+                            GhostMask.remove(reference.id)
+                            ghostMask = nil
+                        } label: { Label("Show the whole photo", systemImage: "photo") }
+                    }
                 }
                 Button { open(.gallery) } label: { Label("References", systemImage: "photo.on.rectangle") }
                 Button { importingModel = true } label: { Label("Add 3D model", systemImage: "cube") }
@@ -1948,7 +1967,8 @@ struct ResetStage: View {
                     if reference.photoOnly, let photo = restorer.startPhoto {
                         Image(uiImage: photo)
                             .resizable()
-                            .scaledToFill()
+                            .mask { if let ghostMask { Image(uiImage: ghostMask).resizable() } else { Color.white } }
+                            .aspectRatio(photo.size, contentMode: .fill)
                             .frame(width: geometry.size.width, height: geometry.size.height)
                             .posed(photoPose)
                             .frame(width: geometry.size.width, height: geometry.size.height)

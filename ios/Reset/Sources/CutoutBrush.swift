@@ -201,7 +201,7 @@ final class MaskCanvas: UIScrollView, UIScrollViewDelegate {
         replace(with: mask)
     }
 
-    var mask: CGImage? { context?.makeImage() }
+    var paintedMask: CGImage? { context?.makeImage() }
 
     private static let chequer: UIImage = {
         let size = CGSize(width: 24, height: 24)
@@ -257,7 +257,7 @@ struct MaskBrushSheet: View {
                 Text(title).font(Theme.headline)
                 Spacer()
                 Button("Done") {
-                    if let mask = holder.canvas?.mask { onDone(mask) }
+                    if let mask = holder.canvas?.paintedMask { onDone(mask) }
                     dismiss()
                 }
                 .fontWeight(.bold)
@@ -297,5 +297,50 @@ struct MaskBrushSheet: View {
     private func choice(_ word: String, symbol: String, on: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) { Label(word, systemImage: symbol).fontWeight(on ? .bold : .regular) }
             .tint(on ? Theme.accent : .gray)
+    }
+}
+
+/// The hand-painted mask over an imported photo, kept in the reference's folder on this phone.
+enum GhostMask {
+    private static func url(_ id: UUID) -> URL { ReferenceStore.folder(for: id).appendingPathComponent("ghost-mask.png") }
+
+    static func load(_ id: UUID) -> UIImage? {
+        guard let data = try? Data(contentsOf: url(id)), let image = UIImage(data: data) else { return nil }
+        return image
+    }
+
+    static func save(_ mask: CGImage, reference id: UUID) -> UIImage? {
+        let image = UIImage(cgImage: mask)
+        do {
+            try image.pngData()?.write(to: url(id), options: .atomic)
+            Diagnostics.log("Imported photo masked by hand")
+        } catch {
+            Diagnostics.log("Could not save the photo mask: \(error)")
+        }
+        return image
+    }
+
+    static func remove(_ id: UUID) { try? FileManager.default.removeItem(at: url(id)) }
+
+    /// The photo, upright and no more than 1600 points long, for painting on quickly.
+    static func editable(_ photo: UIImage) -> UIImage? {
+        let scale = min(1, 1600 / max(photo.size.width, photo.size.height, 1))
+        let size = CGSize(width: (photo.size.width * scale).rounded(), height: (photo.size.height * scale).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in photo.draw(in: CGRect(origin: .zero, size: size)) }
+    }
+
+    /// A saved mask stretched to the painting photo's size.
+    static func fitted(_ mask: UIImage?, to photo: UIImage) -> CGImage? {
+        guard let mask, let cg = mask.cgImage, let target = photo.cgImage else { return nil }
+        guard let context = CutoutMask.context(width: target.width, height: target.height, mask: nil) else { return nil }
+        context.saveGState()
+        context.scaleBy(x: 1, y: -1)
+        context.translateBy(x: 0, y: -CGFloat(target.height))
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: target.width, height: target.height))
+        context.restoreGState()
+        return context.makeImage()
     }
 }
