@@ -74,7 +74,9 @@ enum CallSheetParser {
             let top = heading.minY - 0.006
             var bottom = index + 1 < headings.count ? headings[index + 1].minY - 0.003 : heading.minY + rowHeight * 1.5
             // The table ends at its footer ("TOTAL PAGE COUNT", the CAST list, "STRIPS CONTINUE OVER THE PAGE").
-            if let end = pieces.filter({ $0.minY > heading.maxY && $0.minY < bottom && isTableEnd($0.text) }).map(\.minY).min() {
+            // So does another table's heading on the left ("ID" over a cast list).
+            if let end = pieces.filter({ $0.minY > heading.maxY && $0.minY < bottom
+                && (isTableEnd($0.text) || ($0.maxX <= heading.minX + 0.01 && isColumnWord($0.text))) }).map(\.minY).min() {
                 bottom = end
             }
             let title = clean(heading.text)
@@ -116,7 +118,7 @@ enum CallSheetParser {
         var found = parse(pages.flatMap { $0.map(\.text) })
         var seen = Set(found.map { $0.scene.uppercased() })
         for page in pages {
-            for item in parseTable(page) + parseColumns(page) where !seen.contains(item.scene.uppercased()) {
+            for item in parseColumns(page) + parseTable(page) where !seen.contains(item.scene.uppercased()) {
                 seen.insert(item.scene.uppercased())
                 found.append(item)
             }
@@ -141,8 +143,7 @@ enum CallSheetParser {
             }.sorted { $0.minY < $1.minY }
             for cell in cells {
                 // Another table's heading under this column ("ID", "CAST") ends it.
-                let word = cell.text.trimmingCharacters(in: CharacterSet(charactersIn: " .:#"))
-                if word.count >= 2, word.count <= 12, word.allSatisfy({ $0.isUppercase || $0 == " " }), cell.minY > header.maxY + 0.002 { break }
+                if isColumnWord(cell.text), cell.minY > header.maxY + 0.002 { break }
                 let numbers = sceneNumbers(whole: cell.text)
                 guard !numbers.isEmpty else { continue }
                 let row = (cell.minY + cell.maxY) / 2
@@ -161,6 +162,12 @@ enum CallSheetParser {
             }
         }
         return found
+    }
+
+    /// A short all-capitals word like a table's column heading: "ID", "CAST", "NO".
+    private static func isColumnWord(_ text: String) -> Bool {
+        let word = text.trimmingCharacters(in: CharacterSet(charactersIn: " .:#"))
+        return word.count >= 2 && word.count <= 12 && word.allSatisfy { $0.isUppercase || $0 == " " }
     }
 
     private static func isSceneHeader(_ text: String) -> Bool {
