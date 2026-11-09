@@ -6,21 +6,54 @@ import VisionKit
 
 /// Reads the text on a picture of a call sheet, on the phone, with no internet.
 enum CallSheetScanner {
-    static func lines(in image: UIImage) async -> [String] {
+    /// Every piece of text on the picture and where it is (0...1 from the top left). A tall
+    /// screenshot is read in overlapping strips, because the reader shrinks a whole tall picture
+    /// until the small print of a call sheet is lost.
+    static func boxes(in image: UIImage) async -> [TextBox] {
         guard let cg = image.cgImage else { return [] }
         let orientation = CGImagePropertyOrientation(image.imageOrientation)
+        let sideways: [CGImagePropertyOrientation] = [.left, .right, .leftMirrored, .rightMirrored]
+        let turned = sideways.contains(orientation)
+        let width = Double(turned ? cg.height : cg.width), height = Double(turned ? cg.width : cg.height)
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                let request = VNRecognizeTextRequest()
-                request.recognitionLevel = .accurate
-                request.usesLanguageCorrection = false
-                let handler = VNImageRequestHandler(cgImage: cg, orientation: orientation)
-                try? handler.perform([request])
-                let observations = (request.results ?? []).sorted {
-                    // Top to bottom, then left to right, so a table reads like the page.
-                    abs($0.boundingBox.midY - $1.boundingBox.midY) > 0.01 ? $0.boundingBox.midY > $1.boundingBox.midY : $0.boundingBox.minX < $1.boundingBox.minX
+                // Strips about as tall as the picture is wide, overlapping by a fifth.
+                let strip = min(1, width / max(height, 1))
+                var starts: [Double] = [0]
+                while let last = starts.last, last + strip < 0.999 {
+                    let next = min(1 - strip, last + strip * 0.8)
+                    guard next > last + 0.001 else { break }
+                    starts.append(next)
                 }
-                continuation.resume(returning: observations.compactMap { $0.topCandidates(1).first?.string })
+                var found: [TextBox] = []
+                for start in starts {
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    request.usesLanguageCorrection = false
+                    request.minimumTextHeight = 0
+                    // Vision measures from the bottom.
+                    let roi = CGRect(x: 0, y: 1 - start - strip, width: 1, height: strip)
+                    request.regionOfInterest = roi
+                    let handler = VNImageRequestHandler(cgImage: cg, orientation: orientation)
+                    try? handler.perform([request])
+                    for observation in request.results ?? [] {
+                        guard let text = observation.topCandidates(1).first?.string else { continue }
+                        let box = observation.boundingBox
+                        // Text cut by the edge of a strip is read whole in the next one.
+                        let nearTop = box.maxY > 0.995 && start > 0
+                        let nearBottom = box.minY < 0.005 && start + strip < 0.999
+                        if nearTop || nearBottom { continue }
+                        let top = start + Double(1 - box.maxY) * strip
+                        let piece = TextBox(text: text, x: Double(box.minX), y: top, width: Double(box.width),
+                                            height: Double(box.height) * strip)
+                        // Read twice where the strips overlap: keep one.
+                        let twice = found.contains {
+                            $0.text == piece.text && abs($0.midX - piece.midX) < 0.01 && abs($0.midY - piece.midY) < max(piece.height, 0.002)
+                        }
+                        if !twice { found.append(piece) }
+                    }
+                }
+                continuation.resume(returning: found)
             }
         }
     }
@@ -77,6 +110,8 @@ struct DaySetupSheet: View {
     @State private var scanning = false
     @State private var reading = false
     @State private var found: [DayScene] = []
+    /// What each picture read so far said, so more pictures add to it.
+    @State private var pages: [[TextBox]] = []
     @State private var department: Department = .hair
     @State private var message: String?
 
@@ -89,8 +124,20 @@ struct DaySetupSheet: View {
                     if VNDocumentCameraViewController.isSupported {
                         Button { scanning = true } label: { Label("Scan a call sheet", systemImage: "doc.viewfinder") }
                     }
-                    PhotosPicker(selection: $picked, maxSelectionCount: 4, matching: .images) {
-                        Label("Pick a photo of one", systemImage: "photo")
+                    PhotosPicker(selection: $picked, maxSelectionCount: 10, matching: .images) {
+                        Label(pages.isEmpty ? "Pick photos or screenshots" : "Add more of the sheet", systemImage: "photo.on.rectangle")
+                    }
+                    if pages.isEmpty {
+                        Text("Pick several if the sheet runs over more than one screenshot.")
+                            .font(Theme.font(.footnote)).foregroundStyle(.secondary)
+                    } else {
+                        HStack {
+                            Text("\(pages.count) picture\(pages.count == 1 ? "" : "s") read").foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Start again") { pages = []; found = []; message = nil }
+                                .buttonStyle(.borderless)
+                        }
+                        .font(Theme.font(.footnote))
                     }
                     if reading { HStack { ProgressView(); Text("Reading…").foregroundStyle(.secondary) } }
                     if let message { Text(message).font(Theme.font(.footnote)).foregroundStyle(.orange) }
@@ -165,16 +212,25 @@ struct DaySetupSheet: View {
         reading = true
         message = nil
         Task {
-            var lines: [String] = []
-            for image in images { lines += await CallSheetScanner.lines(in: image) }
-            let scenes = DaySetup.parse(lines)
+            var added: [[TextBox]] = []
+            for image in images { added.append(await CallSheetScanner.boxes(in: image)) }
+            let readable = added.filter { !$0.isEmpty }
+            pages += readable
+            let scenes = DaySetup.parse(pages: pages)
             reading = false
-            found = scenes
-            if scenes.isEmpty {
-                message = lines.isEmpty
+            // Keep what was already ticked or fixed; add what the new pictures found.
+            var kept = found
+            for scene in scenes where !kept.contains(where: { $0.scene.caseInsensitiveCompare(scene.scene) == .orderedSame }) {
+                kept.append(scene)
+            }
+            found = kept
+            if found.isEmpty {
+                message = pages.isEmpty
                     ? "Nothing readable in that picture. Try again in better light, with the whole page in view."
-                    : "No scenes found. Scene lines look like \"12 INT. KITCHEN - DAY\" or \"Sc 12 Kitchen\"."
-            } else if scenes.allSatisfy({ $0.characters.isEmpty }) {
+                    : "No scenes found. Scenes are read from lines like \"12 INT. KITCHEN - DAY\" or a scene column next to \"EXT - DOCK\"."
+            } else if readable.count < images.count {
+                message = "\(images.count - readable.count) of those pictures had nothing readable."
+            } else if found.allSatisfy({ $0.characters.isEmpty }) {
                 message = "Scenes read, but no cast list matched them. Type each scene's characters in."
             }
         }

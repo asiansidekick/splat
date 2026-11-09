@@ -380,4 +380,77 @@ do {
     expect(DaySetup.parse(["no scenes here"]).isEmpty, "nothing found on an unrelated page")
 }
 
+// Call sheets laid out as a table, from where the text sits (Phil's Koh Tek Pier sheet, 2026-11-09).
+do {
+    func t(_ text: String, _ x: Double, _ y: Double, _ w: Double = 0.06) -> TextBox {
+        TextBox(text: text, x: x, y: y, width: w, height: 0.005)
+    }
+    let header = [t("SCENE", 0.08, 0.144, 0.04), t("SET DESCRIPTION / SYNOPSIS", 0.18, 0.144, 0.16), t("D/N", 0.41, 0.144, 0.02),
+                  t("PGS/TOD", 0.44, 0.144, 0.04), t("CAST", 0.52, 0.144, 0.03), t("STUNTS", 0.61, 0.144, 0.04),
+                  t("BACKGROUND", 0.71, 0.144, 0.07), t("NOTES", 0.83, 0.144, 0.04)]
+    let strips = [
+        t("EXT - VILLAGE NEAR DOCK", 0.12, 0.150, 0.13), t("94A", 0.095, 0.163, 0.025),
+        t("3 trucks pull in to park, traffickers exit and move toward the", 0.12, 0.163, 0.26), t("D5", 0.41, 0.165, 0.015),
+        t("1/8", 0.45, 0.165, 0.015), t("-", 0.53, 0.165, 0.005), t("100. STUNT COORD", 0.59, 0.155, 0.09),
+        t("3 x ND dock locals", 0.59, 0.160, 0.08), t("6 x Armed local", 0.59, 0.165, 0.08), t("5 x Fisherman", 0.72, 0.155, 0.07),
+        t("EXT - PENANG ISLAND COVE - APPROACHING A DOCK", 0.12, 0.182, 0.25), t("95", 0.095, 0.211, 0.015),
+        t("Lewis watches the blindfolds come off....grins as they", 0.12, 0.211, 0.26), t("9. ROSALIE", 0.5, 0.211),
+        t("100. STUNT COORD", 0.59, 0.186, 0.09), t("1 x Lewis' boat driver", 0.59, 0.214, 0.09),
+        t("EXT - DOCK - FRANKIE'S BOAT", 0.12, 0.245, 0.15), t("95aA", 0.092, 0.276, 0.025), t("9. ROSALIE", 0.5, 0.272),
+        t("10. FRANKIE", 0.5, 0.277), t("Reveal Frankie - hat pulled low - he announces the inbound", 0.12, 0.276, 0.26),
+        t("I/E - DOCK STRUCTURE", 0.12, 0.311, 0.11), t("95A, 96pt", 0.07, 0.325, 0.045), t("8. DALISAY", 0.5, 0.325),
+        t("Reveal Rake & Dalisay in a hide with sniper rifle", 0.12, 0.326, 0.22),
+        t("STRIPS CONTINUE OVER THE PAGE...", 0.78, 0.340, 0.15),
+        t("UPM - Paul Sullivan", 0.1, 0.350, 0.1),
+    ]
+    let second = [
+        t("EXT - DOCK - ALCOTT'S OLD VAN", 0.12, 0.452, 0.15), t("95C", 0.09, 0.483, 0.02), t("2. ALCOTT", 0.5, 0.483),
+        t("100. STUNT COORD", 0.6, 0.462, 0.09),
+        t("EXT - DOCK", 0.12, 0.647, 0.05), t("96", 0.1, 0.675, 0.015), t("6. TYGO", 0.5, 0.665), t("9. ROSALIE", 0.5, 0.670),
+        t("10. FRANKIE", 0.5, 0.675), t("13. TEDDY", 0.5, 0.680), t("Mercs begin unloading women, Rosalie among them, one", 0.12, 0.675, 0.26),
+        t("I/E - DOCK STRUCTURE", 0.12, 0.710, 0.11), t("96Apt,", 0.07, 0.728, 0.03), t("101pt,", 0.07, 0.733, 0.03),
+        t("104aApt", 0.07, 0.738, 0.035), t("2. ALCOTT", 0.5, 0.728), t("6. TYGO", 0.5, 0.733), t("8. DALISAY", 0.5, 0.738),
+        t("100. STUNT COORD", 0.6, 0.727, 0.09), t("101. RAKE DBL", 0.6, 0.732, 0.08),
+        t("EXT - DOCK", 0.12, 0.757, 0.05), t("104Apt", 0.07, 0.790, 0.035), t("8. DALISAY", 0.5, 0.786), t("9. ROSALIE", 0.5, 0.791),
+        t("102. ALCOTT DBL", 0.6, 0.765, 0.08),
+        t("TOTAL PAGE COUNT FOR SEQUENCE:", 0.3, 0.825, 0.15), t("2 6/8", 0.47, 0.825, 0.03),
+        t("CAST", 0.07, 0.832, 0.03), t("ID", 0.075, 0.838, 0.01), t("STAT", 0.1, 0.838, 0.02), t("CHARACTER", 0.14, 0.838, 0.07),
+        t("ARTIST", 0.24, 0.838, 0.04),
+        t("1", 0.075, 0.847, 0.005), t("2U", 0.105, 0.847, 0.01), t("RAKE", 0.14, 0.847, 0.03), t("Chris Hemsworth", 0.24, 0.847, 0.08),
+        t("8", 0.075, 0.882, 0.005), t("W", 0.105, 0.882, 0.008), t("DALISAY", 0.14, 0.882, 0.04), t("Siena Agudong", 0.24, 0.882, 0.08),
+        t("9", 0.075, 0.891, 0.005), t("W", 0.105, 0.891, 0.008), t("ROSALIE (k)", 0.14, 0.891, 0.05), t("Elisha Villa", 0.24, 0.891, 0.07),
+    ]
+    let whole = DaySetup.parse(pages: [header + strips + second])
+    let numbers = whole.map(\.scene)
+    expect(numbers == ["94A", "95", "95aA", "95A", "96", "95C", "96A", "101", "104aA", "104A"],
+           "table call sheet: scene numbers from their own column, got \(numbers)")
+    func cast(_ scene: String) -> [String] { whole.first { $0.scene == scene }?.characterList ?? ["(missing)"] }
+    expect(cast("94A").isEmpty, "table call sheet: stunt and background numbers are not cast, got \(cast("94A"))")
+    expect(cast("95") == ["Rosalie"], "table call sheet: cast cell read, got \(cast("95"))")
+    expect(cast("95aA") == ["Rosalie", "Frankie"], "table call sheet: two in a cast cell, got \(cast("95aA"))")
+    expect(cast("95A") == ["Dalisay"], "table call sheet: two scenes in one cell share the cast, got \(cast("95A"))")
+    expect(cast("96") == ["Dalisay", "Tygo", "Rosalie", "Frankie", "Teddy"], "table call sheet: a scene in parts gets everyone, got \(cast("96"))")
+    expect(cast("104aA") == ["Alcott", "Tygo", "Dalisay"], "table call sheet: stacked numbers, doubles skipped, got \(cast("104aA"))")
+    expect(whole.first?.title == "EXT - VILLAGE NEAR DOCK", "table call sheet: the set is the title, got \(whole.first?.title ?? "")")
+    expect(CallSheetTable.castList(on: second) == [1: "Rake", 8: "Dalisay", 9: "Rosalie"],
+           "table cast list by ID and character, got \(CallSheetTable.castList(on: second))")
+
+    // The same sheet as two screenshots: the second has no header row.
+    let split = DaySetup.parse(pages: [header + strips, second])
+    expect(split.map(\.scene) == numbers, "two screenshots read as one sheet, got \(split.map(\.scene))")
+    expect(split.first { $0.scene == "95C" }?.characterList == ["Alcott"], "second screenshot cast read without the header row")
+
+    // Cast given as numbers in the cast column, names from the cast list on another picture.
+    let numbered = [t("SCENE", 0.05, 0.1, 0.04), t("SET", 0.2, 0.1, 0.03), t("CAST", 0.6, 0.1, 0.03),
+                    t("INT. KITCHEN - DAY", 0.2, 0.15, 0.12), t("12", 0.05, 0.16, 0.015), t("1, 8", 0.6, 0.16, 0.02)]
+    let castPage = [t("ID", 0.05, 0.1, 0.01), t("CHARACTER", 0.1, 0.1, 0.07), t("1", 0.05, 0.12, 0.005), t("RAKE", 0.1, 0.12, 0.03),
+                    t("8", 0.05, 0.13, 0.005), t("DALISAY", 0.1, 0.13, 0.04)]
+    let fromNumbers = DaySetup.parse(pages: [numbered, castPage])
+    expect(fromNumbers.first?.characterList == ["Rake", "Dalisay"], "cast numbers matched to a cast list on another picture, got \(fromNumbers.first?.characterList ?? [])")
+
+    // Line-style sheets still read as before when given as pictures.
+    let lineStyle = [t("SC 12 INT. KITCHEN - DAY 1", 0.05, 0.2, 0.4), t("1. SARAH JONES", 0.05, 0.1, 0.2)]
+    expect(DaySetup.parse(pages: [lineStyle]).first?.characterList == ["Sarah Jones"], "line-style sheet from boxes still works")
+}
+
 exit(failures == 0 ? 0 : 1)

@@ -24,7 +24,7 @@ enum DaySetup {
     /// The cast numbers at the end of a scene row: "12 INT. KITCHEN - DAY  1, 3, 5".
     private static let trailingNumbers = try! NSRegularExpression(pattern: "((?:\\d{1,2}\\s*[,&]\\s*)+\\d{1,2}|\\s\\d{1,2})\\s*$")
     /// Words that mean a row is something else than a cast name.
-    private static let notNames = ["int", "ext", "day", "night", "page", "pgs", "scene", "set", "cast", "call", "unit", "crew", "dawn", "dusk", "total", "pages"]
+    private static let notNames = ["int", "ext", "day", "night", "page", "pgs", "scene", "set", "cast", "call", "unit", "crew", "dawn", "dusk", "total", "pages", "x"]
 
     /// Cast number to character, from the cast list rows.
     static func castTable(_ lines: [String]) -> [Int: String] {
@@ -61,6 +61,46 @@ enum DaySetup {
             }
             return DayScene(scene: scene.scene, title: scene.title, characters: names.joined(separator: ", "))
         }
+    }
+
+    /// The scenes on one or more pictures of a call sheet (pages, or screenshots of parts of one),
+    /// each scene once. Table layouts are read from where the text sits; otherwise line by line.
+    static func parse(pages: [[TextBox]]) -> [DayScene] {
+        let lines = pages.flatMap { readingOrder($0) }
+        var tableCast: [Int: String] = [:]
+        for page in pages {
+            for (number, name) in CallSheetTable.castList(on: page) where tableCast[number] == nil { tableCast[number] = name }
+        }
+        var cast = tableCast
+        for (number, name) in castTable(lines) where cast[number] == nil { cast[number] = name }
+        var scenes: [DayScene] = []
+        for page in pages { scenes += CallSheetTable.scenes(on: page, cast: cast) }
+        if scenes.isEmpty { scenes = parse(lines) }
+        return merged(scenes)
+    }
+
+    /// One entry per scene number, the first title kept and the characters of all of them.
+    static func merged(_ scenes: [DayScene]) -> [DayScene] {
+        var out: [DayScene] = []
+        for scene in scenes {
+            guard let index = out.firstIndex(where: { $0.scene.caseInsensitiveCompare(scene.scene) == .orderedSame }) else {
+                out.append(scene)
+                continue
+            }
+            var names = out[index].characterList
+            for name in scene.characterList where !names.contains(name) { names.append(name) }
+            out[index].characters = names.joined(separator: ", ")
+            if out[index].title.isEmpty { out[index].title = scene.title }
+        }
+        return out
+    }
+
+    /// The text of a page top to bottom, then left to right, so a table reads like the page.
+    static func readingOrder(_ page: [TextBox]) -> [String] {
+        page.sorted { a, b in
+            if a.sameRow(as: b) { return a.x < b.x }
+            return a.midY < b.midY
+        }.map(\.text)
     }
 
     /// Boards to make for the checked scenes: one per character per scene, skipping any that exist.

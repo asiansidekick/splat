@@ -59,7 +59,7 @@ jobs:
       - name: Team pack tests
         working-directory: ios/Match
         run: |
-          if ! swiftc -O Sources/Board.swift Sources/Attitude.swift Sources/OverlayFit.swift Sources/TeamPack.swift Sources/Shared/PhotoPrivacy.swift Sources/Shared/SecurePack.swift Sources/CallSheet.swift Sources/DaySetup.swift \
+          if ! swiftc -O Sources/Board.swift Sources/Attitude.swift Sources/OverlayFit.swift Sources/TeamPack.swift Sources/Shared/PhotoPrivacy.swift Sources/Shared/SecurePack.swift Sources/CallSheet.swift Sources/CallSheetTable.swift Sources/DaySetup.swift \
             Tests/PackTests/main.swift -o pack-tests > compile.log 2>&1; then
             grep -E ": error: " compile.log | sort -u | head -10 \
               | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Match/\1,line=\3,col=\4::\5#'
