@@ -441,6 +441,7 @@ struct MaskBrushSheet: View {
         case .erase: return "Paint over what to remove. Two fingers zoom and move."
         case .loop: return "Draw round what you want. Only the inside is kept."
         case .pick: return "Tap a person or thing to add it. Tap again to take it out."
+        case .magic: return "Tap a colour: everything joined to it in that colour is kept."
         }
     }
 
