@@ -447,6 +447,26 @@ let parsed = CallSheetParser.parse(sheetLines)
 expect(parsed.map(\.scene) == ["12", "14A", "12A", "5", "20"], "call sheet scene numbers: \(parsed.map(\.scene))")
 expect(parsed.first?.title == "INT. KITCHEN - DAY" && parsed.last?.title == "Rooftop", "call sheet scene names")
 
+// A call sheet laid out as a table (Phil's screenshot, 2026-11-09): numbers centred left of a heading cell.
+func cell(_ text: String, _ x: Double, _ y: Double, _ w: Double = 0.05) -> CallSheetText {
+    CallSheetText(text: text, minX: x, minY: y, maxX: x + w, maxY: y + 0.006)
+}
+let tablePage = [
+    cell("SCENE", 0.08, 0.10), cell("SET DESCRIPTION / SYNOPSIS", 0.2, 0.10, 0.2), cell("CAST", 0.55, 0.10),
+    cell("EXT - VILLAGE NEAR DOCK", 0.12, 0.12, 0.2), cell("94A", 0.08, 0.14, 0.03),
+    cell("3 trucks pull in to park, traffickers exit", 0.12, 0.14, 0.3), cell("100. STUNT COORD", 0.6, 0.13, 0.1),
+    cell("EXT - PENANG ISLAND COVE - APPROACHING A DOCK", 0.12, 0.17, 0.3), cell("95", 0.09, 0.20, 0.02),
+    cell("9. ROSALIE", 0.5, 0.20, 0.06), cell("2/8", 0.45, 0.20, 0.02),
+    cell("I/E - DOCK STRUCTURE", 0.12, 0.25, 0.15), cell("95A, 96pt", 0.07, 0.27, 0.04),
+    cell("Reveal Rake & Dalisay in a hide", 0.12, 0.27, 0.25),
+    cell("EXT - DOCK", 0.12, 0.30, 0.1), cell("96Apt,", 0.07, 0.31, 0.04), cell("101pt,", 0.07, 0.32, 0.04),
+    cell("104aApt", 0.07, 0.33, 0.04), cell("D5", 0.4, 0.32, 0.02),
+    cell("TOTAL PAGE COUNT FOR SEQUENCE:", 0.25, 0.36, 0.2), cell("CAST", 0.05, 0.37), cell("1", 0.06, 0.39, 0.01), cell("RAKE", 0.1, 0.39),
+]
+let tableScenes = CallSheetParser.parse(pages: [tablePage])
+expect(tableScenes.map(\.scene) == ["94A", "95", "95A", "96", "96A", "101", "104aA"], "table call sheet numbers: \(tableScenes.map(\.scene))")
+expect(tableScenes.first?.title == "EXT - VILLAGE NEAR DOCK" && tableScenes.last?.title == "EXT - DOCK", "table call sheet names: \(tableScenes.map(\.title))")
+
 // Scrapbook cut-outs
 let cutId = UUID()
 expect(ReferenceSyncLibrary.kind("model-\(cutId.uuidString).cutout") == .model && ReferenceSyncLibrary.path("model-\(cutId.uuidString).cutout") == "models/\(cutId.uuidString).cutout"
