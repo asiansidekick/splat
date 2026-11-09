@@ -118,7 +118,14 @@ enum CallSheetParser {
         var found = parse(pages.flatMap { $0.map(\.text) })
         var seen = Set(found.map { $0.scene.uppercased() })
         for page in pages {
-            for item in parseColumns(page) + parseTable(page) where !seen.contains(item.scene.uppercased()) {
+            // The column reader keeps the sheet's order; the heading reader knows the set better where both found a scene.
+            let table = parseTable(page)
+            let columns = parseColumns(page).map { item in
+                var item = item
+                if let named = table.first(where: { $0.scene.uppercased() == item.scene.uppercased() }), !named.title.isEmpty { item.title = named.title }
+                return item
+            }
+            for item in columns + table where !seen.contains(item.scene.uppercased()) {
                 seen.insert(item.scene.uppercased())
                 found.append(item)
             }
