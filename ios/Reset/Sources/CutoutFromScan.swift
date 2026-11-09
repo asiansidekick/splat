@@ -23,8 +23,9 @@ enum ScanViews {
         return point.x.isFinite && point.y.isFinite && point.z.isFinite ? point : nil
     }
 
-    /// Up to eight frames, one for each side of the subject, with the angle each shows
-    /// (0 front, 90 its left, 180 back, -90 its right). The first frame is the front.
+    /// Up to sixteen frames round the subject, one every 22.5 degrees where the walk-round has one, with the angle each
+    /// shows (0 front, 90 its left, 180 back, -90 its right). The first frame is the front. Phil, 2026-11-09: more
+    /// photos, so the cut-out turns more smoothly as you walk round it.
     static func pick(from frames: [Keyframe], within tolerance: Float = 28) -> [(frame: Keyframe, angle: Float)] {
         guard let first = frames.first else { return [] }
         guard let centre = subject(of: frames) else { return [(frame: first, angle: Float(0))] }
@@ -34,8 +35,12 @@ enum ScanViews {
         let angles = frames.map { Cutout.viewAngle(camera: $0.position, position: centre, front: front) }
         var chosen: [(frame: Keyframe, angle: Float)] = []
         var used = Set<Int>()
-        for want in [Float(0), 90, 180, -90, 45, -45, 135, -135] {
-            let best = frames.indices.filter { !used.contains($0) && Cutout.gap(angles[$0], want) <= tolerance }
+        let main: [Float] = [0, 90, 180, -90, 45, -45, 135, -135]
+        let between: [Float] = [22.5, -22.5, 67.5, -67.5, 112.5, -112.5, 157.5, -157.5]
+        for want in main + between {
+            // The in-between sides only take a frame close to them, so they never steal one a main side needs.
+            let allowed = main.contains(want) ? tolerance : min(tolerance, 10)
+            let best = frames.indices.filter { !used.contains($0) && Cutout.gap(angles[$0], want) <= allowed }
                 .min { Cutout.gap(angles[$0], want) < Cutout.gap(angles[$1], want) }
             guard let index = best else { continue }
             used.insert(index)
@@ -121,12 +126,17 @@ struct CutoutFromScan: View {
     }
 
     static func sideName(_ angle: Float) -> String {
+        if angle.truncatingRemainder(dividingBy: 45) != 0 {
+            // An in-between side: name the two it sits between.
+            let lower = (angle / 45).rounded(.down) * 45
+            return "Between \(sideName(lower).lowercased()) and \(sideName(lower + 45 > 180 ? -135 : lower + 45).lowercased())"
+        }
         switch angle {
         case 0: return "Front"
         case 45: return "Front left"
         case 90: return "Left side"
         case 135: return "Back left"
-        case 180: return "Back"
+        case 180, -180: return "Back"
         case -135: return "Back right"
         case -90: return "Right side"
         default: return "Front right"
@@ -143,7 +153,8 @@ struct CutoutFromScan: View {
             let orientation = pick.frame.uprightOrientation
             let result = await Task.detached(priority: .userInitiated) { () -> CutoutLift.Lifted? in
                 guard let cg = UIImage(contentsOfFile: path)?.cgImage else { return nil }
-                return CutoutLift.lift(UIImage(cgImage: cg, scale: 1, orientation: orientation))
+                // A little smaller than a hand-made cut-out's photos: there can be twice as many.
+                return CutoutLift.lift(UIImage(cgImage: cg, scale: 1, orientation: orientation), longSide: 900)
             }.value
             // A frame with no clear subject would stand the whole room up as the cut-out: leave it out.
             if let result, !result.whole { found.append(Item(preview: result.preview, png: result.png, aspect: result.aspect, angle: pick.angle)) }
