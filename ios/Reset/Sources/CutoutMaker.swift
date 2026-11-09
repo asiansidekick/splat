@@ -7,30 +7,48 @@ import Vision
 
 /// Lifts the subject out of a photo, the same trick as touching and holding a subject in Photos.
 enum CutoutLift {
-    /// The subject on a transparent background, cropped to it, as PNG, with its width over height.
-    nonisolated static func lift(_ original: UIImage, longSide: CGFloat = 1100) -> (png: Data, aspect: Float, preview: UIImage)? {
+    struct Lifted {
+        /// The photo, upright and no bigger than needed, and the mask the cut-out was made with (kept for touching up).
+        var photo: UIImage
+        var mask: CGImage
+        /// What the reader found, for Start again.
+        var found: CGImage
+        var png: Data
+        var aspect: Float
+        var preview: UIImage
+        /// No subject was found, so the whole photo was kept.
+        var whole: Bool
+    }
+
+    /// The subject on a transparent background, cropped to it, as PNG, with its width over height. With no clear
+    /// subject the whole photo is kept, to be touched up by hand.
+    nonisolated static func lift(_ original: UIImage, longSide: CGFloat = 1100) -> Lifted? {
         // Upright, and no bigger than needed (a cut-out is a few hundred pixels tall on screen).
         let scale = min(1, longSide / max(original.size.width, original.size.height))
-        let size = CGSize(width: original.size.width * scale, height: original.size.height * scale)
+        let size = CGSize(width: (original.size.width * scale).rounded(), height: (original.size.height * scale).rounded())
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = true
         let upright = UIGraphicsImageRenderer(size: size, format: format).image { _ in original.draw(in: CGRect(origin: .zero, size: size)) }
         guard let cg = upright.cgImage else { return nil }
+        var mask: CGImage?
         let handler = VNImageRequestHandler(cgImage: cg)
         let request = VNGenerateForegroundInstanceMaskRequest()
         do {
             try handler.perform([request])
-            guard let result = request.results?.first, !result.allInstances.isEmpty else { return nil }
-            let buffer = try result.generateMaskedImage(ofInstances: result.allInstances, from: handler, croppedToInstancesExtent: true)
-            let image = CIImage(cvPixelBuffer: buffer)
-            guard let out = CIContext().createCGImage(image, from: image.extent), out.height > 0,
-                  let png = UIImage(cgImage: out).pngData() else { return nil }
-            return (png, Float(out.width) / Float(out.height), UIImage(cgImage: out))
+            if let result = request.results?.first, !result.allInstances.isEmpty {
+                let buffer = try result.generateScaledMaskForImage(forInstances: result.allInstances, from: handler)
+                let alpha = CIImage(cvPixelBuffer: buffer).applyingFilter("CIMaskToAlpha")
+                mask = CIContext().createCGImage(alpha, from: CGRect(x: 0, y: 0, width: cg.width, height: cg.height),
+                                                 format: .RGBA8, colorSpace: CutoutMask.space)
+            }
         } catch {
             Diagnostics.log("Cut-out lift failed: \(error)")
-            return nil
         }
+        let whole = mask == nil
+        guard let used = mask ?? CutoutMask.full(width: cg.width, height: cg.height),
+              let made = CutoutMask.compose(cg, mask: used) else { return nil }
+        return Lifted(photo: upright, mask: used, found: used, png: made.png, aspect: made.aspect, preview: made.preview, whole: whole)
     }
 }
 
@@ -88,6 +106,9 @@ struct CutoutMaker: View {
         var png: Data
         var aspect: Float
         var angle: Float
+        var photo: UIImage
+        var mask: CGImage
+        var found: CGImage
     }
 
     /// The sides on offer: what the photo shows, as the thing itself would say it.
@@ -106,6 +127,7 @@ struct CutoutMaker: View {
     @State private var heightText = "170"
     @State private var message: String?
     @State private var saved: [CutoutLibrary.Entry] = []
+    @State private var touching: UUID?
 
     private var heightMetres: Float? {
         guard let value = Float(heightText.replacingOccurrences(of: ",", with: ".")), value >= 2, value <= 500 else { return nil }
@@ -146,23 +168,31 @@ struct CutoutMaker: View {
                         Label(items.isEmpty ? "Pick photos from different sides" : "Add more photos", systemImage: "photo.stack")
                     }
                     if working > 0 { HStack { ProgressView(); Text("Cutting out \(working) photo\(working == 1 ? "" : "s")…").foregroundStyle(.secondary) } }
-                    if skipped > 0 { Text("\(skipped) photo\(skipped == 1 ? "" : "s") had nothing to lift out. Try one with the subject clearer.").font(Theme.footnote).foregroundStyle(.orange) }
+                    if skipped > 0 { Text("\(skipped) photo\(skipped == 1 ? "" : "s") had no clear subject, so the whole photo was kept. Tap Touch up edges to erase the background.").font(Theme.footnote).foregroundStyle(.orange) }
                     if let message { Text(message).font(Theme.footnote).foregroundStyle(.orange) }
                 } footer: {
-                    Text("One clear subject per photo. Front, side and back work best. Choose the side each photo shows.")
+                    Text("One clear subject per photo. Front, side and back work best. Choose the side each photo shows, and touch up any edge the phone got wrong.")
                 }
                 if !items.isEmpty {
                     Section("Photos") {
                         ForEach($items) { $item in
                             HStack(spacing: 12) {
-                                Image(uiImage: item.preview)
-                                    .resizable().scaledToFit()
-                                    .frame(width: 64, height: 84)
-                                    .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-                                Picker("Shows the", selection: $item.angle) {
-                                    ForEach(Self.sides, id: \.angle) { side in Text(side.name).tag(side.angle) }
+                                Button { touching = item.id } label: {
+                                    Image(uiImage: item.preview)
+                                        .resizable().scaledToFit()
+                                        .frame(width: 64, height: 84)
+                                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
                                 }
-                                .pickerStyle(.menu)
+                                .buttonStyle(.borderless)
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Picker("Shows the", selection: $item.angle) {
+                                        ForEach(Self.sides, id: \.angle) { side in Text(side.name).tag(side.angle) }
+                                    }
+                                    .pickerStyle(.menu)
+                                    Button { touching = item.id } label: { Label("Touch up edges", systemImage: "paintbrush.pointed") }
+                                        .buttonStyle(.borderless)
+                                        .font(Theme.subheadline)
+                                }
                             }
                         }
                         .onDelete { items.remove(atOffsets: $0) }
@@ -188,6 +218,12 @@ struct CutoutMaker: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .onAppear { saved = CutoutLibrary.all() }
+            .fullScreenCover(item: Binding(get: { touching.flatMap { id in items.first { $0.id == id } }.map(Touch.init) },
+                                           set: { touching = $0?.id })) { touch in
+                MaskBrushSheet(title: "Touch up", photo: touch.item.photo, mask: touch.item.mask, original: touch.item.found) { mask in
+                    retouch(touch.item.id, mask: mask)
+                }
+            }
             .onChange(of: picked) { _, chosen in
                 guard !chosen.isEmpty else { return }
                 picked = []
@@ -203,18 +239,44 @@ struct CutoutMaker: View {
         Task {
             for entry in chosen {
                 let data = try? await entry.loadTransferable(type: Data.self)
-                let result = await Task.detached(priority: .userInitiated) { () -> (png: Data, aspect: Float, preview: UIImage)? in
+                let result = await Task.detached(priority: .userInitiated) { () -> CutoutLift.Lifted? in
                     guard let data, let image = UIImage(data: data) else { return nil }
                     return CutoutLift.lift(image)
                 }.value
                 working -= 1
                 if let result {
                     let angle = Self.suggested.first { want in !items.contains { $0.angle == want } } ?? 0
-                    items.append(Item(preview: result.preview, png: result.png, aspect: result.aspect, angle: angle))
+                    items.append(Item(preview: result.preview, png: result.png, aspect: result.aspect, angle: angle,
+                                      photo: result.photo, mask: result.mask, found: result.found))
+                    if result.whole { skipped += 1 }
                 } else {
-                    skipped += 1
+                    message = "Couldn't read that photo."
                 }
             }
+        }
+    }
+
+    private struct Touch: Identifiable {
+        let item: Item
+        var id: UUID { item.id }
+    }
+
+    /// Makes the cut-out again from a hand-painted mask.
+    private func retouch(_ id: UUID, mask: CGImage) {
+        guard let photo = items.first(where: { $0.id == id })?.photo.cgImage else { return }
+        Task {
+            let made = await Task.detached(priority: .userInitiated) { CutoutMask.compose(photo, mask: mask) }.value
+            guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+            guard let made else {
+                message = "Nothing was kept. Paint with Keep over what you want."
+                return
+            }
+            items[index].mask = mask
+            items[index].png = made.png
+            items[index].aspect = made.aspect
+            items[index].preview = made.preview
+            message = nil
+            Diagnostics.log("Cut-out touched up by hand")
         }
     }
 

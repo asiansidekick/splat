@@ -141,11 +141,12 @@ struct CutoutFromScan: View {
         for pick in picks {
             let path = folder.appendingPathComponent(pick.frame.imageFile).path
             let orientation = pick.frame.uprightOrientation
-            let result = await Task.detached(priority: .userInitiated) { () -> (png: Data, aspect: Float, preview: UIImage)? in
+            let result = await Task.detached(priority: .userInitiated) { () -> CutoutLift.Lifted? in
                 guard let cg = UIImage(contentsOfFile: path)?.cgImage else { return nil }
                 return CutoutLift.lift(UIImage(cgImage: cg, scale: 1, orientation: orientation))
             }.value
-            if let result { found.append(Item(preview: result.preview, png: result.png, aspect: result.aspect, angle: pick.angle)) }
+            // A frame with no clear subject would stand the whole room up as the cut-out: leave it out.
+            if let result, !result.whole { found.append(Item(preview: result.preview, png: result.png, aspect: result.aspect, angle: pick.angle)) }
         }
         items = found
         working = false
