@@ -74,7 +74,18 @@ enum DaySetup {
         var cast = tableCast
         for (number, name) in castTable(lines) where cast[number] == nil { cast[number] = name }
         var scenes: [DayScene] = []
-        for page in pages { scenes += CallSheetTable.scenes(on: page, cast: cast) }
+        for page in pages {
+            // The column reader keeps the sheet's order; the heading reader knows the set better.
+            let table = CallSheetTable.scenes(on: page, cast: cast)
+            let columns = CallSheetTable.columnScenes(on: page, cast: cast).map { item in
+                var item = item
+                if let named = table.first(where: { $0.scene.caseInsensitiveCompare(item.scene) == .orderedSame }), !named.title.isEmpty {
+                    item.title = named.title
+                }
+                return item
+            }
+            scenes += columns + table
+        }
         if scenes.isEmpty { scenes = parse(lines) }
         return merged(scenes)
     }

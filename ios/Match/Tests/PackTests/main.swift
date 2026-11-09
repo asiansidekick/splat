@@ -448,6 +448,18 @@ do {
     let fromNumbers = DaySetup.parse(pages: [numbered, castPage])
     expect(fromNumbers.first?.characterList == ["Rake", "Dalisay"], "cast numbers matched to a cast list on another picture, got \(fromNumbers.first?.characterList ?? [])")
 
+    // Reset's second layout: a SC column, D/N, then the set with no INT/EXT, and an ID column in the cast list.
+    let columnPage = [
+        t("SC", 0.05, 0.10, 0.02), t("D/N", 0.12, 0.10, 0.03), t("SET", 0.2, 0.10, 0.04), t("PAGES", 0.6, 0.10),
+        t("12", 0.05, 0.13, 0.02), t("D1", 0.12, 0.13, 0.02), t("KITCHEN", 0.2, 0.13, 0.08), t("1 3/8", 0.6, 0.13),
+        t("14A, 15", 0.045, 0.16, 0.04), t("N2", 0.12, 0.16, 0.02), t("INT. GARAGE", 0.2, 0.16, 0.1), t("2/8", 0.6, 0.16),
+        t("ID", 0.05, 0.25, 0.02), t("1", 0.05, 0.27, 0.01), t("RAKE", 0.2, 0.27),
+    ]
+    let columnScenes = DaySetup.parse(pages: [columnPage])
+    expect(columnScenes.map(\.scene) == ["12", "14A", "15"], "column call sheet numbers, got \(columnScenes.map(\.scene))")
+    expect(columnScenes.map(\.title) == ["KITCHEN", "INT. GARAGE", "INT. GARAGE"], "column call sheet names, got \(columnScenes.map(\.title))")
+    expect(DaySetup.parse(pages: [header + strips + second]).map(\.title) == whole.map(\.title), "the column reader adds nothing wrong to the first sheet")
+
     // Line-style sheets still read as before when given as pictures.
     let lineStyle = [t("SC 12 INT. KITCHEN - DAY 1", 0.05, 0.2, 0.4), t("1. SARAH JONES", 0.05, 0.1, 0.2)]
     expect(DaySetup.parse(pages: [lineStyle]).first?.characterList == ["Sarah Jones"], "line-style sheet from boxes still works")

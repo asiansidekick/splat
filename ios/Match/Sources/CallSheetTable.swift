@@ -63,6 +63,10 @@ enum CallSheetTable {
             var bottom = head.y + typical
             if i + 1 < headings.count { bottom = min(bottom, headings[i + 1].y - head.height * 0.3) }
             for stop in stops where stop.y > head.maxY && stop.y < bottom { bottom = stop.y }
+            // Another table's heading on the left ("ID" over a cast list) ends it too.
+            for word in page where word.y > head.maxY && word.y < bottom && word.maxX <= head.x + 0.01 && isColumnWord(word.text) {
+                bottom = word.y
+            }
             let block = page.filter { $0.midY >= top && $0.midY <= bottom && $0 != head }
 
             // The scene numbers: left of the set, or under the SCENE header when there is one.
@@ -97,6 +101,51 @@ enum CallSheetTable {
             let title = CallSheetParser.clean(head.text)
             for number in numbers {
                 found.append(DayScene(scene: number, title: title, characters: names.joined(separator: ", ")))
+            }
+        }
+        return found
+    }
+
+    /// Any table with a scene-number column, with or without INT/EXT headings (Reset's reader,
+    /// Phil 2026-11-09: "call sheets can differ"). The column is found by its heading ("SC",
+    /// "SCENE"); each cell below holding only scene numbers is a scene, named from its row: an
+    /// INT/EXT cell if there is one, else the nearest wordy cell to the right (the set).
+    static func columnScenes(on page: [TextBox], cast: [Int: String] = [:]) -> [DayScene] {
+        let columns = headerColumns(page)
+        let castColumn = columns.first { $0.name == "cast" }
+        var found: [DayScene] = []
+        for header in page where isSceneHeader(header.text) {
+            let reach = max(0.02, header.width)
+            let left = header.x - reach, right = header.maxX + reach
+            var end = 2.0
+            for box in page where box.y > header.maxY && isStop(box.text) { end = min(end, box.y) }
+            let cells = page.filter { $0.y > header.maxY - 0.002 && $0.y < end && $0.midX > left && $0.midX < right }
+                .sorted { $0.y < $1.y }
+            for cell in cells {
+                // Another table's heading under this column ("ID", "CAST") ends it.
+                if isColumnWord(cell.text), cell.y > header.maxY + 0.002 { break }
+                guard let numbers = sceneNumbers(cell.text), !numbers.isEmpty else { continue }
+                let band = max(cell.height, 0.004) * 1.6
+                let row = page.filter { abs($0.midY - cell.midY) < band && $0 != cell }
+                let beside = row.filter { box in
+                    guard box.x > cell.maxX - 0.002 else { return false }
+                    return isHeading(box.text) || isName(box.text)
+                }.sorted { $0.x < $1.x }
+                let set = beside.first { isHeading($0.text) } ?? beside.first { castEntries($0.text).isEmpty }
+                var names: [String] = []
+                for box in row {
+                    let inCast: Bool
+                    if let castColumn, let column = nearestColumn(box, columns) { inCast = column == castColumn.name } else { inCast = false }
+                    guard inCast else { continue }
+                    for (_, name) in castEntries(box.text) where !names.contains(name) { names.append(name) }
+                    for number in numberList(box.text) ?? [] {
+                        if let name = cast[number], !names.contains(name) { names.append(name) }
+                    }
+                }
+                let title = CallSheetParser.clean(set?.text ?? "")
+                for number in numbers {
+                    found.append(DayScene(scene: number, title: title, characters: names.joined(separator: ", ")))
+                }
             }
         }
         return found
@@ -165,9 +214,7 @@ enum CallSheetTable {
 
     /// The header row over the scene strips (SCENE ... CAST ... STUNTS ...), when on this page.
     private static func headerColumns(_ page: [TextBox]) -> [Column] {
-        let sceneWords: Set<String> = ["SCENE", "SCENES", "SC", "SC.", "SCN", "SC #", "SCENE #", "SC#"]
-        guard let scene = page.first(where: { sceneWords.contains($0.text.trimmingCharacters(in: .whitespaces).uppercased()) })
-        else { return [] }
+        guard let scene = page.first(where: { isSceneHeader($0.text) }) else { return [] }
         var columns = [Column(name: "scene", midX: scene.midX)]
         for box in page where box != scene && box.sameRow(as: scene) {
             let word = box.text.trimmingCharacters(in: .whitespaces).uppercased()
@@ -179,6 +226,28 @@ enum CallSheetTable {
 
     private static func nearestColumn(_ box: TextBox, _ columns: [Column]) -> String? {
         columns.min { abs($0.midX - box.midX) < abs($1.midX - box.midX) }?.name
+    }
+
+    /// A scene column's heading: "SC", "SCENE", "SC #", "SCN", "SCENE NO".
+    static func isSceneHeader(_ text: String) -> Bool {
+        let upper = text.uppercased().trimmingCharacters(in: CharacterSet(charactersIn: " .:#"))
+        let words: Set<String> = ["SC", "SCN", "SCS", "SCENE", "SCENES", "SC NO", "SCENE NO", "SC NUMBER", "SCENE NUMBER", "SC.NO"]
+        return words.contains(upper)
+    }
+
+    /// A short all-capitals word like a table's column heading: "ID", "CAST", "NO".
+    static func isColumnWord(_ text: String) -> Bool {
+        let word = text.trimmingCharacters(in: CharacterSet(charactersIn: " .:#"))
+        return word.count >= 2 && word.count <= 12 && word.allSatisfy { $0.isUppercase || $0 == " " }
+    }
+
+    /// Text that names a set: at least three letters, and not a time of day, a page count or "D5".
+    private static func isName(_ text: String) -> Bool {
+        let letters = text.filter(\.isLetter).count
+        guard letters >= 3 else { return false }
+        let upper = text.uppercased().trimmingCharacters(in: .whitespaces)
+        let notSets: Set<String> = ["DAY", "NIGHT", "DUSK", "DAWN", "MORNING", "EVENING", "INT", "EXT", "INT.", "EXT."]
+        return !notSets.contains(upper)
     }
 
     /// Where a scene's cell certainly ends.
