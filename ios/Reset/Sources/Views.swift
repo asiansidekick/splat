@@ -861,10 +861,12 @@ struct ModelsBesideScreenshot: View {
 /// while measuring (the measuring buttons stand there).
 struct ModelsEdgeButton: View {
     @ObservedObject var measurer: Measurer
+    /// Hidden while a model is picked: its tools run down that edge then.
+    @ObservedObject var placer: ModelPlacer
     let action: () -> Void
 
     var body: some View {
-        if !measurer.active {
+        if !measurer.active, placer.selectedModel == nil {
             SideButton(title: "3D models", systemImage: "cube", action: action)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
@@ -1710,7 +1712,7 @@ struct CaptureStage: View {
         }
         .overlay(alignment: leftHanded ? .bottomTrailing : .bottomLeading) {
             if verticalSize == .compact, !recorder.capturing {
-                ModelsEdgeButton(measurer: recorder.measurer) { choosingModel = true }
+                ModelsEdgeButton(measurer: recorder.measurer, placer: recorder.placer) { choosingModel = true }
             }
         }
         .overlay { MeasurePointer(measurer: recorder.measurer) }

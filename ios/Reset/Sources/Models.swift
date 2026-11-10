@@ -847,17 +847,6 @@ struct ModelOverlay: View {
     @State private var showsCutoutHelp = true
     @State private var posing = false
 
-    private var cutoutHelp: String {
-        if placer.carrying { return "Walk and point the phone. Let go to put it down." }
-        switch placer.cutoutJob {
-        case .move: return "Drag to move it. Up the screen is further, down is nearer."
-        case .turn: return "Drag sideways to turn it."
-        case .size: return "Drag up to make it bigger, down to make it smaller."
-        case .tilt: return "Drag up or down to tip it, sideways to slant it."
-        case .lift: return "Drag up to raise it, down to lower it."
-        }
-    }
-
     private static func symbol(_ job: ModelPlacer.CutoutJob) -> String {
         switch job {
         case .move: return "arrow.up.and.down.and.arrow.left.and.right"
@@ -895,22 +884,15 @@ struct ModelOverlay: View {
                 // Phil, 2026-11-09: gestures were not intuitive. Pick one job and one finger does only that; hold Carry
                 // and walk to take it along. Phil, 2026-11-10: the same for USDZ and every other model, with Lift
                 // in place of Tilt (only a flat cut-out tips).
+                // Phil, 2026-11-10: tools pushed to the screen's edges, jobs down the left and actions down the right,
+                // so the middle stays clear; the help is a small picture of the finger's move, not a sentence.
                 let cutout = placer.selectedIsCutout
-                VStack(spacing: 2) {
-                    if showsCutoutHelp || placer.carrying {
-                        Text(cutout || placer.carrying ? cutoutHelp : "\(cutoutHelp)  \(placer.sizeText)")
-                            .font(Theme.caption)
-                            .foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
-                            .shadow(color: .black.opacity(0.5), radius: 6)
-                            .allowsHitTesting(false)
-                            .transition(.opacity)
-                    }
-                    HStack(spacing: 2) {
+                HStack(alignment: .bottom, spacing: 0) {
+                    VStack(spacing: 0) {
                         ForEach(ModelPlacer.CutoutJob.allCases.filter { cutout ? $0 != .lift : $0 != .tilt }, id: \.self) { job in
                             CutoutTool(word: job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
                         }
-                        CutoutTool(word: placer.carrying ? "Carrying" : "Hold to carry", symbol: "figure.walk", on: placer.carrying) {}
+                        CutoutTool(word: placer.carrying ? "Carrying" : "Carry", symbol: "figure.walk", on: placer.carrying) {}
                             .simultaneousGesture(DragGesture(minimumDistance: 0)
                                 .onChanged { _ in placer.startCarrying() }
                                 .onEnded { _ in placer.stopCarrying() })
@@ -918,7 +900,13 @@ struct ModelOverlay: View {
                             CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
                         }
                     }
-                    HStack(spacing: 2) {
+                    Spacer(minLength: 0)
+                    if showsCutoutHelp || placer.carrying {
+                        MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText)
+                            .transition(.opacity)
+                    }
+                    Spacer(minLength: 0)
+                    VStack(spacing: 0) {
                         CutoutTool(word: "Place here", symbol: "scope") { placer.bringToView() }
                         if cutout {
                             CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }
@@ -931,6 +919,7 @@ struct ModelOverlay: View {
                         CutoutTool(word: "Done", symbol: "checkmark") { placer.selectedModel = nil }
                     }
                 }
+                .frame(maxWidth: .infinity)
                 .task(id: "\(placer.selectedModel?.uuidString ?? "")-\(placer.cutoutJob.rawValue)") {
                     withAnimation { showsCutoutHelp = true }
                     try? await Task.sleep(for: .seconds(4))
@@ -948,6 +937,41 @@ struct ModelOverlay: View {
         } message: {
             Text(placer.modelError ?? "")
         }
+    }
+}
+
+/// The help as a picture: a finger and the way to drag it, with a word or two at most.
+private struct MoveHint: View {
+    let job: ModelPlacer.CutoutJob
+    let carrying: Bool
+    let size: String?
+
+    private var parts: (arrow: String, words: String) {
+        if carrying { return ("figure.walk", "walk, let go to drop") }
+        switch job {
+        case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further")
+        case .turn: return ("arrow.left.and.right", "turn")
+        case .size: return ("arrow.up.and.down", "↑ bigger")
+        case .tilt: return ("arrow.up.and.down.and.arrow.left.and.right", "↕ tip  ↔ slant")
+        case .lift: return ("arrow.up.and.down", "↑ higher")
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 4) {
+                Image(systemName: carrying ? "iphone.gen3" : "hand.point.up.left.fill")
+                Image(systemName: parts.arrow).font(.system(size: 16, weight: .bold))
+            }
+            .font(.system(size: 22, weight: .semibold))
+            Text(parts.words).font(.system(size: 12, weight: .semibold))
+            if let size, !size.isEmpty { Text(size).font(.system(size: 11, weight: .semibold).monospacedDigit()) }
+        }
+        .foregroundStyle(.white)
+        .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
+        .shadow(color: .black.opacity(0.5), radius: 6)
+        .padding(.bottom, 6)
+        .allowsHitTesting(false)
     }
 }
 
