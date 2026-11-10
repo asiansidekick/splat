@@ -35,7 +35,7 @@ struct MannequinPoseEditor: View {
             .padding(.vertical, 10)
             ZStack(alignment: .top) {
                 PoseStage(person: spec.body, height: spec.height, pose: $pose)
-                Text("Drag a mint dot: hands and feet move the arm or leg, the head leans the body. Drag elsewhere to turn round.")
+                Text("Drag a dot to pose. Drag elsewhere to turn round.")
                     .font(Theme.caption)
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
@@ -131,9 +131,11 @@ private struct PoseStage: UIViewRepresentable {
             shown = pose
             for (_, handle) in handles { handle.removeFromParentNode() }
             handles = [:]
-            for name in ["end.hand.L", "end.hand.R", "end.foot.L", "end.foot.R", "end.head"] {
+            // Phil, 2026-11-10: elbows and knees get their own (smaller) dots.
+            for name in ["end.hand.L", "end.hand.R", "end.foot.L", "end.foot.R", "end.head", "elbow.L", "elbow.R", "knee.L", "knee.R"] {
                 guard let marker = made.childNode(withName: name, recursively: true) else { continue }
-                let dot = SCNNode(geometry: SCNSphere(radius: CGFloat(0.045 * parent.height / 1.7)))
+                let joint = !name.hasPrefix("end.")
+                let dot = SCNNode(geometry: SCNSphere(radius: CGFloat((joint ? 0.032 : 0.045) * parent.height / 1.7)))
                 dot.geometry?.firstMaterial?.diffuse.contents = Theme.accentUI
                 dot.geometry?.firstMaterial?.lightingModel = .constant
                 dot.simdPosition = marker.simdWorldPosition
@@ -176,7 +178,20 @@ private struct PoseStage: UIViewRepresentable {
         /// Solves the limb (or the lean) for the dragged dot and shows the new pose.
         private func move(_ handle: String, to target: SIMD3<Float>) {
             var pose = shown ?? parent.pose
-            if handle == "end.head" {
+            if handle.hasPrefix("elbow.") || handle.hasPrefix("knee.") {
+                // Swing the upper arm or thigh so the elbow or knee goes to the finger; the forearm or shin keeps its bend.
+                let isArm = handle.hasPrefix("elbow.")
+                let side = handle.hasSuffix("L") ? "L" : "R"
+                guard let top = node(isArm ? "shoulder.\(side)" : "hip.\(side)"), let middle = node(handle),
+                      let end = node(isArm ? "end.hand.\(side)" : "end.foot.\(side)") else { return }
+                let s = top.simdWorldPosition, m = middle.simdWorldPosition, e = end.simdWorldPosition
+                let a = simd_length(m - s)
+                guard a > 0.01, simd_length(target - s) > 0.01 else { return }
+                let swing = simd_quatf(from: simd_normalize(m - s), to: simd_normalize(target - s))
+                let joint = s + a * simd_normalize(target - s)
+                let hand = joint + swing.act(e - m)
+                solveLimb(isArm: isArm, side: side, shoulder: s, joint: joint, end: hand, into: &pose)
+            } else if handle == "end.head" {
                 guard let pelvis = node("pelvis") else { return }
                 let up = simd_normalize(target - pelvis.simdWorldPosition)
                 pose.spineForward = max(-30, min(60, asin(max(-1, min(1, up.z))) * 180 / .pi))
@@ -184,7 +199,6 @@ private struct PoseStage: UIViewRepresentable {
             } else {
                 let isArm = handle.hasPrefix("end.hand")
                 let side = handle.hasSuffix("L") ? "L" : "R"
-                let sign: Float = side == "L" ? 1 : -1
                 guard let top = node(isArm ? "shoulder.\(side)" : "hip.\(side)"),
                       let middle = node(isArm ? "elbow.\(side)" : "knee.\(side)"),
                       let end = node(handle) else { return }
@@ -201,6 +215,17 @@ private struct PoseStage: UIViewRepresentable {
                 let cosAngle = max(-1, min(1, (a * a + reach * reach - b * b) / (2 * a * reach)))
                 let joint = s + a * (cosAngle * toTarget + sqrt(max(0, 1 - cosAngle * cosAngle)) * pole)
                 let hand = s + reach * toTarget
+                solveLimb(isArm: isArm, side: side, shoulder: s, joint: joint, end: hand, into: &pose)
+            }
+            pose = pose.limited
+            rebuild(pose)
+            parent.pose = pose
+        }
+
+        /// Turns a shoulder (or hip), elbow (or knee) and hand (or foot) position into the limb's angles.
+        private func solveLimb(isArm: Bool, side: String, shoulder s: SIMD3<Float>, joint: SIMD3<Float>, end hand: SIMD3<Float>,
+                               into pose: inout MannequinPose) {
+                let sign: Float = side == "L" ? 1 : -1
                 // Into the frame the limb hangs from: the spine for arms, the (unturned) pelvis for legs.
                 let frame = isArm ? (node("spine.in")?.simdWorldOrientation ?? simd_quatf(angle: 0, axis: SIMD3(0, 1, 0)))
                                   : simd_quatf(angle: 0, axis: SIMD3(0, 1, 0))
@@ -214,9 +239,6 @@ private struct PoseStage: UIViewRepresentable {
                     let leg = MannequinPose.Leg(out: deg(solved.z) * sign, forward: -deg(solved.x), inward: -deg(solved.y) * sign, knee: max(0, deg(solved.bend)))
                     if side == "L" { pose.leftLeg = leg } else { pose.rightLeg = leg }
                 }
-            }
-            rebuild(pose)
-            parent.pose = pose
         }
     }
 }

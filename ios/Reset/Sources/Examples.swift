@@ -24,8 +24,9 @@ enum Mannequin {
             return Build(shoulders: 0.40, hips: 0.30, torso: 0.48, neck: 0.07, head: 0.23, upperArm: 0.30, forearm: 0.26, hand: 0.18,
                          thigh: 0.45, shin: 0.43, foot: 0.08, armRadius: 0.045, legRadius: 0.075, waist: 0.12, chestDepth: 0.12, bust: 0)
         case .woman:
-            return Build(shoulders: 0.36, hips: 0.35, torso: 0.47, neck: 0.075, head: 0.22, upperArm: 0.29, forearm: 0.25, hand: 0.17,
-                         thigh: 0.45, shin: 0.42, foot: 0.075, armRadius: 0.038, legRadius: 0.072, waist: 0.10, chestDepth: 0.105, bust: 0.058)
+            // Phil, 2026-11-10: a fashion-doll figure: narrow waist, full rib cage and bust, rounder hips, slim limbs.
+            return Build(shoulders: 0.35, hips: 0.36, torso: 0.47, neck: 0.08, head: 0.22, upperArm: 0.29, forearm: 0.25, hand: 0.17,
+                         thigh: 0.46, shin: 0.44, foot: 0.075, armRadius: 0.032, legRadius: 0.066, waist: 0.08, chestDepth: 0.1, bust: 0.056)
         }
     }
 
@@ -82,22 +83,33 @@ enum Mannequin {
         root.name = "pelvis"
         root.simdPosition = SIMD3(0, d.foot + d.shin + d.thigh + 0.04 * k, 0)
         figure.addChildNode(root)
-        // Pelvis.
-        root.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, -0.02 * k, 0), scale: SIMD3(d.hips * 0.55, 0.11 * k, d.waist * 1.05)))
+        // Pelvis: the woman's is rounder and fuller than her waist.
+        if body == .woman {
+            root.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, -0.03 * k, -0.005 * k), scale: SIMD3(d.hips * 0.56, 0.13 * k, 0.105 * k)))
+        } else {
+            root.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, -0.02 * k, 0), scale: SIMD3(d.hips * 0.55, 0.11 * k, d.waist * 1.05)))
+        }
 
         // Spine: abdomen, chest, neck, head.
         let spine = joint("spine", at: .zero, z: pose.spineSide, x: pose.spineForward)
         root.addChildNode(spine.outer)
         let s = spine.inner
-        s.addChildNode(shape(SCNCapsule(capRadius: CGFloat(d.waist), height: CGFloat(d.torso * 0.55)), at: SIMD3(0, d.torso * 0.35, 0),
-                             scale: SIMD3(1, 1, 0.8)))
-        s.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.torso * 0.72, 0), scale: SIMD3(d.shoulders * 0.5, d.torso * 0.3, d.chestDepth)))
-        if d.bust > 0 {
+        if body == .woman {
+            // Hourglass: a slim waist between a tapering rib cage and the hips, the bust set into the chest.
+            s.addChildNode(shape(SCNCapsule(capRadius: CGFloat(d.waist), height: CGFloat(d.torso * 0.5)), at: SIMD3(0, d.torso * 0.3, 0),
+                                 scale: SIMD3(1.05, 1, 0.85)))
+            s.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.torso * 0.08, -0.003 * k), scale: SIMD3(d.hips * 0.4, d.torso * 0.16, 0.085 * k)))
+            s.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.torso * 0.7, 0), scale: SIMD3(d.shoulders * 0.43, d.torso * 0.29, d.chestDepth * 0.85)))
             for side: Float in [-1, 1] {
-                s.addChildNode(shape(SCNSphere(radius: CGFloat(d.bust)), at: SIMD3(side * d.shoulders * 0.16, d.torso * 0.64, d.chestDepth * 0.55)))
+                s.addChildNode(shape(SCNSphere(radius: CGFloat(d.bust)), at: SIMD3(side * d.shoulders * 0.15, d.torso * 0.63, d.chestDepth * 0.5),
+                                     scale: SIMD3(1, 0.92, 0.85)))
             }
+        } else {
+            s.addChildNode(shape(SCNCapsule(capRadius: CGFloat(d.waist), height: CGFloat(d.torso * 0.55)), at: SIMD3(0, d.torso * 0.35, 0),
+                                 scale: SIMD3(1, 1, 0.8)))
+            s.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.torso * 0.72, 0), scale: SIMD3(d.shoulders * 0.5, d.torso * 0.3, d.chestDepth)))
         }
-        s.addChildNode(shape(SCNCapsule(capRadius: CGFloat(0.045 * k), height: CGFloat(d.neck + 0.08 * k)), at: SIMD3(0, d.torso + d.neck * 0.4, 0)))
+        s.addChildNode(shape(SCNCapsule(capRadius: CGFloat((body == .woman ? 0.036 : 0.045) * k), height: CGFloat(d.neck + 0.08 * k)), at: SIMD3(0, d.torso + d.neck * 0.4, 0)))
         let neck = joint("neck", at: SIMD3(0, d.torso + d.neck, 0), x: pose.headDown, y: pose.headTurn)
         s.addChildNode(neck.outer)
         neck.inner.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.head * 0.5, 0.01 * k), scale: SIMD3(0.085 * k, d.head * 0.5, 0.1 * k)))

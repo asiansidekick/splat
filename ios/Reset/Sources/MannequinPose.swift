@@ -68,3 +68,38 @@ struct MannequinSpec: Codable, Equatable {
     var pose: MannequinPose
 }
 
+
+extension MannequinPose {
+    /// Phil, 2026-11-10: hand posing keeps to what a body can do. Elbows and knees bend one way only and
+    /// not fully shut, limbs twist only so far, a hip swings forward more than back or out. A leg raised
+    /// past level (written the other way round, out beyond 90°) keeps its swing.
+    var limited: MannequinPose {
+        func clamp(_ value: Float, _ low: Float, _ high: Float) -> Float { min(max(value, low), high) }
+        func arm(_ a: Arm) -> Arm {
+            var a = a
+            a.elbow = clamp(a.elbow, 0, 150)
+            a.inward = clamp(a.inward, -80, 110)
+            return a
+        }
+        func leg(_ l: Leg) -> Leg {
+            var l = l
+            l.knee = clamp(l.knee, 0, 145)
+            l.inward = clamp(l.inward, -45, 45)
+            if abs(l.out) <= 90 {
+                l.out = clamp(l.out, -30, 50)
+                l.forward = clamp(l.forward, -35, 90)
+            }
+            return l
+        }
+        var p = self
+        p.left = arm(left)
+        p.right = arm(right)
+        p.leftLeg = leg(leftLeg)
+        p.rightLeg = leg(rightLeg)
+        p.spineForward = clamp(spineForward, -30, 60)
+        p.spineSide = clamp(spineSide, -30, 30)
+        p.headTurn = clamp(headTurn, -80, 80)
+        p.headDown = clamp(headDown, -40, 60)
+        return p
+    }
+}
