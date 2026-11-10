@@ -146,6 +146,8 @@ struct WithScreenshot<Content: View>: View {
     var evenCells = false
     /// With `evenCells`: the screenshot button comes before the control instead of after it.
     var screenshotFirst = false
+    /// Hands the button's frame and action to the window's tap watcher (taps on its side can go astray otherwise).
+    var register: ((CGRect, @escaping () -> Void) -> Void)? = nil
     @ViewBuilder let content: () -> Content
     @Environment(\.chromeVertical) private var vertical
 
@@ -153,17 +155,17 @@ struct WithScreenshot<Content: View>: View {
         if evenCells && !vertical {
             Group {
                 if screenshotFirst {
-                    ScreenshotButton(camera: camera, toast: toast, size: size).frame(maxWidth: .infinity)
+                    ScreenshotButton(camera: camera, toast: toast, size: size, register: register).frame(maxWidth: .infinity)
                     content().frame(maxWidth: .infinity)
                 } else {
                     content().frame(maxWidth: .infinity)
-                    ScreenshotButton(camera: camera, toast: toast, size: size).frame(maxWidth: .infinity)
+                    ScreenshotButton(camera: camera, toast: toast, size: size, register: register).frame(maxWidth: .infinity)
                 }
             }
         } else {
             let layout = vertical ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 6))
             layout {
-                ScreenshotButton(camera: camera, toast: toast, size: size)
+                ScreenshotButton(camera: camera, toast: toast, size: size, register: register)
                 content()
             }
         }
@@ -175,10 +177,28 @@ struct ScreenshotButton: View {
     let camera: () -> ARSCNView?
     let toast: (String) -> Void
     var size: CGFloat = 40
+    var register: ((CGRect, @escaping () -> Void) -> Void)? = nil
+    /// The button and the window's tap watcher can both fire for one tap: the second within 0.8 s is ignored.
+    @MainActor private static var last = Date.distantPast
 
     var body: some View {
-        Button {
-            Task { @MainActor in
+        Button { take() } label: {
+            Image(systemName: "camera.viewfinder")
+                .font(Theme.font(size: size * 0.86))
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .shadow(color: .black.opacity(0.7), radius: 3)
+        }
+        .modifier(WindowFrame { frame in register?(frame, { take() }) })
+        .hiddenInScreenshots()
+        .accessibilityLabel("Screenshot to Photos")
+    }
+
+    @MainActor private func take() {
+        guard Date().timeIntervalSince(Self.last) > 0.8 else { return }
+        Self.last = Date()
+        Diagnostics.log("Screenshot pressed (\(Screen.orientation.isLandscape ? "landscape" : "portrait"))")
+        Task { @MainActor in
                 // Hide the controls, give the screen a moment to redraw, take the picture, bring them back.
                 ScreenshotMode.shared.clean = true
                 try? await Task.sleep(for: .milliseconds(180))
@@ -191,15 +211,6 @@ struct ScreenshotButton: View {
                 Haptics.success()
                 let saved = await PhotoLibrary.save([image])
                 toast(saved ? "Screenshot saved to Photos" : "Allow Photos in Settings, Reset, Photos to save there")
-            }
-        } label: {
-            Image(systemName: "camera.viewfinder")
-                .font(Theme.font(size: size * 0.86))
-                .foregroundStyle(.white)
-                .frame(width: size, height: size)
-                .shadow(color: .black.opacity(0.7), radius: 3)
         }
-        .hiddenInScreenshots()
-        .accessibilityLabel("Screenshot to Photos")
     }
 }

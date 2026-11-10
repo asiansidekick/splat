@@ -59,7 +59,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// One-finger drags move the selected model up and down instead of across (Phil, 2026-10-31).
     @Published var lifting = false
     /// Phil, 2026-11-09: cut-outs are handled one job at a time, each with one finger, and carried by holding Carry.
-    enum CutoutJob: String, CaseIterable { case move = "Move", turn = "Turn", size = "Size", tilt = "Tilt" }
+    enum CutoutJob: String, CaseIterable { case move = "Move", turn = "Turn", size = "Size", tilt = "Tilt", lift = "Lift" }
     @Published var cutoutJob: CutoutJob = .move
     @Published private(set) var carrying = false
     private var carryTimer: Timer?
@@ -370,7 +370,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             }
         }
         guard let id = selectedModel, let node = modelNodes[id] else { return }
-        if cutoutPackages[id] != nil, cutoutJob != .move, !carrying {
+        // Phil, 2026-11-10: USDZ and other models use the cut-out way too: one job at a time for one finger.
+        if cutoutJob != .move, !carrying {
             doCutoutJob(gesture, id: id, node: node)
             return
         }
@@ -501,6 +502,10 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             cutoutPackages[id] = package
             plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: cutoutTurn[id] ?? 0)
             if gesture.state == .ended { savePose(package, id: id, file: model.file, plane: plane) }
+        case .lift:
+            let camera = session.currentFrame?.camera.transform.columns.3.xyz ?? node.simdWorldPosition
+            // About a millimetre and a half per point for each metre away.
+            node.simdWorldPosition.y -= Float(moved.y) * 0.0016 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
         case .move:
             break
         }
@@ -849,6 +854,7 @@ struct ModelOverlay: View {
         case .turn: return "Drag sideways to turn it."
         case .size: return "Drag up to make it bigger, down to make it smaller."
         case .tilt: return "Drag up or down to tip it, sideways to slant it."
+        case .lift: return "Drag up to raise it, down to lower it."
         }
     }
 
@@ -858,6 +864,7 @@ struct ModelOverlay: View {
         case .turn: return "arrow.triangle.2.circlepath"
         case .size: return "arrow.up.left.and.arrow.down.right"
         case .tilt: return "rotate.3d"
+        case .lift: return "arrow.up.and.down"
         }
     }
 
@@ -881,15 +888,17 @@ struct ModelOverlay: View {
                     .padding(6)
                     .background(.ultraThinMaterial, in: Capsule())
             }
-            else if placer.selectedIsCutout {
+            else if placer.selectedModelName != nil {
                 // Phil, 2026-11-08: the cut-out controls covered too much of the middle of the picture. One slim row
                 // along the bottom, a small picture with its word under it (the words stay whole), no panel; the
-                // help line shows for a few seconds when a cut-out is picked, then goes.
-                // Phil, 2026-11-09: gestures were not intuitive. Pick one job (Move, Turn, Size, Tilt) and one finger does
-                // only that; hold Carry and walk to take it along.
+                // help line shows for a few seconds when a model is picked, then goes.
+                // Phil, 2026-11-09: gestures were not intuitive. Pick one job and one finger does only that; hold Carry
+                // and walk to take it along. Phil, 2026-11-10: the same for USDZ and every other model, with Lift
+                // in place of Tilt (only a flat cut-out tips).
+                let cutout = placer.selectedIsCutout
                 VStack(spacing: 2) {
                     if showsCutoutHelp || placer.carrying {
-                        Text(cutoutHelp)
+                        Text(cutout || placer.carrying ? cutoutHelp : "\(cutoutHelp)  \(placer.sizeText)")
                             .font(Theme.caption)
                             .foregroundStyle(.white)
                             .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
@@ -898,17 +907,25 @@ struct ModelOverlay: View {
                             .transition(.opacity)
                     }
                     HStack(spacing: 2) {
-                        ForEach(ModelPlacer.CutoutJob.allCases, id: \.self) { job in
+                        ForEach(ModelPlacer.CutoutJob.allCases.filter { cutout ? $0 != .lift : $0 != .tilt }, id: \.self) { job in
                             CutoutTool(word: job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
                         }
                         CutoutTool(word: placer.carrying ? "Carrying" : "Hold to carry", symbol: "figure.walk", on: placer.carrying) {}
                             .simultaneousGesture(DragGesture(minimumDistance: 0)
                                 .onChanged { _ in placer.startCarrying() }
                                 .onEnded { _ in placer.stopCarrying() })
+                        if placer.selectedMannequin != nil {
+                            CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
+                        }
                     }
                     HStack(spacing: 2) {
                         CutoutTool(word: "Place here", symbol: "scope") { placer.bringToView() }
-                        CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }
+                        if cutout {
+                            CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }
+                        } else {
+                            if showsFloor { CutoutTool(word: "Floor", symbol: "arrow.down.to.line") { placer.dropToFloor() } }
+                            CutoutTool(word: "True size", symbol: "1.square") { placer.resetSelectedModelSize() }
+                        }
                         CutoutTool(word: placer.showDimensions ? "Hide sizes" : "Sizes", symbol: "ruler") { placer.showDimensions.toggle() }
                         CutoutTool(word: "Delete", symbol: "trash", tint: .red) { placer.deleteSelectedModel() }
                         CutoutTool(word: "Done", symbol: "checkmark") { placer.selectedModel = nil }
@@ -919,64 +936,6 @@ struct ModelOverlay: View {
                     try? await Task.sleep(for: .seconds(4))
                     withAnimation { showsCutoutHelp = false }
                 }
-            }
-            else if let name = placer.selectedModelName {
-                VStack(alignment: .leading, spacing: 8) {
-                    if placer.selectedIsCutout {
-                        // A cut-out is handled with the fingers: nothing to read, nothing to press but these four.
-                        Text("Drag to move. Pinch to resize. Twist to turn. Two fingers up or down to tilt, sideways to slant.")
-                            .font(Theme.subheadline)
-                            .fixedSize(horizontal: false, vertical: true)
-                        HStack(spacing: 8) {
-                            Button("Place here") { placer.bringToView() }
-                            Button("Straighten") { placer.resetPose() }
-                            Spacer(minLength: 0)
-                        }
-                        .buttonStyle(.bordered)
-                        .font(Theme.subheadline)
-                        .lineLimit(1)
-                    } else {
-                        Text(placer.lifting ? "\(name): drag up or down to lift it" : "\(name): drag to move (it stands on surfaces), pinch to scale, twist to turn")
-                            .font(Theme.subheadline)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text("W × D × H  \(placer.sizeText)").font(Theme.subheadline.bold().monospacedDigit())
-                        HStack(spacing: 8) {
-                            Button {
-                                placer.showDimensions.toggle()
-                            } label: {
-                                Image(systemName: placer.showDimensions ? "ruler.fill" : "ruler")
-                            }
-                            Button {
-                                placer.lifting.toggle()
-                            } label: {
-                                Image(systemName: "arrow.up.and.down")
-                            }
-                            .tint(placer.lifting ? Theme.accent : nil)
-                            if showsFloor { Button("Floor") { placer.dropToFloor() } }
-                            Button("True size") { placer.resetSelectedModelSize() }
-                            Button("Place here") { placer.bringToView() }
-                            Spacer(minLength: 0)
-                        }
-                        .buttonStyle(.bordered)
-                        .font(Theme.subheadline)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    }
-                    HStack {
-                        Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
-                        if placer.selectedMannequin != nil {
-                            Button { posing = true } label: { Label("Pose", systemImage: "figure.walk") }
-                                .tint(Theme.accent)
-                        }
-                        Spacer()
-                        Button("Done") { placer.selectedModel = nil }
-                    }
-                    .buttonStyle(.bordered)
-                    .font(Theme.subheadline)
-                }
-                .padding(10)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .frame(maxWidth: 420)
             }
         }
         .fullScreenCover(isPresented: $posing) {

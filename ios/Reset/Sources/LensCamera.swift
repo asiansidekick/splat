@@ -80,6 +80,8 @@ enum LensCamera {
 struct LensChooser: View {
     @Binding var zoom: Double
     var vertical = false
+    /// Hands each button to the window's tap watcher, as the shutter is (taps on its side can go astray otherwise).
+    var register: ((String, CGRect, @escaping () -> Void) -> Void)? = nil
 
     var body: some View {
         if LensCamera.lenses.count > 1 {
@@ -97,6 +99,7 @@ struct LensChooser: View {
                             .foregroundStyle(zoom == lens.zoom ? Theme.onAccent : Color.white)
                             .fixedSize()
                     }
+                    .modifier(WindowFrame { frame in register?("Lens \(lens.label)", frame, { zoom = lens.zoom }) })
                 }
             }
         }

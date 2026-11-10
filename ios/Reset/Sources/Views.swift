@@ -1688,7 +1688,8 @@ struct CaptureStage: View {
                 if mode == .snapshot, !recorder.capturing {
                     // On its side the lenses stand in a column beside the shutter, clear of the mode words.
                     if verticalSize == .compact {
-                        LensChooser(zoom: $lens, vertical: true).offset(x: leftHanded ? 52 : -52).disabled(lensBusy)
+                        LensChooser(zoom: $lens, vertical: true, register: { name, frame, action in tapCatcher.targets[name] = (frame, action) })
+                            .offset(x: leftHanded ? 52 : -52).disabled(lensBusy)
                     } else {
                         LensChooser(zoom: $lens).offset(y: -44).disabled(lensBusy)
                     }
@@ -1697,7 +1698,8 @@ struct CaptureStage: View {
             .disabled(recorder.saving || lensBusy)
             .accessibilityLabel(shutterLabel)
         } trailing: {
-            WithScreenshot(camera: { holder.view }, toast: showToast, size: 74, evenCells: true) {
+            WithScreenshot(camera: { holder.view }, toast: showToast, size: 74, evenCells: true,
+                           register: { frame, action in tapCatcher.targets["Screenshot"] = (frame, action) }) {
                 if recorder.capturing {
                     ViewsCounter(count: recorder.keyframeCount)
                 } else {
@@ -1977,7 +1979,8 @@ struct ResetStage: View {
                 .shadow(color: .black.opacity(0.5), radius: 3)
                 .accessibilityLabel("Snapshot")
         } trailing: {
-            WithScreenshot(camera: { holder.view }, toast: showToast, size: 74, evenCells: true, screenshotFirst: true) {
+            WithScreenshot(camera: { holder.view }, toast: showToast, size: 74, evenCells: true, screenshotFirst: true,
+                           register: { frame, action in tapCatcher.targets["Screenshot"] = (frame, action) }) {
                 if leftHanded { logButton } else { pauseButton }
             }
         }
