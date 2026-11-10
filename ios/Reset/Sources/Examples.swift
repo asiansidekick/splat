@@ -336,6 +336,15 @@ struct ExamplesSheet: View {
                         TextField(String(Int(Mannequin.defaultHeight(person) * 100)), text: $heightText)
                             .keyboardType(.numberPad).multilineTextAlignment(.trailing)
                     }
+                    if base == nil, PoseCopier.supported {
+                        Button {
+                            placer.poseCopier = PoseCopier(placer: placer, body: person)
+                            dismiss()
+                        } label: {
+                            Label("Copy the actor's pose", systemImage: "figure.stand.line.dotted.figure.stand")
+                                .fontWeight(.semibold)
+                        }
+                    }
                     ForEach(MannequinPose.all, id: \.name) { item in
                         Button { add(Mannequin.make(person, pose: item.pose, height: height), name: "\(person.rawValue), \(item.name.lowercased())") } label: {
                             Label(item.name, systemImage: symbol(item.name))
@@ -344,7 +353,7 @@ struct ExamplesSheet: View {
                 } header: {
                     Text("A stand-in person")
                 } footer: {
-                    Text("A plain mannequin at real height, facing the camera. Move, turn and size it like any 3D model.")
+                    Text("A plain mannequin at real height, facing the camera. Move, turn and size it like any 3D model. Copy the actor's pose stands one in their stance, on their spot.")
                 }
                 Section("Set pieces") {
                     ForEach(SetPiece.allCases, id: \.self) { piece in

@@ -19,6 +19,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         }
     }
     @Published var modelError: String?
+    /// While copying an actor's pose (PoseCopy.swift).
+    @Published var poseCopier: PoseCopier?
     /// The selected model's real size, for example "62 × 40 × 75 cm · 100%".
     @Published private(set) var sizeText = ""
     /// True while a pinch is changing the size, to show it large.
@@ -827,6 +829,9 @@ struct ModelOverlay: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            if let copier = placer.poseCopier {
+                PoseCopyBar(copier: copier)
+            }
             if placer.dimLight {
                 Text("Dim light: cut-outs may drift. Try the torch.")
                     .font(Theme.footnote)
