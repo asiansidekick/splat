@@ -65,6 +65,7 @@ enum Screen {
 /// The one screen, opened straight into the camera like the Camera app. With no reference picked
 /// it records new ones; tap a reference's thumbnail and it shows that reference's ghost.
 struct CameraHome: View {
+    @Environment(\.verticalSizeClass) private var homeVerticalSize
     @State private var references: [Reference] = []
     @State private var selectedID: UUID?
     @State private var panel: Panel?
@@ -289,20 +290,21 @@ struct CameraHome: View {
         .buttonStyle(PressScale())
         .overlay(alignment: .top) {
             if references.count > 1 {
+                // Phil, 2026-11-10: plain words like MANUAL SCAN, no pill or shadow, and off the thumbnail.
+                // Upright it sits in the mode line at the left edge; on its side, under "Reference".
+                let sideways = homeVerticalSize == .compact
                 Button {
                     Haptics.tap()
                     withAnimation(.snappy) { showingRecent.toggle() }
                 } label: {
-                    Text("Recent")
-                        .font(Theme.font(size: 12, weight: .semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(showingRecent ? Theme.accent : Color.black.opacity(0.45), in: Capsule())
-                        .foregroundStyle(showingRecent ? Theme.onAccent : Color.white)
-                        .fixedSize()
+                    Text("RECENT")
+                    .font(Theme.font(size: 13, weight: .semibold))
+                    .foregroundStyle(showingRecent ? Theme.accent : Color.white)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                    .fixedSize()
                 }
-                // Sits on the thumbnail's top edge, clear of the MANUAL SCAN / AUTO SCAN line (Phil, 2026-11-10).
-                .offset(y: -13)
+                .offset(x: sideways ? 0 : -10, y: sideways ? 80 : -40)
             }
         }
         .holdHint("captureThumb", "Hold: options", above: true, delay: 4)
@@ -1681,9 +1683,14 @@ struct CaptureStage: View {
                 shutterOnce()
             }
             .modifier(WindowFrame { frame in tapCatcher.targets["Capture shutter"] = (frame, { shutterOnce() }) })
-            .overlay(alignment: .top) {
+            .overlay(alignment: verticalSize == .compact ? (leftHanded ? .trailing : .leading) : .top) {
                 if mode == .snapshot, !recorder.capturing {
-                    LensChooser(zoom: $lens).offset(y: -44).disabled(lensBusy)
+                    // On its side the lenses stand in a column beside the shutter, clear of the mode words.
+                    if verticalSize == .compact {
+                        LensChooser(zoom: $lens, vertical: true).offset(x: leftHanded ? 52 : -52).disabled(lensBusy)
+                    } else {
+                        LensChooser(zoom: $lens).offset(y: -44).disabled(lensBusy)
+                    }
                 }
             }
             .disabled(recorder.saving || lensBusy)

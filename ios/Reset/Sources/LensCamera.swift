@@ -79,10 +79,12 @@ enum LensCamera {
 /// The lens buttons above the shutter, like the Camera app's: 0.5×, 1×, 3×.
 struct LensChooser: View {
     @Binding var zoom: Double
+    var vertical = false
 
     var body: some View {
         if LensCamera.lenses.count > 1 {
-            HStack(spacing: 4) {
+            let layout = vertical ? AnyLayout(VStackLayout(spacing: 4)) : AnyLayout(HStackLayout(spacing: 4))
+            layout {
                 ForEach(LensCamera.lenses, id: \.self) { lens in
                     Button {
                         zoom = lens.zoom
