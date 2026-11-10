@@ -117,6 +117,7 @@ struct LayerPicker: View {
                                 Text(reference.slate.isEmpty ? "Reference" : reference.slate)
                                     .font(Theme.footnote)
                                     .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
                             }
                         }
                         .buttonStyle(PressScale())

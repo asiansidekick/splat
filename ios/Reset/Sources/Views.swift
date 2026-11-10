@@ -888,14 +888,25 @@ struct TopPill: View {
     let text: String
     var systemImage: String?
     var highlighted = false
+    /// A shorter wording used when the full one has no room (never cut short with "…").
+    var short: String? = nil
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 if let systemImage { Image(systemName: systemImage) }
-                // Never cut short (Phil, 2026-11-10): the row around it gives way instead.
-                if !text.isEmpty { Text(text).lineLimit(1).fixedSize() }
+                // Never cut short (Phil, 2026-11-10): the shorter wording, or the row around it, gives way instead.
+                if !text.isEmpty {
+                    if let short {
+                        ViewThatFits(in: .horizontal) {
+                            Text(text).lineLimit(1).fixedSize()
+                            Text(short).lineLimit(1).fixedSize()
+                        }
+                    } else {
+                        Text(text).lineLimit(1).fixedSize()
+                    }
+                }
             }
             .font(Theme.footnote.bold())
             .padding(.horizontal, 10)
@@ -2082,7 +2093,8 @@ struct ResetStage: View {
                 .holdHint("resetThumb", "Hold: all references", delay: 2.5)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityLabel(ghostShown ? "Hide the ghost" : "Show the ghost")
-            TopPill(text: reference.slate.isEmpty ? "Take \(reference.nextTakeNumber)" : "\(reference.slate) · T\(reference.nextTakeNumber)") {
+            TopPill(text: reference.slate.isEmpty ? "Take \(reference.nextTakeNumber)" : "\(reference.slate) · T\(reference.nextTakeNumber)",
+                    short: "Take \(reference.nextTakeNumber)") {
                 open(.takeLog(reference.id))
             }
             Spacer(minLength: 0)

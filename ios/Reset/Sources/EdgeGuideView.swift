@@ -123,7 +123,11 @@ final class WindowTapCatcher: NSObject, UIGestureRecognizerDelegate {
     private var recognizer: UITapGestureRecognizer?
     private weak var window: UIWindow?
 
+    /// The watcher of the screen showing now, for controls drawn outside it (the model tools).
+    @MainActor static weak var current: WindowTapCatcher?
+
     @MainActor func install() {
+        Self.current = self
         guard recognizer == nil else { return }
         let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
         guard let window = windows.first(where: \.isKeyWindow) ?? windows.first else { return }
@@ -138,6 +142,8 @@ final class WindowTapCatcher: NSObject, UIGestureRecognizerDelegate {
     }
 
     @MainActor func remove() {
+        if Self.current === self { Self.current = nil }
+        targets = targets.filter { !$0.key.hasPrefix("Tool ") }
         if let recognizer { window?.removeGestureRecognizer(recognizer) }
         recognizer = nil
     }

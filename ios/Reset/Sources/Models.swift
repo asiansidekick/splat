@@ -755,13 +755,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     /// Turns each cut-out to the photo for the side the camera sees now.
     private func updateCutouts() {
-        guard !cutouts.isEmpty, let camera = session.currentFrame?.camera.transform.columns.3.xyz else {
+        // Over a saved frame (Review) there is no live camera: the frame's camera picks the side to show.
+        guard !cutouts.isEmpty, let camera = eye?.columns.3.xyz else {
             if dimLight { dimLight = false }
             return
         }
         // ARKit's ambient light reading is about 1000 in a lit room; under 250 is dim.
         let estimate = session.currentFrame?.lightEstimate
-        let dim = (estimate?.ambientIntensity ?? 1000) < 250
+        let dim = estimate.map { $0.ambientIntensity < 250 } ?? false
         if dim != dimLight { dimLight = dim }
         let wanted = Self.matchesLight ? Self.tint(intensity: Float(estimate?.ambientIntensity ?? 1000),
                                                     kelvin: Float(estimate?.ambientColorTemperature ?? 6500)) : SIMD3<Float>(1, 1, 1)
@@ -1002,8 +1003,18 @@ private struct CutoutTool: View {
     var on = false
     let action: () -> Void
 
+    /// The button and the window's tap watcher can both fire for one tap (see WindowTapCatcher): once is enough.
+    @MainActor private static var lastFired: [String: Date] = [:]
+
+    private func fire() {
+        let now = Date()
+        if let last = Self.lastFired[symbol], now.timeIntervalSince(last) < 0.5 { return }
+        Self.lastFired[symbol] = now
+        action()
+    }
+
     var body: some View {
-        Button(action: action) {
+        Button(action: fire) {
             VStack(spacing: 2) {
                 Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
                 Text(word).font(.system(size: 11, weight: .semibold)).lineLimit(1).fixedSize()
@@ -1012,10 +1023,13 @@ private struct CutoutTool: View {
             .fontWeight(on ? .heavy : .semibold)
             .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
             .shadow(color: .black.opacity(0.5), radius: 6)
-            .frame(minWidth: 58, minHeight: 44)
+            .frame(minWidth: 58, minHeight: 42)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // On its side, taps near the screen's edges can miss SwiftUI buttons; the window's tap watcher catches them.
+        .modifier(WindowFrame { frame in WindowTapCatcher.current?.targets["Tool \(symbol)"] = (frame, { fire() }) })
+        .onDisappear { WindowTapCatcher.current?.targets["Tool \(symbol)"] = nil }
     }
 }
 

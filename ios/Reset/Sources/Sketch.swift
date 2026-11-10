@@ -132,7 +132,7 @@ struct SketchEditor: View {
                     .font(Theme.title3)
                     .frame(width: 44, height: 36)
                     .background(on ? Color.white.opacity(0.25) : .clear, in: Capsule())
-                Text(title).font(Theme.caption.weight(.semibold)).lineLimit(1)
+                Text(title).font(Theme.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
             }
             .frame(maxWidth: .infinity)
         }
