@@ -18,6 +18,7 @@ struct FrameReview: View {
     @State private var editingModels = false
     @State private var importingModel = false
     @State private var makingCutout = false
+    @State private var choosingExample = false
     @State private var exploring = false
     /// Off (the default): pinch to zoom, one finger moves the photo. On: one finger draws dimensions and notes.
     @State private var measuring = false
@@ -68,10 +69,15 @@ struct FrameReview: View {
                     .padding(.horizontal, 12)
             }
         }
-        .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
+        .fileImporter(isPresented: $importingModel, allowedContentTypes: ModelImport.pickerTypes, allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result, frames.indices.contains(index) else { return }
             let spot = placement(for: frames[index])
             placer.add(from: urls, at: spot.transform, right: spot.right)
+        }
+        .sheet(isPresented: $choosingExample) {
+            if frames.indices.contains(index) {
+                ExamplesSheet(placer: placer, base: Cutout.frontFacing(camera: frames[index].position, position: placement(for: frames[index]).transform.columns.3.xyz)).themed()
+            }
         }
         .sheet(isPresented: $makingCutout) {
             if frames.indices.contains(index) {
@@ -140,8 +146,9 @@ struct FrameReview: View {
                 .accessibilityLabel(editingModels ? "Back to dimensions and notes" : "Place 3D models")
                 if editingModels {
                     Menu {
-                        Button { importingModel = true } label: { Label("3D model (USDZ file)", systemImage: "cube") }
+                        Button { importingModel = true } label: { Label("3D model (USDZ, OBJ or STL)", systemImage: "cube") }
                         Button { makingCutout = true } label: { Label("Cut-out from photos", systemImage: "figure.stand") }
+                        Button { choosingExample = true } label: { Label("Examples: people, set pieces", systemImage: "figure.stand.dress") }
                     } label: { Image(systemName: "plus").frame(width: 40, height: 36) }
                         .accessibilityLabel("Add a 3D model or cut-out")
                 }

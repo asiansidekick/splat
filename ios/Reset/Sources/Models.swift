@@ -93,10 +93,32 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         add(from: sources, at: placementTransform(frame), right: right)
     }
 
+    /// Adds models facing the camera (the examples): at `base` when given (Review), else where the camera points.
+    func addFacingCamera(from sources: [URL], base: simd_float4x4?) {
+        if let base {
+            add(from: sources, at: base, right: base.columns.0.xyz)
+            return
+        }
+        guard let frame = session.currentFrame else {
+            modelError = "Point the camera at the set first, then add the models."
+            return
+        }
+        var transform = placementTransform(frame)
+        let facing = Cutout.frontFacing(camera: frame.camera.transform.columns.3.xyz, position: transform.columns.3.xyz)
+        transform.columns.0 = facing.columns.0
+        transform.columns.2 = facing.columns.2
+        add(from: sources, at: transform, right: facing.columns.0.xyz)
+    }
+
     /// Places the models side by side from `base`, spread along `right` (also used with a saved frame, with no live camera).
     func add(from sources: [URL], at base: simd_float4x4, right: SIMD3<Float>) {
         var added: UUID?
         var failed: [String] = []
+        let sources = ModelImport.gather(sources)
+        guard !sources.isEmpty else {
+            modelError = "Pick a USDZ, OBJ or STL file. For an OBJ, pick its .mtl and pictures with it."
+            return
+        }
         for (index, source) in sources.enumerated() {
             // 40 cm apart along the floor, so several models do not land on top of each other.
             let offset = (Float(index) - Float(sources.count - 1) / 2) * 0.4
@@ -117,8 +139,9 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let destination = folder.appendingPathComponent(file)
         do {
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.copyItem(at: source, to: destination)
+            try ModelImport.store(source, at: destination)
         } catch {
+            Diagnostics.log("Model import failed: \(source.lastPathComponent), \(error)")
             return nil
         }
         let model = PlacedModel(id: id, name: source.deletingPathExtension().lastPathComponent, file: file, transform: flatten(transform))

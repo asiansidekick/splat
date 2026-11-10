@@ -1572,6 +1572,7 @@ struct CaptureStage: View {
     @State private var importingModels = false
     @State private var choosingModel = false
     @State private var makingCutout = false
+    @State private var choosingExample = false
     @State private var justSaved = false
     /// The "get its bearings" hint shows for a few seconds, then gives way to the usual line.
     @State private var bearingsHintDone = false
@@ -1716,11 +1717,13 @@ struct CaptureStage: View {
         // Without the controls, a volume button takes a snapshot too.
         .modifier(CaptureButtonAction(action: volumeShutter))
         .confirmationDialog("Add to the room", isPresented: $choosingModel) {
-            Button("3D model (USDZ file)") { importingModels = true }
+            Button("3D model (USDZ, OBJ or STL)") { importingModels = true }
             Button("Cut-out from photos") { makingCutout = true }
+            Button("Examples: people, set pieces") { choosingExample = true }
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: recorder.placer).themed() }
-        .fileImporter(isPresented: $importingModels, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
+        .sheet(isPresented: $choosingExample) { ExamplesSheet(placer: recorder.placer).themed() }
+        .fileImporter(isPresented: $importingModels, allowedContentTypes: ModelImport.pickerTypes, allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { recorder.placer.add(from: urls) }
         }
         .overlay { FreeScanOverlay(scanner: freeScanner) { recorder.placer.add(from: [$0]) } }
@@ -1925,6 +1928,7 @@ struct ResetStage: View {
     @State private var toNow = 1.0
     @State private var importingModel = false
     @State private var makingCutout = false
+    @State private var choosingExample = false
     @State private var notingTake: Take?
     @State private var holder = CameraViewHolder()
     @State private var tapCatcher = WindowTapCatcher()
@@ -1987,7 +1991,8 @@ struct ResetStage: View {
             .themed()
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: restorer.placer).themed() }
-        .fileImporter(isPresented: $importingModel, allowedContentTypes: [.usdz], allowsMultipleSelection: true) { result in
+        .sheet(isPresented: $choosingExample) { ExamplesSheet(placer: restorer.placer).themed() }
+        .fileImporter(isPresented: $importingModel, allowedContentTypes: ModelImport.pickerTypes, allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { restorer.placer.add(from: urls) }
         }
         .onAppear {
@@ -2138,6 +2143,8 @@ struct ResetStage: View {
                 Button { importingModel = true } label: { Label("Add 3D model", systemImage: "cube") }
                     .disabled(restorer.status != .ready)
                 Button { makingCutout = true } label: { Label("Add cut-out from photos", systemImage: "figure.stand") }
+                    .disabled(restorer.status != .ready)
+                Button { choosingExample = true } label: { Label("Add an example (people, set pieces)", systemImage: "figure.stand.dress") }
                     .disabled(restorer.status != .ready)
                 if ExploreView.offered {
                     Button { open(.explore(reference.id)) } label: { Label("Explore in 3D", systemImage: "view.3d") }
