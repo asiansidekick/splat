@@ -26,6 +26,11 @@ struct FrameReview: View {
     /// Counts presses of Save photo; the page showing saves its frame when it changes.
     @State private var exportCount = 0
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.verticalSizeClass) private var verticalSize
+
+    /// Phil, 2026-11-10: the thumbnails go in landscape and while placing models or measuring, so the photo gets the room.
+    private var sideways: Bool { verticalSize == .compact }
+    private var showsStrip: Bool { !sideways && !editingModels && !measuring }
 
     init(reference: Reference, startMeasuring: Bool = false, onSave: @escaping (Reference) -> Void) {
         _reference = State(initialValue: reference)
@@ -61,13 +66,13 @@ struct FrameReview: View {
                     Text("This reference has no frames.").foregroundStyle(.white)
                     Spacer()
                 }
-                strip
+                if showsStrip { strip }
             }
             MeasureEntry(measurer: measurer)
             VStack {
                 Spacer()
                 ModelOverlay(placer: placer, showsFloor: false)
-                    .padding(.bottom, 84)
+                    .padding(.bottom, showsStrip ? 84 : 8)
                     .padding(.horizontal, 12)
             }
         }
@@ -108,7 +113,9 @@ struct FrameReview: View {
 
     /// Two rows so nothing is squeezed: Done and the frame pager on top, the tools underneath.
     private var topBar: some View {
-        VStack(spacing: 2) {
+        // In landscape the pager and the tools share one row, leaving the height to the photo.
+        let layout = sideways ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(spacing: 2))
+        return layout {
             ZStack {
                 HStack(spacing: 4) {
                     Button { move(-1) } label: { Image(systemName: "chevron.left").frame(width: 40, height: 40) }
@@ -353,8 +360,10 @@ struct FramePage: View {
     /// A line just drawn on a photo with no depth, drawn 1 m out until its real length is typed.
     @State private var scalePending: (id: UUID, a: SIMD2<Float>, b: SIMD2<Float>)?
 
-    private func clamped(_ pan: CGSize, zoom: CGFloat, size: CGSize) -> CGSize {
-        let x = size.width * (zoom - 1) / 2, y = size.height * (zoom - 1) / 2
+    /// Phil, 2026-11-10: zooming in fills the whole screen, not only the photo's box, so the photo can be
+    /// moved until its edge meets the screen's edge.
+    private func clamped(_ pan: CGSize, zoom: CGFloat, size: CGSize, box: CGSize) -> CGSize {
+        let x = max(0, (size.width * zoom - box.width) / 2), y = max(0, (size.height * zoom - box.height) / 2)
         return CGSize(width: min(max(pan.width, -x), x), height: min(max(pan.height, -y), y))
     }
 
@@ -366,10 +375,9 @@ struct FramePage: View {
                     .frame(width: size.width, height: size.height)
                     .scaleEffect(zoom)
                     .offset(pan)
-                    .frame(width: size.width, height: size.height)
-                    .clipped()
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
             .contentShape(Rectangle())
             .onAppear { viewSize = size }
             .onChange(of: size) { _, value in viewSize = value }
@@ -379,7 +387,7 @@ struct FramePage: View {
                         pinching = true
                         touch = nil
                         zoom = min(max(baseZoom * value, 1), 8)
-                        pan = clamped(pan, zoom: zoom, size: size)
+                        pan = clamped(pan, zoom: zoom, size: size, box: geometry.size)
                     }
                     .onEnded { _ in
                         baseZoom = zoom
@@ -391,7 +399,7 @@ struct FramePage: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         guard !pinching else { return }
-                        pan = clamped(CGSize(width: basePan.width + value.translation.width, height: basePan.height + value.translation.height), zoom: zoom, size: size)
+                        pan = clamped(CGSize(width: basePan.width + value.translation.width, height: basePan.height + value.translation.height), zoom: zoom, size: size, box: geometry.size)
                     }
                     .onEnded { value in
                         basePan = pan
