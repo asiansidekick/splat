@@ -74,7 +74,9 @@ final class PoseCopier: ObservableObject {
         // Keep the feet where the actor's feet were: the figure stands on its lowest point, under its hips.
         guard let url = Examples.file(for: figure, name: name) else { return }
         finish()
+        let before = placer.selectedModel
         placer.add(from: [url], at: transform, right: transform.columns.0.xyz)
+        if let id = placer.selectedModel, id != before { placer.setMannequin(MannequinSpec(body: body, height: height, pose: pose), for: id) }
         Haptics.success()
     }
 }

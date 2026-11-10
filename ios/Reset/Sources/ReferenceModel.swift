@@ -145,6 +145,8 @@ struct PlacedModel: Codable, Identifiable, Equatable {
     var transform: [Float]  // model-to-world, 16 values, column major
     /// When it was last moved, scaled or turned, so syncing phones keep the newest place.
     var moved: Date?
+    /// Set for an example mannequin, so it can be posed again (Examples.swift).
+    var mannequin: MannequinSpec?
 }
 
 /// A straight line measured in the room, between two points in its coordinates (metres).

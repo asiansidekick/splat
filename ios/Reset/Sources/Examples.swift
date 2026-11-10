@@ -7,9 +7,9 @@ import UIKit
 // imported model, so it is moved, saved with a reference and synced the same way.
 
 /// Joint angles in degrees. Limbs hang straight down at 0; the figure faces +Z and its left is +X.
-struct MannequinPose {
-    struct Arm { var out: Float = 8; var forward: Float = 0; var inward: Float = 0; var elbow: Float = 8 }
-    struct Leg { var out: Float = 2; var forward: Float = 0; var inward: Float = 0; var knee: Float = 0 }
+struct MannequinPose: Codable, Equatable {
+    struct Arm: Codable, Equatable { var out: Float = 8; var forward: Float = 0; var inward: Float = 0; var elbow: Float = 8 }
+    struct Leg: Codable, Equatable { var out: Float = 2; var forward: Float = 0; var inward: Float = 0; var knee: Float = 0 }
     var spineForward: Float = 0
     var spineSide: Float = 0
     var headTurn: Float = 0
@@ -64,7 +64,7 @@ struct MannequinPose {
 }
 
 enum Mannequin {
-    enum Body: String, CaseIterable { case woman = "Woman", man = "Man" }
+    enum Body: String, CaseIterable, Codable { case woman = "Woman", man = "Man" }
 
     /// Body measurements in metres before scaling to the height.
     private struct Build {
@@ -108,9 +108,17 @@ enum Mannequin {
     private static func joint(_ name: String, at position: SIMD3<Float>, z: Float = 0, x: Float = 0, y: Float = 0) -> (outer: SCNNode, inner: SCNNode) {
         let a = SCNNode(); a.name = name; a.simdPosition = position; a.eulerAngles.z = z * .pi / 180
         let b = SCNNode(); b.eulerAngles.x = x * .pi / 180
-        let c = SCNNode(); c.eulerAngles.y = y * .pi / 180
+        let c = SCNNode(); c.name = name + ".in"; c.eulerAngles.y = y * .pi / 180
         a.addChildNode(b); b.addChildNode(c)
         return (a, c)
+    }
+
+    /// An empty node marking a wrist, ankle or the head, for the pose editor's handles.
+    private static func marker(_ name: String, at position: SIMD3<Float>) -> SCNNode {
+        let node = SCNNode()
+        node.name = name
+        node.simdPosition = position
+        return node
     }
 
     /// A limb hanging down from its joint.
@@ -150,6 +158,7 @@ enum Mannequin {
         let neck = joint("neck", at: SIMD3(0, d.torso + d.neck, 0), x: pose.headDown, y: pose.headTurn)
         s.addChildNode(neck.outer)
         neck.inner.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.head * 0.5, 0.01 * k), scale: SIMD3(0.085 * k, d.head * 0.5, 0.1 * k)))
+        neck.inner.addChildNode(marker("end.head", at: SIMD3(0, d.head * 0.5, 0)))
 
         // Arms.
         for (side, arm) in [(Float(1), pose.left), (Float(-1), pose.right)] {
@@ -163,6 +172,7 @@ enum Mannequin {
             shoulder.inner.addChildNode(elbow.outer)
             elbow.inner.addChildNode(shape(SCNSphere(radius: CGFloat(d.armRadius * 0.95)), at: .zero))
             elbow.inner.addChildNode(limb(d.forearm, radius: d.armRadius * 0.82))
+            elbow.inner.addChildNode(marker("end.hand.\(name)", at: SIMD3(0, -d.forearm, 0)))
             elbow.inner.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, -d.forearm - d.hand * 0.4, 0),
                                            scale: SIMD3(d.armRadius * 0.55, d.hand * 0.45, d.armRadius * 1.0)))
         }
@@ -177,6 +187,7 @@ enum Mannequin {
             hip.inner.addChildNode(knee.outer)
             knee.inner.addChildNode(shape(SCNSphere(radius: CGFloat(d.legRadius * 0.8)), at: .zero))
             knee.inner.addChildNode(limb(d.shin, radius: d.legRadius * 0.7))
+            knee.inner.addChildNode(marker("end.foot.\(name)", at: SIMD3(0, -d.shin, 0)))
             let foot = SCNBox(width: CGFloat(d.legRadius * 1.3), height: CGFloat(d.foot), length: CGFloat(d.foot * 3.2), chamferRadius: CGFloat(d.foot * 0.35))
             knee.inner.addChildNode(shape(foot, at: SIMD3(0, -d.shin - d.foot * 0.5, d.foot * 0.9)))
         }
@@ -186,6 +197,13 @@ enum Mannequin {
         figure.simdPosition.y -= Float(low.y)
         return figure
     }
+}
+
+/// What a placed mannequin is, kept with the model so it can be posed again.
+struct MannequinSpec: Codable, Equatable {
+    var body: Mannequin.Body
+    var height: Float
+    var pose: MannequinPose
 }
 
 /// Set pieces: simple, real-size stand-ins.
@@ -346,7 +364,10 @@ struct ExamplesSheet: View {
                         }
                     }
                     ForEach(MannequinPose.all, id: \.name) { item in
-                        Button { add(Mannequin.make(person, pose: item.pose, height: height), name: "\(person.rawValue), \(item.name.lowercased())") } label: {
+                        Button {
+                            add(Mannequin.make(person, pose: item.pose, height: height), name: "\(person.rawValue), \(item.name.lowercased())",
+                                spec: MannequinSpec(body: person, height: height, pose: item.pose))
+                        } label: {
                             Label(item.name, systemImage: symbol(item.name))
                         }
                     }
@@ -388,13 +409,15 @@ struct ExamplesSheet: View {
         }
     }
 
-    private func add(_ node: SCNNode, name: String) {
+    private func add(_ node: SCNNode, name: String, spec: MannequinSpec? = nil) {
         guard let url = Examples.file(for: node, name: name) else {
             placer.modelError = "Could not make \(name)."
             return
         }
         Diagnostics.log("Example added: \(name)")
+        let before = placer.selectedModel
         placer.addFacingCamera(from: [url], base: base)
+        if let spec, let id = placer.selectedModel, id != before { placer.setMannequin(spec, for: id) }
         Haptics.success()
         dismiss()
     }

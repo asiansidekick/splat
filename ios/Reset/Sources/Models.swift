@@ -259,6 +259,39 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         if let index = models.firstIndex(where: { $0.id == id }) { models[index].moved = Date() }
     }
 
+    /// The selected model's mannequin, if it is one.
+    var selectedMannequin: MannequinSpec? {
+        guard let id = selectedModel else { return nil }
+        return models.first { $0.id == id }?.mannequin
+    }
+
+    func setMannequin(_ spec: MannequinSpec, for id: UUID) {
+        guard let index = models.firstIndex(where: { $0.id == id }) else { return }
+        models[index].mannequin = spec
+    }
+
+    /// Rebuilds a mannequin in a new pose, in the same place.
+    func repose(_ id: UUID, as spec: MannequinSpec) {
+        guard let index = models.firstIndex(where: { $0.id == id }) else { return }
+        let scene = SCNScene()
+        scene.rootNode.addChildNode(Mannequin.make(spec.body, pose: spec.pose, height: spec.height))
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("repose-\(UUID().uuidString).usdz")
+        guard scene.write(to: temporary, options: nil, delegate: nil, progressHandler: nil) else {
+            modelError = "Could not change the pose."
+            return
+        }
+        let destination = folder.appendingPathComponent(models[index].file)
+        _ = try? FileManager.default.replaceItemAt(destination, withItemAt: temporary)
+        models[index].mannequin = spec
+        models[index].moved = Date()
+        let transform = modelNodes[id]?.simdTransform
+        modelNodes[id]?.removeFromParentNode()
+        modelNodes[id] = nil
+        loadNode(for: models[index])
+        if let transform { modelNodes[id]?.simdTransform = transform }
+        Diagnostics.log("Mannequin posed again: \(spec.pose.summary)")
+    }
+
     func deleteSelectedModel() {
         guard let id = selectedModel, let index = models.firstIndex(where: { $0.id == id }) else { return }
         modelNodes[id]?.removeFromParentNode()
@@ -807,6 +840,7 @@ struct ModelOverlay: View {
     /// Off in Review, where there is no live LiDAR to find the floor with.
     var showsFloor = true
     @State private var showsCutoutHelp = true
+    @State private var posing = false
 
     private var cutoutHelp: String {
         if placer.carrying { return "Walk and point the phone. Let go to put it down." }
@@ -930,6 +964,10 @@ struct ModelOverlay: View {
                     }
                     HStack {
                         Button("Delete", role: .destructive) { placer.deleteSelectedModel() }
+                        if placer.selectedMannequin != nil {
+                            Button { posing = true } label: { Label("Pose", systemImage: "figure.walk") }
+                                .tint(Theme.accent)
+                        }
                         Spacer()
                         Button("Done") { placer.selectedModel = nil }
                     }
@@ -939,6 +977,11 @@ struct ModelOverlay: View {
                 .padding(10)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
                 .frame(maxWidth: 420)
+            }
+        }
+        .fullScreenCover(isPresented: $posing) {
+            if let id = placer.selectedModel, let spec = placer.selectedMannequin {
+                MannequinPoseEditor(spec: spec) { placer.repose(id, as: $0) }
             }
         }
         .alert("3D model", isPresented: Binding(get: { placer.modelError != nil }, set: { if !$0 { placer.modelError = nil } })) {
