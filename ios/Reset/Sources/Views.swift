@@ -294,14 +294,15 @@ struct CameraHome: View {
                     withAnimation(.snappy) { showingRecent.toggle() }
                 } label: {
                     Text("Recent")
-                        .font(Theme.font(size: 13, weight: .semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
+                        .font(Theme.font(size: 12, weight: .semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
                         .background(showingRecent ? Theme.accent : Color.black.opacity(0.45), in: Capsule())
                         .foregroundStyle(showingRecent ? Theme.onAccent : Color.white)
                         .fixedSize()
                 }
-                .offset(y: -34)
+                // Sits on the thumbnail's top edge, clear of the MANUAL SCAN / AUTO SCAN line (Phil, 2026-11-10).
+                .offset(y: -13)
             }
         }
         .holdHint("captureThumb", "Hold: options", above: true, delay: 4)
@@ -889,9 +890,10 @@ struct TopPill: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 if let systemImage { Image(systemName: systemImage) }
-                Text(text).lineLimit(1)
+                // Never cut short (Phil, 2026-11-10): the row around it gives way instead.
+                if !text.isEmpty { Text(text).lineLimit(1).fixedSize() }
             }
-            .font(Theme.subheadline.bold())
+            .font(Theme.footnote.bold())
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(highlighted ? Theme.accent : Color.white.opacity(0.15), in: Capsule())
@@ -1122,7 +1124,8 @@ struct Gallery: View {
                 }
             }
             .background(Color.black.ignoresSafeArea())
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search: watch, sofa, a word…")
+            // Phil, 2026-11-10: the one-at-a-time page shows as much photo as it can; search lives with all references.
+            .modifier(SearchWhen(on: showingGrid || searching, text: $query))
             .task { search.refresh(ordered) }
             .navigationTitle(showingGrid || searching ? "References" : ((shown?.slate.isEmpty == false ? shown?.slate : shown?.title) ?? ""))
             .navigationBarTitleDisplayMode(.inline)
@@ -1131,25 +1134,30 @@ struct Gallery: View {
                     Button("Close") { dismiss() }
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button { showingCallSheet = true } label: { Image(systemName: "doc.text.viewfinder") }
-                        .accessibilityLabel("Call sheet")
+                    let paging = !(showingGrid || searching) && shown != nil
+                    if !paging {
+                        Button { showingCallSheet = true } label: { Image(systemName: "doc.text.viewfinder") }
+                            .accessibilityLabel("Call sheet")
+                    }
                     PhotosPicker(selection: $picked, matching: .images) {
                         Image(systemName: "square.and.arrow.down")
                     }
                     .accessibilityLabel("Import from Photos")
-                    Button {
-                        dismiss()
-                        onSync()
-                    } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath")
+                    if !paging {
+                        Button {
+                            dismiss()
+                            onSync()
+                        } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                        }
+                        .accessibilityLabel("Sync with nearby phones")
                     }
-                    .accessibilityLabel("Sync with nearby phones")
                     Button {
                         withAnimation { showingGrid.toggle() }
                     } label: {
                         Image(systemName: showingGrid ? "photo" : "square.grid.2x2")
                     }
-                    .accessibilityLabel(showingGrid ? "One at a time" : "All references")
+                    .accessibilityLabel(showingGrid ? "One at a time" : "All references and search")
                     if showingGrid {
                         Button(selecting ? "Done" : "Select") {
                             selecting.toggle()
@@ -1192,7 +1200,7 @@ struct Gallery: View {
     }
 
     private var pager: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             TabView(selection: $current) {
                 ForEach(ordered) { reference in
                     GalleryPage(reference: reference)
@@ -1216,38 +1224,38 @@ struct Gallery: View {
             .overlay(alignment: .center) { Color.clear.frame(width: 1, height: 1).holdHint("galleryPhoto2", "Hold the photo for options", above: true, delay: 0.8) }
             filmstrip
             if let shown {
+                // Phil, 2026-11-10: one height for every button, evenly spaced, and a Load label that is never cut short.
                 HStack(spacing: 10) {
-                    Button { dismiss(); action(.measure, shown) } label: {
-                        Image(systemName: "ruler").font(Theme.font(size: 22, weight: .semibold)).frame(width: 30, height: 30)
-                    }
-                    .buttonStyle(.bordered)
-                    Button { dismiss(); action(.sketch, shown) } label: {
-                        Image(systemName: "pencil.tip.crop.circle").font(Theme.font(size: 22, weight: .semibold)).frame(width: 30, height: 30)
-                    }
-                    .buttonStyle(.bordered)
-                    Button { dismiss(); action(.edit, shown) } label: {
-                        Image(systemName: "wand.and.stars").font(Theme.font(size: 22, weight: .semibold)).frame(width: 30, height: 30)
-                    }
-                    .buttonStyle(.bordered)
-                    Button {
-                        load(shown)
-                    } label: {
-                        Label("Load \(shown.slate.isEmpty ? "ghost" : shown.slate)", systemImage: "camera.viewfinder")
+                    pagerIcon("ruler", "Dimensions") { dismiss(); action(.measure, shown) }
+                    pagerIcon("pencil.tip.crop.circle", "Draw") { dismiss(); action(.sketch, shown) }
+                    pagerIcon("wand.and.stars", "Edit photo") { dismiss(); action(.edit, shown) }
+                    Button { load(shown) } label: {
+                        Label("Load", systemImage: "camera.viewfinder")
                             .font(Theme.headline)
-                            .lineLimit(1).minimumScaleFactor(0.7)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                            .background(Theme.accent, in: Capsule())
+                            .foregroundStyle(Theme.onAccent)
                     }
-                .buttonStyle(.borderedProminent)
-                .font(Theme.headline)
-                .tint(Theme.accent)
-                .foregroundStyle(.black)
+                    .buttonStyle(PressScale())
                 }
                 .frame(maxWidth: 400)
                 .padding(.horizontal)
                 .padding(.bottom, 8)
             }
         }
+    }
+
+    private func pagerIcon(_ symbol: String, _ name: String, _ run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            Image(systemName: symbol)
+                .font(Theme.font(size: 20, weight: .semibold))
+                .frame(width: 46, height: 46)
+                .background(Color.white.opacity(0.14), in: Circle())
+                .foregroundStyle(Theme.accent)
+        }
+        .buttonStyle(PressScale())
+        .accessibilityLabel(name)
     }
 
     /// Small thumbnails under the photo to jump along quickly, as in Photos.
@@ -1259,7 +1267,7 @@ struct Gallery: View {
                         Button {
                             withAnimation { current = reference.id }
                         } label: {
-                            ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 86, selected: current == reference.id)
+                            ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 62, selected: current == reference.id)
                         }
                         .id(reference.id)
                     }
@@ -1267,7 +1275,7 @@ struct Gallery: View {
                 .padding(.horizontal)
                 .padding(.vertical, 3)
             }
-            .frame(height: 94)
+            .frame(height: 70)
             .onAppear { if let current { proxy.scrollTo(current, anchor: .center) } }
             .onChange(of: current) { _, id in
                 if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
@@ -1410,6 +1418,10 @@ struct Gallery: View {
     private func menu(for reference: Reference) -> some View {
         Menu {
             menuItems(for: reference)
+            Section {
+                Button { showingCallSheet = true } label: { Label("Call sheet", systemImage: "doc.text.viewfinder") }
+                Button { dismiss(); onSync() } label: { Label("Sync with nearby phones", systemImage: "arrow.triangle.2.circlepath") }
+            }
         } label: {
             Image(systemName: "ellipsis.circle")
         }
@@ -1458,15 +1470,13 @@ struct GalleryPage: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Phil, 2026-11-10: one short line, so the photo gets the room. "Hold for options" is a one-off hint now.
             Text(details)
-                .font(Theme.footnote)
+                .font(Theme.caption)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .padding(.horizontal)
-            Label("Hold the photo for options", systemImage: "hand.tap")
-                .font(Theme.footnote.weight(.semibold))
-                .foregroundStyle(Theme.accent)
         }
         .contentShape(Rectangle())
         .task(id: reference.id) {
@@ -1482,11 +1492,12 @@ struct GalleryPage: View {
 
     private var details: String {
         let takes = reference.takes.count == 1 ? "1 take" : "\(reference.takes.count) takes"
-        let date = reference.created.formatted(date: .abbreviated, time: .shortened)
+        let date = reference.created.formatted(.dateTime.month(.abbreviated).day().hour().minute())
         var parts = [date, takes]
         if reference.hasDepth { parts.append("LiDAR") }
-        if reference.photoOnly { parts.append("Imported photo") }
+        if reference.photoOnly { parts.append("Imported") }
         if !reference.name.isEmpty { parts.insert(reference.name, at: 0) }
+        if !reference.slate.isEmpty { parts.insert(reference.slate, at: 0) }
         return parts.joined(separator: " · ")
     }
 }
@@ -1566,42 +1577,51 @@ struct CaptureStage: View {
 
     private var slate: String { Reference.label(scene: scene, setup: setup, shot: shot) }
 
-    var body: some View {
-        CameraLayout(evenRow: true) {
-            HStack(spacing: 8) {
-                TopPill(text: "Next: \(slate.isEmpty ? "no slate" : slate)", systemImage: "pencil") {
-                    open(.nextSlate)
+    private func topBar(lidarWord: Bool, spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            TopPill(text: "Next: \(slate.isEmpty ? "no slate" : slate)", systemImage: "pencil") {
+                open(.nextSlate)
+            }
+            .disabled(recorder.capturing)
+            // A bump when the take number moves on, so the change is noticed.
+            .scaleEffect(justSaved ? 1.15 : 1, anchor: .leading)
+            .animation(.spring(duration: 0.35, bounce: 0.5), value: justSaved)
+            Spacer()
+            if Recorder.lidarAvailable {
+                TopPill(text: lidarWord ? "LiDAR" : "", systemImage: "dot.circle.viewfinder", highlighted: useLiDAR) {
+                    useLiDAR.toggle()
                 }
                 .disabled(recorder.capturing)
-                // A bump when the take number moves on, so the change is noticed.
-                .scaleEffect(justSaved ? 1.15 : 1, anchor: .leading)
-                .animation(.spring(duration: 0.35, bounce: 0.5), value: justSaved)
-                Spacer()
-                if Recorder.lidarAvailable {
-                    TopPill(text: "LiDAR", systemImage: "dot.circle.viewfinder", highlighted: useLiDAR) {
-                        useLiDAR.toggle()
-                    }
-                    .disabled(recorder.capturing)
-                    .accessibilityLabel(useLiDAR ? "LiDAR on" : "LiDAR off")
-                }
-                TorchButton()
-                // Works while a scan or recording is going, too.
-                MeasureToggle(measurer: recorder.measurer)
-                if FreeScanner.supported {
-                    Button { freeScanner.start(recorder) } label: { Image(systemName: "cube.transparent").font(Theme.title3) }
-                        .disabled(recorder.capturing)
-                        .accessibilityLabel("Scan")
-                }
-                Button {
-                    Diagnostics.log("Clean view started")
-                    ScreenshotMode.shared.viewing = true
-                } label: { Image(systemName: "eye.slash").font(Theme.title3) }
-                    .accessibilityLabel("Hide controls")
-                Button { open(.help) } label: { Image(systemName: "questionmark.circle").font(Theme.title3) }
-                    .accessibilityLabel("Help")
+                .accessibilityLabel(useLiDAR ? "LiDAR on" : "LiDAR off")
             }
-            .padding(.horizontal, 12)
-            .foregroundStyle(.white)
+            TorchButton()
+            // Works while a scan or recording is going, too.
+            MeasureToggle(measurer: recorder.measurer)
+            if FreeScanner.supported {
+                Button { freeScanner.start(recorder) } label: { Image(systemName: "cube.transparent").font(Theme.title3) }
+                    .disabled(recorder.capturing)
+                    .accessibilityLabel("Scan")
+            }
+            Button {
+                Diagnostics.log("Clean view started")
+                ScreenshotMode.shared.viewing = true
+            } label: { Image(systemName: "eye.slash").font(Theme.title3) }
+                .accessibilityLabel("Hide controls")
+            Button { open(.help) } label: { Image(systemName: "questionmark.circle").font(Theme.title3) }
+                .accessibilityLabel("Help")
+        }
+        .padding(.horizontal, 12)
+        .foregroundStyle(.white)
+    }
+
+    var body: some View {
+        CameraLayout(evenRow: true) {
+            // Phil, 2026-11-10: nothing clipped. The full row when it fits, then tighter, then LiDAR as its lit icon only.
+            ViewThatFits(in: .horizontal) {
+                topBar(lidarWord: true, spacing: 10)
+                topBar(lidarWord: true, spacing: 6)
+                topBar(lidarWord: false, spacing: 6)
+            }
         } preview: {
             ZStack {
                 CameraView(session: recorder.session, content: recorder.modelsNode) { view in
@@ -2685,3 +2705,17 @@ struct LoadNudge: ViewModifier {
     }
 }
 
+
+/// Search only where it is wanted: added or left off without changing the screen around it.
+struct SearchWhen: ViewModifier {
+    let on: Bool
+    @Binding var text: String
+
+    func body(content: Content) -> some View {
+        if on {
+            content.searchable(text: $text, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search: watch, sofa, a word…")
+        } else {
+            content
+        }
+    }
+}

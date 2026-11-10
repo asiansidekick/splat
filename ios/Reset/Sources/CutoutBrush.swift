@@ -265,6 +265,20 @@ final class MaskCanvas: UIScrollView, UIScrollViewDelegate {
         partCover = found.map { Self.cover(of: $0, width: context.width, height: context.height) }
     }
 
+    /// Every subject the phone found, selected at once (the editor opens with this). Undo empties it again.
+    func selectAll() {
+        guard let context, !parts.isEmpty else { return }
+        remember()
+        context.saveGState()
+        context.scaleBy(x: 1, y: -1)
+        context.translateBy(x: 0, y: -CGFloat(context.height))
+        context.setBlendMode(.normal)
+        for part in parts { context.draw(part, in: CGRect(x: 0, y: 0, width: context.width, height: context.height)) }
+        context.restoreGState()
+        show()
+        onChange?()
+    }
+
     /// The photo's colours, one RGBA pixel each, rows from the top; read once for Magic select.
     private lazy var pixels: [UInt8] = {
         guard let cg = photo.cgImage, let context else { return [] }

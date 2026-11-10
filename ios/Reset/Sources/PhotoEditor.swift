@@ -32,10 +32,11 @@ struct PhotoEditorSheet: View {
     @State private var cutoutName = ""
     @State private var cutoutHeight = "170"
     @State private var busy = false
+    @State private var autoSelected = false
 
     private var help: String {
         switch tool {
-        case .pick: return finding ? "Looking for people and things…" : (parts.isEmpty ? "Nothing found to tap. Try Loop or Magic." : "Tap a person or thing to select it. Tap again to drop it.")
+        case .pick: return finding ? "Looking for people and things…" : (parts.isEmpty ? "Nothing found to tap. Try Loop or Magic." : autoSelected ? "Subject selected. Tap it to drop it, or tap another to add it." : "Tap a person or thing to select it. Tap again to drop it.")
         case .loop: return "Draw round what you want."
         case .magic: return "Tap a colour: everything joined to it in that colour is selected."
         case .keep: return "Paint to add to the selection."
@@ -82,7 +83,8 @@ struct PhotoEditorSheet: View {
                     .padding(.horizontal, 16)
                     .allowsHitTesting(false)
             }
-            VStack(spacing: 8) {
+            // Phil, 2026-11-10: every button on screen, the same size, evenly spaced.
+            VStack(spacing: 6) {
                 HStack(spacing: 6) {
                     choice("Tap subject", "hand.tap", .pick)
                     choice("Loop", "lasso", .loop)
@@ -90,18 +92,14 @@ struct PhotoEditorSheet: View {
                     choice("Add", "paintbrush.pointed.fill", .keep)
                     choice("Remove", "eraser.fill", .erase)
                 }
-                HStack(spacing: 10) {
-                    Button { holder.canvas?.invert() } label: { Label("Invert", systemImage: "circle.lefthalf.filled") }
-                    Button { holder.canvas?.soften() } label: { Label("Soften edge", systemImage: "aqi.medium") }
-                    Button { holder.canvas?.undo() } label: { Label("Undo", systemImage: "arrow.uturn.backward") }
-                        .disabled(!holder.canUndo)
+                HStack(spacing: 6) {
+                    action("Invert", "circle.lefthalf.filled") { holder.canvas?.invert() }
+                    action("Soften edge", "aqi.medium") { holder.canvas?.soften() }
+                    action("Undo", "arrow.uturn.backward", enabled: holder.canUndo) { holder.canvas?.undo() }
                 }
             }
-            .buttonStyle(.bordered)
-            .font(Theme.footnote)
-            .lineLimit(1)
             .padding(.horizontal, 10)
-            .padding(.vertical, 10)
+            .padding(.vertical, 8)
         }
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
@@ -117,15 +115,32 @@ struct PhotoEditorSheet: View {
     }
 
     private func choice(_ word: String, _ symbol: String, _ value: MaskTool) -> some View {
-        Button { tool = value } label: {
-            VStack(spacing: 2) {
-                Image(systemName: symbol)
-                Text(word).fixedSize()
+        let on = tool == value
+        return Button { tool = value } label: {
+            VStack(spacing: 3) {
+                Image(systemName: symbol).font(.system(size: 17, weight: on ? .semibold : .regular))
+                Text(word).font(Theme.caption2).fontWeight(on ? .bold : .medium)
+                    .lineLimit(1).minimumScaleFactor(0.7)
             }
-            .fontWeight(tool == value ? .bold : .regular)
-            .frame(minWidth: 52)
+            .foregroundStyle(on ? Theme.accent : Color.white.opacity(0.85))
+            .frame(maxWidth: .infinity, minHeight: 50)
+            .background(on ? Theme.accent.opacity(0.22) : Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
         }
-        .tint(tool == value ? Theme.accent : .gray)
+        .buttonStyle(.plain)
+    }
+
+    private func action(_ word: String, _ symbol: String, enabled: Bool = true, _ run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol).font(.system(size: 14))
+                Text(word).font(Theme.caption2).lineLimit(1).minimumScaleFactor(0.7)
+            }
+            .foregroundStyle(enabled ? Theme.accent : Color.white.opacity(0.35))
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 
     private func prepare() async {
@@ -135,7 +150,14 @@ struct PhotoEditorSheet: View {
         Diagnostics.log("Edit window opened")
         parts = await Task.detached(priority: .userInitiated) { CutoutLift.parts(of: cg) }.value
         finding = false
-        if parts.isEmpty, tool == .pick { tool = .loop }
+        if parts.isEmpty {
+            if tool == .pick { tool = .loop }
+        } else if let canvas = holder.canvas, canvas.undoStack.isEmpty {
+            // Phil, 2026-11-10: "Is there automatic cut out?" Start with every subject the phone found already selected.
+            canvas.setParts(parts)
+            canvas.selectAll()
+            autoSelected = true
+        }
     }
 
     /// The selection, or nil (with a note) when nothing is selected.
