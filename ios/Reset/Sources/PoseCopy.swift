@@ -9,7 +9,8 @@ import SwiftUI
 final class PoseCopier: ObservableObject {
     static var supported: Bool { ARBodyTrackingConfiguration.isSupported }
 
-    let body: Mannequin.Body
+    /// Which mannequin the next copy makes; switchable on the bar between actors.
+    @Published var body: Mannequin.Body
     @Published var seen = false
     @Published var copied = 0
     private weak var placer: ModelPlacer?
@@ -151,6 +152,12 @@ struct PoseCopyBar: View {
                 .font(Theme.footnote.weight(.semibold))
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.8), radius: 3)
+            // Body tracking reads joints only, not whether it is a woman or a man: pick for each actor here.
+            Picker("Mannequin", selection: $copier.body) {
+                ForEach(Mannequin.Body.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 200)
             HStack(spacing: 12) {
                 Button(copier.copied > 0 ? "Done" : "Cancel") { copier.finish() }
                     .buttonStyle(.bordered)
