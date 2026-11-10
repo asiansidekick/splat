@@ -11,6 +11,7 @@ final class PoseCopier: ObservableObject {
 
     let body: Mannequin.Body
     @Published var seen = false
+    @Published var copied = 0
     private weak var placer: ModelPlacer?
     private let previous: ARConfiguration?
     private var timer: Timer?
@@ -73,10 +74,13 @@ final class PoseCopier: ObservableObject {
         let figure = Mannequin.make(body, pose: pose, height: height)
         // Keep the feet where the actor's feet were: the figure stands on its lowest point, under its hips.
         guard let url = Examples.file(for: figure, name: name) else { return }
-        finish()
+        // Phil, 2026-11-10: several actors in one frame. The phone tracks one body at a time, so the copier stays on
+        // after each copy: point at the next actor and copy again, then Done.
         let before = placer.selectedModel
         placer.add(from: [url], at: transform, right: transform.columns.0.xyz)
         if let id = placer.selectedModel, id != before { placer.setMannequin(MannequinSpec(body: body, height: height, pose: pose), for: id) }
+        placer.selectedModel = nil
+        copied += 1
         Haptics.success()
     }
 }
@@ -142,12 +146,13 @@ struct PoseCopyBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Text(copier.seen ? "Got the actor. Tap Copy pose." : "Point at the actor, head to feet in view.")
+            Text(copier.seen ? (copier.copied > 0 ? "\(copier.copied) copied. Got the next one: Copy pose, or Done." : "Got the actor. Tap Copy pose.") :
+                 copier.copied > 0 ? "\(copier.copied) copied. Point at the next actor, or Done." : "Point at the actor, head to feet in view.")
                 .font(Theme.footnote.weight(.semibold))
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.8), radius: 3)
             HStack(spacing: 12) {
-                Button("Cancel") { copier.finish() }
+                Button(copier.copied > 0 ? "Done" : "Cancel") { copier.finish() }
                     .buttonStyle(.bordered)
                 Button { copier.copy() } label: { Label("Copy pose", systemImage: "figure.stand") }
                     .buttonStyle(.borderedProminent)
