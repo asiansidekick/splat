@@ -198,17 +198,33 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         refreshDimensions(id)
     }
 
+    /// Where the viewer is: the live camera, or in Review (no live session) the saved frame's camera.
+    /// Phil, 2026-11-10: Move did nothing over a saved frame because it waited for a live camera.
+    private var eye: simd_float4x4? {
+        if let frame = session.currentFrame { return frame.camera.transform }
+        return cameraView?.pointOfView?.simdWorldTransform
+    }
+
     /// Brings the selected model (or the newest, when none is selected) back to the middle of the view at its
     /// normal size, for when it has been lost off screen, very far away, or scaled tiny or huge.
     func bringToView() {
         guard let id = selectedModel ?? models.last?.id, let node = modelNodes[id] else { return }
-        guard let frame = session.currentFrame else {
+        node.simdScale = SIMD3(repeating: 1)
+        var spot: SIMD3<Float>
+        if let frame = session.currentFrame {
+            spot = placementTransform(frame).columns.3.xyz
+            spot.y -= boxes[id]?.low.y ?? 0
+        } else if let eye = self.eye {
+            // Over a saved frame: two metres ahead of its camera, at the height the model already stands.
+            var forward = -eye.columns.2.xyz
+            forward.y = 0
+            forward = simd_length(forward) > 0.01 ? simd_normalize(forward) : SIMD3(0, 0, -1)
+            spot = eye.columns.3.xyz + forward * 2
+            spot.y = node.simdWorldPosition.y
+        } else {
             modelError = "Point the camera at the set first."
             return
         }
-        node.simdScale = SIMD3(repeating: 1)
-        var spot = placementTransform(frame).columns.3.xyz
-        spot.y -= boxes[id]?.low.y ?? 0
         node.simdWorldPosition = spot
         selectedModel = id
         Haptics.success()
@@ -381,7 +397,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             case .changed:
                 let delta = gesture.translation(in: view)
                 gesture.setTranslation(.zero, in: view)
-                let camera = session.currentFrame?.camera.transform.columns.3.xyz ?? node.simdWorldPosition
+                let camera = eye?.columns.3.xyz ?? node.simdWorldPosition
                 // About a millimetre and a half per point for each metre away.
                 node.simdWorldPosition.y -= Float(delta.y) * 0.0016 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
             case .ended, .cancelled:
@@ -402,7 +418,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         case .changed:
             let delta = gesture.translation(in: view)
             gesture.setTranslation(.zero, in: view)
-            guard var target = dragTarget, let eye = session.currentFrame?.camera.transform.columns.3.xyz else { return }
+            guard var target = dragTarget, let eye = self.eye?.columns.3.xyz else { return }
             let shown = view.projectPoint(SCNVector3(target.x, target.y, target.z))
             if shown.z > 0, shown.z < 1 {
                 let moved = SIMD3<Float>(view.unprojectPoint(SCNVector3(shown.x + Float(delta.x), shown.y, shown.z)))
@@ -503,7 +519,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: cutoutTurn[id] ?? 0)
             if gesture.state == .ended { savePose(package, id: id, file: model.file, plane: plane) }
         case .lift:
-            let camera = session.currentFrame?.camera.transform.columns.3.xyz ?? node.simdWorldPosition
+            let camera = eye?.columns.3.xyz ?? node.simdWorldPosition
             // About a millimetre and a half per point for each metre away.
             node.simdWorldPosition.y -= Float(moved.y) * 0.0016 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
         case .move:
@@ -892,10 +908,13 @@ struct ModelOverlay: View {
                         ForEach(ModelPlacer.CutoutJob.allCases.filter { cutout ? $0 != .lift : $0 != .tilt }, id: \.self) { job in
                             CutoutTool(word: job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
                         }
-                        CutoutTool(word: placer.carrying ? "Carrying" : "Carry", symbol: "figure.walk", on: placer.carrying) {}
-                            .simultaneousGesture(DragGesture(minimumDistance: 0)
-                                .onChanged { _ in placer.startCarrying() }
-                                .onEnded { _ in placer.stopCarrying() })
+                        // Carry walks it along with the live camera, so not over a saved frame (Review).
+                        if showsFloor {
+                            CutoutTool(word: placer.carrying ? "Carrying" : "Carry", symbol: "figure.walk", on: placer.carrying) {}
+                                .simultaneousGesture(DragGesture(minimumDistance: 0)
+                                    .onChanged { _ in placer.startCarrying() }
+                                    .onEnded { _ in placer.stopCarrying() })
+                        }
                         if placer.selectedMannequin != nil {
                             CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
                         }
