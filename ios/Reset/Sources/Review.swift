@@ -23,6 +23,8 @@ struct FrameReview: View {
     /// Off (the default): pinch to zoom, one finger moves the photo. On: one finger draws dimensions and notes.
     @State private var measuring = false
     @State private var index = 0
+    /// Counts presses of Save photo; the page showing saves its frame when it changes.
+    @State private var exportCount = 0
     @Environment(\.dismiss) private var dismiss
 
     init(reference: Reference, startMeasuring: Bool = false, onSave: @escaping (Reference) -> Void) {
@@ -52,7 +54,7 @@ struct FrameReview: View {
                                   reference.planeDepths[frames[index].imageFile] = depth
                                   onSave(reference)
                               },
-                              onSwipe: { move($0) })
+                              onSwipe: { move($0) }, exportRequest: exportCount)
                         .id(frames[index].id)
                 } else {
                     Spacer()
@@ -131,7 +133,7 @@ struct FrameReview: View {
                     Spacer(minLength: 0)
                 }
             }
-            HStack(spacing: 22) {
+            HStack(spacing: 16) {
                 if ExploreView.offered {
                     Button { exploring = true } label: { Image(systemName: "view.3d").frame(width: 40, height: 36) }
                         .accessibilityLabel("Fly through in 3D")
@@ -149,6 +151,7 @@ struct FrameReview: View {
                         Button { importingModel = true } label: { Label("3D model (USDZ, OBJ or STL)", systemImage: "cube") }
                         Button { makingCutout = true } label: { Label("Cut-out from photos", systemImage: "figure.stand") }
                         Button { choosingExample = true } label: { Label("Examples: people, set pieces", systemImage: "figure.stand.dress") }
+                        Toggle(isOn: $stage.hidesBehindSet) { Label("Models go behind real things", systemImage: "square.2.layers.3d") }
                     } label: { Image(systemName: "plus").frame(width: 40, height: 36) }
                         .accessibilityLabel("Add a 3D model or cut-out")
                 }
@@ -161,6 +164,10 @@ struct FrameReview: View {
                     .accessibilityLabel("Smaller text")
                 Button { measurer.scaleText(by: 1.25) } label: { Text("A").font(Theme.title3.weight(.bold)).frame(width: 40, height: 36) }
                     .accessibilityLabel("Bigger text")
+                // Phil, 2026-11-10: save this frame, with its models and marks, to Photos.
+                Button { exportCount += 1 } label: { Image(systemName: "square.and.arrow.down").frame(width: 40, height: 36) }
+                    .disabled(!frames.indices.contains(index))
+                    .accessibilityLabel("Save this frame to Photos")
             }
         }
         .padding(.horizontal, 12)
@@ -314,6 +321,8 @@ struct FramePage: View {
     var onPlaneDepth: (Float) -> Void = { _ in }
     /// A quick sideways swipe on the whole photo (not zoomed in): -1 for the previous frame, 1 for the next.
     var onSwipe: (Int) -> Void = { _ in }
+    /// Changes when Save photo is pressed.
+    var exportRequest = 0
 
     private struct Loaded: @unchecked Sendable {
         let image: UIImage
@@ -333,6 +342,8 @@ struct FramePage: View {
     @State private var failed = false
     @State private var touch: Touch?
     @State private var message: String?
+    @State private var viewSize: CGSize = .zero
+    @State private var exporting = false
     /// Pinch zoom (1 to 8x) and where the photo is moved to.
     @State private var zoom: CGFloat = 1
     @State private var baseZoom: CGFloat = 1
@@ -360,6 +371,8 @@ struct FramePage: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .contentShape(Rectangle())
+            .onAppear { viewSize = size }
+            .onChange(of: size) { _, value in viewSize = value }
             .simultaneousGesture(
                 MagnificationGesture()
                     .onChanged { value in
@@ -419,6 +432,7 @@ struct FramePage: View {
             }
         }
         .task(id: frame.id) { await load() }
+        .onChange(of: exportRequest) { _, _ in Task { await export() } }
         .onReceive(measurer.$scaleResult) { result in
             guard let result, let pending = scalePending, result.id == pending.id else { return }
             scalePending = nil
@@ -482,7 +496,7 @@ struct FramePage: View {
             } else {
                 ProgressView().tint(.white).frame(width: size.width, height: size.height)
             }
-            ReviewModelsView(stage: stage, placer: placer, frame: frame)
+            ReviewModelsView(stage: stage, placer: placer, frame: frame, folder: folder)
                 .frame(width: size.width, height: size.height)
                 .allowsHitTesting(editingModels)
             marks(size).allowsHitTesting(false)
@@ -739,6 +753,40 @@ struct FramePage: View {
         // On the surface if there is depth, else in mid-air a little way out.
         guard let spot = frame.point(atSensor: n, metres: depth(at: n) ?? 1.5) else { return }
         measurer.askNote(at: spot)
+    }
+
+    /// The photo at up to 2400 pixels on its long side, the models drawn in as they sit, and the
+    /// dimensions and notes on top, saved to Photos.
+    private func export() async {
+        guard !exporting else { return }
+        guard let loaded else { say("The photo is still loading."); return }
+        exporting = true
+        defer { exporting = false }
+        placer.selectedModel = nil
+        measurer.deselect()
+        let full = loaded.image.size
+        let k = min(1, 2400 / max(full.width, full.height, 1))
+        let out = CGSize(width: (full.width * k).rounded(), height: (full.height * k).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let photo = UIGraphicsImageRenderer(size: out, format: format).image { _ in
+            loaded.image.draw(in: CGRect(origin: .zero, size: out))
+        }
+        let withModels = placer.models.isEmpty ? photo : (stage.render(over: photo, size: out) ?? photo)
+        var marks: UIImage?
+        if viewSize.width > 0, !(measurer.measurements.isEmpty && measurer.notes.isEmpty) {
+            let renderer = ImageRenderer(content: self.marks(viewSize))
+            renderer.scale = out.width / viewSize.width
+            marks = renderer.uiImage
+        }
+        let final = UIGraphicsImageRenderer(size: out, format: format).image { _ in
+            withModels.draw(in: CGRect(origin: .zero, size: out))
+            marks?.draw(in: CGRect(origin: .zero, size: out))
+        }
+        Diagnostics.log("Review: save frame \(frame.imageFile) \(Int(out.width))x\(Int(out.height)), models \(placer.models.count), marks \(marks != nil)")
+        let saved = await PhotoLibrary.save([final])
+        say(saved ? "Saved to Photos." : "Could not save to Photos.")
     }
 
     private func say(_ text: String) {

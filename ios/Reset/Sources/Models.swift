@@ -366,7 +366,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
         guard let view = gesture.view as? SCNView else { return }
-        let hits = view.hitTest(gesture.location(in: view), options: nil)
+        let hits = view.hitTest(gesture.location(in: view), options: ReviewPick.options)
         selectedModel = hits.lazy.compactMap { self.modelID(of: $0.node) }.first
     }
 
@@ -378,7 +378,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         guard !isSuspended(), let view = gesture.view as? SCNView else { return }
         let location = gesture.location(in: view)
         if gesture.state == .began {
-            let touched = view.hitTest(location, options: nil).lazy.compactMap { self.modelID(of: $0.node) }.first
+            let touched = view.hitTest(location, options: ReviewPick.options).lazy.compactMap { self.modelID(of: $0.node) }.first
             if let touched {
                 selectedModel = touched
             } else if selectedModel == nil, models.count == 1 {

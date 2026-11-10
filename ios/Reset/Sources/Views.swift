@@ -1116,8 +1116,28 @@ struct Gallery: View {
         self.onImport = onImport
         self.onSync = onSync
         self.onGroup = onGroup
-        self.action = action
-        _current = State(initialValue: selectedID.wrappedValue ?? ordered.last?.id)
+        self.action = { act, reference in Self.remember(reference.id); action(act, reference) }
+        _current = State(initialValue: Self.lastViewed(in: ordered) ?? selectedID.wrappedValue ?? ordered.last?.id)
+    }
+
+    /// Phil, 2026-11-10: coming back to the references opens on the last one looked at, unless a
+    /// newer reference has been taken since, which then comes first as before.
+    private static let lastViewedKey = "gallery.lastViewed"
+    private static let lastViewedAtKey = "gallery.lastViewedAt"
+
+    private static func lastViewed(in ordered: [Reference]) -> UUID? {
+        let defaults = UserDefaults.standard
+        guard let text = defaults.string(forKey: lastViewedKey), let id = UUID(uuidString: text),
+              ordered.contains(where: { $0.id == id }) else { return nil }
+        let seen = Date(timeIntervalSince1970: defaults.double(forKey: lastViewedAtKey))
+        if let newest = ordered.last, newest.created > seen { return nil }
+        return id
+    }
+
+    private static func remember(_ id: UUID?) {
+        guard let id else { return }
+        UserDefaults.standard.set(id.uuidString, forKey: lastViewedKey)
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastViewedAtKey)
     }
 
     private var shown: Reference? { ordered.first { $0.id == current } }
@@ -1291,8 +1311,9 @@ struct Gallery: View {
                 .padding(.vertical, 3)
             }
             .frame(height: 70)
-            .onAppear { if let current { proxy.scrollTo(current, anchor: .center) } }
+            .onAppear { Self.remember(current); if let current { proxy.scrollTo(current, anchor: .center) } }
             .onChange(of: current) { _, id in
+                Self.remember(id)
                 if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
             }
         }
