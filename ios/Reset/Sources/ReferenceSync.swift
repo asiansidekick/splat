@@ -33,8 +33,8 @@ final class ReferenceSyncLibrary: SyncLibrary {
         guard SyncEngine.safe(name) else { return nil }
         if name == mapFile { return .map }
         if name.hasPrefix("model-") {
-            // A USDZ model, or a scrapbook cut-out (JSON).
-            for ending in [".usdz", ".cutout"] where name.hasSuffix(ending) {
+            // A USDZ model, a scrapbook cut-out (JSON), or an FBX character.
+            for ending in [".usdz", ".cutout", ".fbx"] where name.hasSuffix(ending) {
                 return UUID(uuidString: String(name.dropFirst(6).dropLast(ending.count))) != nil ? .model : nil
             }
         }
@@ -257,6 +257,7 @@ final class ReferenceSyncLibrary: SyncLibrary {
                     // Only where it is: the file stays the one this phone has.
                     result.models[index].transform = model.transform
                     result.models[index].moved = model.moved
+                    if model.file.hasSuffix(".fbx") { result.models[index].rigPose = model.rigPose }
                 }
             } else if model.file.hasPrefix("models/"), has(model.file) {
                 result.models.append(model)

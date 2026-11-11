@@ -53,6 +53,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// Each model's box in its own coordinates, measured on loading, before any arrows are hung
     /// on it (they would make it look bigger).
     private var boxes: [UUID: (low: SIMD3<Float>, high: SIMD3<Float>)] = [:]
+    /// The bones of imported characters that can be posed.
+    private var rigs: [UUID: FBXRig] = [:]
     /// While dragging: from where the finger's ray meets the model's floor height to the model,
     /// so the model keeps its place under the finger instead of jumping to it.
     private var dragTarget: SIMD3<Float>?
@@ -118,7 +120,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         var failed: [String] = []
         let sources = ModelImport.gather(sources)
         guard !sources.isEmpty else {
-            modelError = "Pick a USDZ, OBJ or STL file. For an OBJ, pick its .mtl and pictures with it."
+            modelError = "Pick a USDZ, OBJ, STL or FBX file. For an OBJ, pick its .mtl and pictures with it."
             return
         }
         for (index, source) in sources.enumerated() {
@@ -137,11 +139,18 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let scoped = source.startAccessingSecurityScopedResource()
         defer { if scoped { source.stopAccessingSecurityScopedResource() } }
         let id = UUID()
-        let file = "models/\(id.uuidString).usdz"
+        // An FBX is kept as it is (its bones are read each time it is shown); everything else becomes a USDZ.
+        let fbx = source.pathExtension.lowercased() == "fbx"
+        let file = "models/\(id.uuidString).\(fbx ? "fbx" : "usdz")"
         let destination = folder.appendingPathComponent(file)
         do {
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try ModelImport.store(source, at: destination)
+            if fbx {
+                try FileManager.default.copyItem(at: source, to: destination)
+                FBXImport.keepTextures(from: source, for: destination)
+            } else {
+                try ModelImport.store(source, at: destination)
+            }
         } catch {
             Diagnostics.log("Model import failed: \(source.lastPathComponent), \(error)")
             return nil
@@ -149,6 +158,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let model = PlacedModel(id: id, name: source.deletingPathExtension().lastPathComponent, file: file, transform: flatten(transform))
         guard loadNode(for: model) != nil else {
             try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: FBXImport.texturesFolder(for: destination))
             return nil
         }
         models.append(model)
@@ -168,6 +178,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         modelNodes.values.forEach { $0.removeFromParentNode() }
         modelNodes = [:]
         boxes = [:]
+        rigs = [:]
         cutouts = [:]
         stopCutoutTimer()
         models = []
@@ -181,6 +192,12 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             if !FileManager.default.fileExists(atPath: target.path) {
                 try FileManager.default.copyItem(at: folder.appendingPathComponent(model.file), to: target)
+            }
+            // The pictures picked along with an FBX.
+            let pictures = FBXImport.texturesFolder(for: folder.appendingPathComponent(model.file))
+            let picturesTarget = FBXImport.texturesFolder(for: target)
+            if model.file.hasSuffix(".fbx"), FileManager.default.fileExists(atPath: pictures.path), !FileManager.default.fileExists(atPath: picturesTarget.path) {
+                try? FileManager.default.copyItem(at: pictures, to: picturesTarget)
             }
         }
     }
@@ -281,6 +298,15 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         return models.first { $0.id == id }?.mannequin
     }
 
+    /// What the Pose screen starts from: a mannequin's own pose, or for an imported character a stand-in of
+    /// its height in the pose it has now.
+    var selectedPoseSpec: MannequinSpec? {
+        guard let id = selectedModel, let model = models.first(where: { $0.id == id }) else { return nil }
+        if let mannequin = model.mannequin { return mannequin }
+        guard let rig = rigs[id] else { return nil }
+        return MannequinSpec(body: .man, height: max(0.3, min(rig.height, 3)), pose: model.rigPose ?? rig.poser.restPose)
+    }
+
     func setMannequin(_ spec: MannequinSpec, for id: UUID) {
         guard let index = models.firstIndex(where: { $0.id == id }) else { return }
         models[index].mannequin = spec
@@ -289,6 +315,15 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// Rebuilds a mannequin in a new pose, in the same place.
     func repose(_ id: UUID, as spec: MannequinSpec) {
         guard let index = models.firstIndex(where: { $0.id == id }) else { return }
+        if models[index].mannequin == nil {
+            // An imported character: its own bones take the pose.
+            guard let rig = rigs[id] else { return }
+            rig.apply(spec.pose)
+            models[index].rigPose = spec.pose
+            models[index].moved = Date()
+            Diagnostics.log("Character posed: \(models[index].name), \(spec.pose.summary)")
+            return
+        }
         let scene = SCNScene()
         scene.rootNode.addChildNode(Mannequin.make(spec.body, pose: spec.pose, height: spec.height))
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("repose-\(UUID().uuidString).usdz")
@@ -313,6 +348,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         modelNodes[id]?.removeFromParentNode()
         modelNodes[id] = nil
         boxes[id] = nil
+        rigs[id] = nil
         cutouts[id] = nil
         cutoutPackages[id] = nil
         if cutouts.isEmpty { stopCutoutTimer() }
@@ -630,6 +666,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     @discardableResult
     private func loadNode(for model: PlacedModel) -> SCNNode? {
         if model.file.hasSuffix("." + Cutout.fileExtension) { return loadCutoutNode(for: model) }
+        if model.file.hasSuffix(".fbx") { return loadFBXNode(for: model) }
         let url = folder.appendingPathComponent(model.file)
         guard let scene = try? SCNScene(url: url, options: nil) else { return nil }
         let node = SCNNode()
@@ -643,6 +680,22 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         Diagnostics.log(String(format: "Model loaded: %@, %d geometries, box %.2f x %.2f x %.2f m",
                                model.name, geometries, high.x - low.x, high.y - low.y, high.z - low.z))
         boxes[model.id] = (SIMD3<Float>(low), SIMD3<Float>(high))
+        node.simdTransform = matrix4(model.transform)
+        root.addChildNode(node)
+        modelNodes[model.id] = node
+        refreshDimensions(model.id)
+        return node
+    }
+
+    /// An FBX file, read with its bones so a character can be posed (FBXImport.swift).
+    private func loadFBXNode(for model: PlacedModel) -> SCNNode? {
+        guard let loaded = FBXImport.load(folder.appendingPathComponent(model.file), name: model.name) else { return nil }
+        let node = SCNNode()
+        node.name = model.id.uuidString
+        node.addChildNode(loaded.node)
+        boxes[model.id] = (loaded.low, loaded.high)
+        rigs[model.id] = loaded.rig
+        if let pose = model.rigPose { loaded.rig?.apply(pose) }
         node.simdTransform = matrix4(model.transform)
         root.addChildNode(node)
         modelNodes[model.id] = node
@@ -917,7 +970,7 @@ struct ModelOverlay: View {
                                     .onChanged { _ in placer.startCarrying() }
                                     .onEnded { _ in placer.stopCarrying() })
                         }
-                        if placer.selectedMannequin != nil {
+                        if placer.selectedPoseSpec != nil {
                             CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
                         }
                     }
@@ -949,7 +1002,7 @@ struct ModelOverlay: View {
             }
         }
         .fullScreenCover(isPresented: $posing) {
-            if let id = placer.selectedModel, let spec = placer.selectedMannequin {
+            if let id = placer.selectedModel, let spec = placer.selectedPoseSpec {
                 MannequinPoseEditor(spec: spec) { placer.repose(id, as: $0) }
             }
         }

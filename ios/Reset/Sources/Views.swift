@@ -1630,6 +1630,10 @@ struct CaptureStage: View {
     /// Which lens a snapshot uses; anything but 1× is a plain photo (LensCamera.swift).
     @AppStorage("snapshotLens") private var lens = 1.0
     @State private var lensBusy = false
+    /// The live view through the 0.5× or 3× lens, while one is picked.
+    @StateObject private var lensLive = LensLive()
+    /// The room tracking as it was set, while it waits for the lens to go back to 1×.
+    @State private var pausedTracking: ARConfiguration?
     @AppStorage("useLiDAR") private var useLiDAR = true
     @AppStorage("leftHanded") private var leftHanded = false
     @Environment(\.verticalSizeClass) private var verticalSize
@@ -1794,7 +1798,7 @@ struct CaptureStage: View {
         // Without the controls, a volume button takes a snapshot too.
         .modifier(CaptureButtonAction(action: volumeShutter))
         .confirmationDialog("Add to the room", isPresented: $choosingModel) {
-            Button("3D model (USDZ, OBJ or STL)") { importingModels = true }
+            Button("3D model (USDZ, OBJ, STL or FBX)") { importingModels = true }
             Button("Cut-out from photos") { makingCutout = true }
             Button("Examples: people, set pieces") { choosingExample = true }
         }
@@ -1813,10 +1817,28 @@ struct CaptureStage: View {
                     withAnimation(.snappy) { justSaved = false }
                 }
             }
+            // Opens on 1×, as the Camera app does.
+            if lens != 1 { lens = 1 }
             recorder.prepare(useLiDAR: useLiDAR)
         }
         .onAppear { tapCatcher.install() }
+        .background {
+            if let session = lensLive.session {
+                LensPreview(session: session).ignoresSafeArea().allowsHitTesting(false)
+            }
+        }
+        .onChange(of: lens) { _, _ in syncLens() }
+        .onChange(of: mode) { _, _ in syncLens() }
+        .onChange(of: recorder.capturing) { _, _ in syncLens() }
+        .onChange(of: recorder.pendingSave) { _, _ in syncLens() }
+        .onChange(of: recorder.saving) { _, _ in syncLens() }
+        // Measuring and placing models need the room camera: back to 1× for them.
+        .onReceive(recorder.measurer.$active) { on in if on, lensLive.lens != nil { lens = 1 } }
+        .onChange(of: choosingModel) { _, on in if on, lens != 1 { lens = 1 } }
+        .onReceive(NotificationCenter.default.publisher(for: SurfaceTest.willStart)) { _ in dropLens() }
         .onDisappear {
+            pausedTracking = nil
+            lensLive.stop()
             ScreenshotMode.shared.viewing = false
             tapCatcher.remove()
             recorder.stop()
@@ -1825,6 +1847,7 @@ struct CaptureStage: View {
             holder.view?.debugOptions = show ? [.showFeaturePoints] : []
         }
         .onChange(of: useLiDAR) { _, on in
+            dropLens()
             recorder.stop()
             recorder.prepare(useLiDAR: on)
         }
@@ -1867,6 +1890,75 @@ struct CaptureStage: View {
         shutterTapped()
     }
 
+    /// Shows the view through the picked lens. The room tracking only runs on 1×: it waits while another lens
+    /// is live, and carries on (models and marks kept) back at 1×. Scanning, saving and Auto scan stay on 1×.
+    private func syncLens() {
+        let free = mode == .snapshot && !recorder.capturing && !recorder.pendingSave && !recorder.saving
+        let wanted = free ? LensCamera.lenses.first(where: { $0.zoom == lens && $0.zoom != 1 }) : nil
+        guard wanted != lensLive.lens else { return }
+        if let wanted {
+            if lensLive.lens == nil {
+                pausedTracking = recorder.session.configuration
+                recorder.measurer.active = false
+                recorder.session.pause()
+            }
+            lensLive.onInterrupted = { lens = 1 }
+            if lensLive.start(wanted) {
+                Diagnostics.log("Lens view: \(wanted.label)")
+            } else {
+                Diagnostics.log("Lens view: could not open \(wanted.label)")
+                showToast("Couldn't open the \(wanted.label) lens")
+                lens = 1
+                resumeTracking()
+            }
+        } else {
+            Diagnostics.log("Lens view: back to 1×")
+            lensLive.stop { resumeTracking() }
+        }
+    }
+
+    private func resumeTracking() {
+        if let configuration = pausedTracking { recorder.session.run(configuration) }
+        pausedTracking = nil
+    }
+
+    /// Back to 1× at once, for something that starts the room camera itself.
+    private func dropLens() {
+        pausedTracking = nil
+        lensLive.stop()
+        if lens != 1 { lens = 1 }
+    }
+
+    /// A snapshot through the lens that is live.
+    private func liveLensSnapshot() {
+        guard let chosen = lensLive.lens, !lensBusy else { return }
+        lensBusy = true
+        Diagnostics.log("Lens snapshot on \(chosen.label) (live)")
+        Task {
+            let data = await lensLive.photo()
+            lensBusy = false
+            saveLensPhoto(data, chosen)
+        }
+    }
+
+    private func saveLensPhoto(_ data: Data?, _ chosen: LensCamera.Lens) {
+        guard let data else {
+            showToast("Couldn't take the \(chosen.label) photo")
+            return
+        }
+        do {
+            var reference = try PhotoLibrary.makeReference(from: data, scene: scene, setup: setup)
+            reference.shot = shot
+            reference.name = name.isEmpty ? "\(chosen.label) photo" : name
+            try ReferenceStore.save(reference)
+            if let image = UIImage(data: data) { onPhoto(image) }
+            onSaved(reference)
+        } catch {
+            Diagnostics.log("Lens snapshot could not be saved: \(error)")
+            showToast("Couldn't save the \(chosen.label) photo")
+        }
+    }
+
     /// A snapshot on the 0.5× or 3× lens: tracking pauses, the photo is taken, tracking carries on.
     private func lensSnapshot() {
         guard let chosen = LensCamera.lenses.first(where: { $0.zoom == lens }), !lensBusy else { return }
@@ -1878,26 +1970,14 @@ struct CaptureStage: View {
             let data = await LensCamera.photo(chosen)
             if let configuration { recorder.session.run(configuration) }
             lensBusy = false
-            guard let data else {
-                showToast("Couldn't take the \(chosen.label) photo")
-                return
-            }
-            do {
-                var reference = try PhotoLibrary.makeReference(from: data, scene: scene, setup: setup)
-                reference.shot = shot
-                reference.name = name.isEmpty ? "\(chosen.label) photo" : name
-                try ReferenceStore.save(reference)
-                if let image = UIImage(data: data) { onPhoto(image) }
-                onSaved(reference)
-            } catch {
-                Diagnostics.log("Lens snapshot could not be saved: \(error)")
-                showToast("Couldn't save the \(chosen.label) photo")
-            }
+            saveLensPhoto(data, chosen)
         }
     }
 
     private func shutterTapped() {
         switch mode {
+        case .snapshot where lensLive.lens != nil && !recorder.capturing:
+            liveLensSnapshot()
         case .snapshot where lens != 1 && LensCamera.lenses.contains(where: { $0.zoom == lens }) && !recorder.capturing:
             lensSnapshot()
         case .snapshot:

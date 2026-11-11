@@ -155,7 +155,7 @@ struct FrameReview: View {
                 .accessibilityLabel(editingModels ? "Back to dimensions and notes" : "Place 3D models")
                 if editingModels {
                     Menu {
-                        Button { importingModel = true } label: { Label("3D model (USDZ, OBJ or STL)", systemImage: "cube") }
+                        Button { importingModel = true } label: { Label("3D model (USDZ, OBJ, STL or FBX)", systemImage: "cube") }
                         Button { makingCutout = true } label: { Label("Cut-out from photos", systemImage: "figure.stand") }
                         Button { choosingExample = true } label: { Label("Examples: people, set pieces", systemImage: "figure.stand.dress") }
                         Toggle(isOn: $stage.hidesBehindSet) { Label("Models go behind real things", systemImage: "square.2.layers.3d") }

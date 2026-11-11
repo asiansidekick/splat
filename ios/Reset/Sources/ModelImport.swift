@@ -7,15 +7,15 @@ import UniformTypeIdentifiers
 /// STL and OBJ files next to USDZ (Phil, 2026-11-10). Each is turned into a USDZ when it comes in, so placing,
 /// moving and syncing a model work exactly as before.
 enum ModelImport {
-    /// What the file picker offers: USDZ, OBJ and STL (plus the textures and .mtl an OBJ needs, picked with it).
+    /// What the file picker offers: USDZ, OBJ, STL and FBX (plus the textures and .mtl an OBJ needs, picked with it).
     static let pickerTypes: [UTType] = {
         var types: [UTType] = [.usdz, .usd]
-        for ending in ["obj", "stl", "mtl"] { if let type = UTType(filenameExtension: ending) { types.append(type) } }
+        for ending in ["obj", "stl", "mtl", "fbx"] { if let type = UTType(filenameExtension: ending) { types.append(type) } }
         types += [.png, .jpeg, .image]
         return types
     }()
 
-    static let modelEndings: Set<String> = ["usdz", "usd", "usdc", "usda", "obj", "stl"]
+    static let modelEndings: Set<String> = ["usdz", "usd", "usdc", "usda", "obj", "stl", "fbx"]
 
     /// Copies everything picked into one folder, so an OBJ finds the .mtl and pictures picked with it,
     /// and returns the model files among them.

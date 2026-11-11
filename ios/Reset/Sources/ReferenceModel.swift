@@ -147,6 +147,8 @@ struct PlacedModel: Codable, Identifiable, Equatable {
     var moved: Date?
     /// Set for an example mannequin, so it can be posed again (Examples.swift).
     var mannequin: MannequinSpec?
+    /// The pose given to an imported rigged character (an FBX file), nil while it stands as its file has it.
+    var rigPose: MannequinPose?
 }
 
 /// A straight line measured in the room, between two points in its coordinates (metres).

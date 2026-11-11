@@ -498,6 +498,127 @@ expect(Cutout.nearest([0, 90, 180, -90], to: 100) == 1 && Cutout.nearest([0, 90,
 let faced = Cutout.frontFacing(camera: SIMD3(3, 1.5, 0), position: SIMD3(0, 0, 0))
 expect(abs(Cutout.viewAngle(camera: SIMD3(3, 1.5, 0), position: .zero, front: faced.columns.2.xyz)) < 0.01, "a new cut-out faces the camera")
 
+// Imported characters (RigMap.swift): the joints are found whatever the bones are called, and poses land right.
+func runRigTests() {
+    /// A plain figure, 1.85 m, facing +Z with its left at +X. `name` gets a part ("fore") and a side ("L", "R" or "").
+    func human(twist: Bool = false, armsDown: Bool = false, facingBack: Bool = false, name: (String, String) -> String) -> (nodes: [RigNode], index: [String: Int]) {
+        var nodes: [RigNode] = []
+        var index: [String: Int] = [:]
+        func add(_ part: String, _ side: String, _ parent: String?, _ x: Float, _ y: Float, _ z: Float, bone: Bool = true) {
+            let p = parent.flatMap { index[$0] } ?? -1
+            var world = matrix_identity_float4x4
+            world.columns.3 = facingBack ? SIMD4(-x, y, -z, 1) : SIMD4(x, y, z, 1)
+            var local = world
+            if p >= 0 { local.columns.3 = SIMD4(world.columns.3.xyz - nodes[p].position, 1) }
+            index[part + side] = nodes.count
+            nodes.append(RigNode(name: name(part, side), parent: p, isBone: bone, local: local, world: world))
+        }
+        add("root", "", nil, 0, 0, 0, bone: false)
+        add("hips", "", "root", 0, 1, 0)
+        add("spine1", "", "hips", 0, 1.1, 0)
+        add("spine2", "", "spine1", 0, 1.25, 0)
+        add("chest", "", "spine2", 0, 1.4, 0)
+        add("neck", "", "chest", 0, 1.55, 0)
+        add("head", "", "neck", 0, 1.65, 0)
+        add("headEnd", "", "head", 0, 1.85, 0)
+        for (s, n) in [(Float(1), "L"), (Float(-1), "R")] {
+            let d: SIMD2<Float> = armsDown ? SIMD2(s * 0.5, -0.866) : SIMD2(s, 0)
+            func at(_ t: Float) -> SIMD2<Float> { SIMD2(s * 0.18, 1.5) + d * t }
+            add("clav", n, "chest", s * 0.05, 1.5, 0)
+            add("upper", n, "clav" + n, at(0).x, at(0).y, 0)
+            var above = "upper" + n
+            if twist { add("upperTwist", n, above, at(0.14).x, at(0.14).y, 0); above = "upperTwist" + n }
+            add("fore", n, above, at(0.28).x, at(0.28).y, 0)
+            above = "fore" + n
+            if twist { add("foreTwist", n, above, at(0.41).x, at(0.41).y, 0); above = "foreTwist" + n }
+            add("hand", n, above, at(0.54).x, at(0.54).y, 0)
+            for (finger, z) in [("thumb", Float(-0.03)), ("index", 0), ("pinky", 0.03)] {
+                add(finger, n, "hand" + n, at(0.62).x, at(0.62).y, z)
+                add(finger + "Tip", n, finger + n, at(0.7).x, at(0.7).y, z)
+            }
+            add("thigh", n, "hips", s * 0.1, 0.95, 0)
+            above = "thigh" + n
+            if twist { add("thighTwist", n, above, s * 0.1, 0.73, 0); above = "thighTwist" + n }
+            add("shin", n, above, s * 0.1, 0.52, 0.02)
+            add("foot", n, "shin" + n, s * 0.1, 0.09, 0)
+            add("toe", n, "foot" + n, s * 0.1, 0.02, 0.14)
+            add("toeTip", n, "toe" + n, s * 0.1, 0.02, 0.2)
+        }
+        return (nodes, index)
+    }
+    func table(_ names: [String: String], _ join: @escaping (String, String) -> String) -> (String, String) -> String {
+        { part, side in join(names[part] ?? part, side) }
+    }
+    let long = ["L": "Left", "R": "Right", "": ""]
+    let mixamo = table(["root": "Armature", "hips": "Hips", "spine1": "Spine", "spine2": "Spine1", "chest": "Spine2", "neck": "Neck", "head": "Head", "headEnd": "HeadTop_End",
+                        "clav": "Shoulder", "upper": "Arm", "fore": "ForeArm", "hand": "Hand", "thumb": "HandThumb1", "index": "HandIndex1", "pinky": "HandPinky1",
+                        "thigh": "UpLeg", "shin": "Leg", "foot": "Foot", "toe": "ToeBase", "toeTip": "Toe_End"]) { "mixamorig:" + long[$1]! + $0 }
+    let unreal = table(["hips": "pelvis", "spine1": "spine_01", "spine2": "spine_02", "chest": "spine_03", "neck": "neck_01", "clav": "clavicle", "upper": "upperarm",
+                        "fore": "lowerarm", "thumb": "thumb_01", "index": "index_01", "pinky": "pinky_01", "shin": "calf", "toe": "ball"]) { $0 + ($1.isEmpty ? "" : "_" + $1.lowercased()) }
+    let unity = table(["hips": "Hips", "spine1": "Spine", "spine2": "Chest", "chest": "UpperChest", "neck": "Neck", "head": "Head", "clav": "Shoulder", "upper": "UpperArm",
+                       "fore": "LowerArm", "hand": "Hand", "thigh": "UpperLeg", "shin": "LowerLeg", "foot": "Foot", "toe": "Toes"]) { long[$1]! + $0 }
+    let blender = table(["hips": "spine", "spine1": "spine.001", "spine2": "spine.002", "chest": "spine.003", "neck": "spine.004", "head": "spine.006", "clav": "shoulder",
+                         "upper": "upper_arm", "fore": "forearm", "thumb": "thumb.01", "index": "f_index.01", "pinky": "f_pinky.01"]) { "DEF-" + $0 + ($1.isEmpty ? "" : "." + $1) }
+    let biped = table(["hips": "Pelvis", "spine1": "Spine", "spine2": "Spine1", "chest": "Spine2", "neck": "Neck", "head": "Head", "headEnd": "HeadNub", "clav": "Clavicle",
+                       "upper": "UpperArm", "fore": "Forearm", "hand": "Hand", "thigh": "Thigh", "shin": "Calf", "foot": "Foot", "toe": "Toe0"]) { "Bip01 " + ($1.isEmpty ? "" : $1 + " ") + $0 }
+    let daz = table(["hips": "pelvis", "spine1": "abdomenLower", "spine2": "abdomenUpper", "chest": "chestUpper", "neck": "neckLower", "clav": "Collar", "upper": "ShldrBend",
+                     "upperTwist": "ShldrTwist", "fore": "ForearmBend", "foreTwist": "ForearmTwist", "hand": "Hand", "thigh": "ThighBend", "thighTwist": "ThighTwist",
+                     "shin": "Shin", "foot": "Foot", "toe": "Metatarsals"]) { $1.lowercased() + $0 }
+    let nameless: (String, String) -> String = { _, _ in "joint" }
+    let cases: [(String, Bool, Bool, Bool, Bool, (String, String) -> String)] = [
+        ("Mixamo", false, false, false, true, mixamo), ("Unreal", false, false, false, true, unreal), ("Unity", false, false, false, true, unity),
+        ("Blender", false, false, false, true, blender), ("3ds Max", false, false, false, true, biped), ("Daz, with twist bones", true, false, false, true, daz),
+        ("no useful names", false, false, false, false, nameless), ("no names, arms down, facing back", false, true, true, false, nameless),
+        ("no names, twist bones", true, false, false, false, nameless),
+    ]
+    for (title, twist, armsDown, facingBack, fromNames, naming) in cases {
+        let (nodes, index) = human(twist: twist, armsDown: armsDown, facingBack: facingBack, name: naming)
+        func limb(_ a: String, _ b: String, _ c: String, _ side: String) -> [Int] { [index[a + side]!, index[b + side]!, index[c + side]!] }
+        guard let map = RigFinder.find(nodes) else {
+            expect(false, "character joints, \(title): found")
+            continue
+        }
+        let right = map.hips == index["hips"]! && map.spine == [index["spine1"]!, index["spine2"]!, index["chest"]!] && map.neck == index["neck"] && map.head == index["head"]
+            && map.armL == limb("upper", "fore", "hand", "L") && map.armR == limb("upper", "fore", "hand", "R")
+            && map.legL == limb("thigh", "shin", "foot", "L") && map.legR == limb("thigh", "shin", "foot", "R")
+        expect(right && map.fromNames == fromNames && map.facing == (facingBack ? -1 : 1), "character joints, \(title): hips, spine, head, arms and legs found"
+               + (right ? "" : " (arm \(map.armL.map { nodes[$0].name }), leg \(map.legL.map { nodes[$0].name }), spine \(map.spine.count), names \(map.fromNames), facing \(map.facing))"))
+
+        let poser = RigPoser(nodes: nodes, map: map)
+        let rest = poser.worlds(for: poser.restPose)
+        let off = zip(rest.worlds, nodes).map { simd_distance($0.columns.3.xyz, $1.position) }.max() ?? 0
+        expect(off < 0.03 && abs(rest.lift) < 0.01, "character pose, \(title): its own rest pose leaves it as it is")
+        // Seen as if it faced +Z.
+        let turn: SIMD3<Float> = facingBack ? SIMD3(-1, 1, -1) : SIMD3(1, 1, 1)
+        func spot(_ posed: [simd_float4x4], _ part: String) -> SIMD3<Float> { posed[index[part]!].columns.3.xyz * turn }
+        let standing = poser.worlds(for: .standing).worlds
+        let arm = spot(standing, "handL") - spot(standing, "upperL")
+        expect(arm.y < -0.45 && arm.x > 0.02 && arm.x < 0.2 && arm.z > 0.01 && spot(standing, "handR").x < spot(standing, "upperR").x
+               && abs(spot(standing, "indexTipL").y - spot(standing, "handL").y) > 0.1, "character pose, \(title): standing hangs the arms down with the fingers following")
+        let sitting = poser.worlds(for: .sitting)
+        let thigh = spot(sitting.worlds, "shinL") - spot(sitting.worlds, "thighL"), shin = spot(sitting.worlds, "footL") - spot(sitting.worlds, "shinL")
+        expect(thigh.z > 0.35 && abs(thigh.y) < 0.05 && shin.y < -0.35 && abs(shin.z) < 0.08 && sitting.lift < -0.3
+               && abs(spot(sitting.worlds, "toeL").y + sitting.lift - 0.02) < 0.02, "character pose, \(title): sitting puts the knees forward, the shins down and the feet on the floor")
+        var leaning = MannequinPose.standing
+        leaning.spineForward = 30
+        let leant = poser.worlds(for: leaning).worlds
+        expect(spot(leant, "head").z > 0.15 && spot(leant, "upperL").z > 0.1 && abs(spot(leant, "thighL").z) < 0.001, "character pose, \(title): leaning moves the chest and head, not the legs")
+        let locals = poser.locals(for: .sitting).locals
+        var rebuilt = [simd_float4x4](repeating: matrix_identity_float4x4, count: nodes.count)
+        for i in 0..<nodes.count { rebuilt[i] = nodes[i].parent >= 0 ? rebuilt[nodes[i].parent] * locals[i] : locals[i] }
+        let drift = zip(rebuilt, sitting.worlds).map { simd_distance($0.columns.3.xyz, $1.columns.3.xyz) }.max() ?? 0
+        expect(drift < 0.001, "character pose, \(title): the bones' own turns add up to the pose")
+    }
+    expect(RigFinder.label("mixamorig:LeftForeArm") == RigFinder.Label(side: 1, key: "forearm") && RigFinder.label("Bip01 R Calf").key == "calf"
+           && RigFinder.label("lowerarm_twist_01_l").twist && RigFinder.label("ik_hand_r").skip && RigFinder.label("lShldrBend") == RigFinder.Label(side: 1, key: "shldr")
+           && RigFinder.label("rightHand") == RigFinder.Label(side: -1, key: "hand"), "bone names are read whatever the style")
+    var codedModel = PlacedModel(name: "Dancer", file: "models/x.fbx", transform: flatten(matrix_identity_float4x4))
+    codedModel.rigPose = .sitting
+    let codedBack = try? JSONDecoder().decode(PlacedModel.self, from: JSONEncoder().encode(codedModel))
+    expect(codedBack?.rigPose == .sitting && ReferenceSyncLibrary.syncName(modelFile: "models/\(UUID().uuidString).fbx") != nil, "a character's pose is saved with it, and its file syncs")
+}
+runRigTests()
+
 try MainActor.assumeIsolated { try runSyncTests() }
 runFrameTests()
 

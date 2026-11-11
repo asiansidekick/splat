@@ -38,14 +38,7 @@ enum LensCamera {
         guard session.canAddInput(input), session.canAddOutput(output) else { return nil }
         session.addInput(input)
         session.addOutput(output)
-        let angle: CGFloat
-        // The screen's turn: home side right is the sensor's own way up (0°).
-        switch await MainActor.run(body: { Screen.orientation }) {
-        case .landscapeRight: angle = 0
-        case .landscapeLeft: angle = 180
-        case .portraitUpsideDown: angle = 270
-        default: angle = 90
-        }
+        let angle = await MainActor.run(body: { LensCamera.angle })
         if let connection = output.connection(with: .video), connection.isVideoRotationAngleSupported(angle) {
             connection.videoRotationAngle = angle
         }
@@ -66,13 +59,134 @@ enum LensCamera {
         return data
     }
 
-    private final class PhotoCatcher: NSObject, AVCapturePhotoCaptureDelegate {
+    /// How far the picture turns to stand upright on the screen: home side right is the sensor's own way up (0°).
+    @MainActor static var angle: CGFloat {
+        switch Screen.orientation {
+        case .landscapeRight: return 0
+        case .landscapeLeft: return 180
+        case .portraitUpsideDown: return 270
+        default: return 90
+        }
+    }
+
+    fileprivate final class PhotoCatcher: NSObject, AVCapturePhotoCaptureDelegate {
         var done: ((Data?) -> Void)?
         func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
             if let error { Diagnostics.log("Lens photo failed: \(error)") }
             done?(photo.fileDataRepresentation())
             done = nil
         }
+    }
+}
+
+/// Phil, 2026-11-11: picking 0.5× or 3× must show the view through that lens, not just use it for the photo.
+/// The room tracking steps aside while another lens is live (it only runs on 1×) and comes back at 1×.
+@MainActor
+final class LensLive: ObservableObject {
+    @Published private(set) var lens: LensCamera.Lens?
+    @Published private(set) var session: AVCaptureSession?
+    private var output: AVCapturePhotoOutput?
+    private var observer: NSObjectProtocol?
+    /// Something else took the camera (the app went to the background, for one).
+    var onInterrupted: (() -> Void)?
+    /// One after another: a lens is fully stopped before the next starts.
+    private static let queue = DispatchQueue(label: "reset.lens.live", qos: .userInitiated)
+
+    /// False if the lens could not be opened.
+    func start(_ lens: LensCamera.Lens) -> Bool {
+        stop()
+        guard let device = AVCaptureDevice.default(lens.type, for: .video, position: .back),
+              let input = try? AVCaptureDeviceInput(device: device) else { return false }
+        let session = AVCaptureSession()
+        session.sessionPreset = .photo
+        let output = AVCapturePhotoOutput()
+        guard session.canAddInput(input), session.canAddOutput(output) else { return false }
+        session.addInput(input)
+        session.addOutput(output)
+        self.session = session
+        self.output = output
+        self.lens = lens
+        observer = NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                // The room camera letting go can interrupt it for a moment as it starts: only a lasting one counts.
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(1.5))
+                    guard let self, self.session === session, session.isInterrupted else { return }
+                    Diagnostics.log("Lens view interrupted")
+                    self.onInterrupted?()
+                }
+            }
+        }
+        Self.queue.async { session.startRunning() }
+        return true
+    }
+
+    /// Stops the lens; `then` runs once the camera is free again.
+    func stop(then: (() -> Void)? = nil) {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+        let old = session
+        session = nil
+        output = nil
+        lens = nil
+        guard let old else {
+            then?()
+            return
+        }
+        Self.queue.async {
+            old.stopRunning()
+            DispatchQueue.main.async { then?() }
+        }
+    }
+
+    /// A photo through the live lens, upright for how the phone is held.
+    func photo() async -> Data? {
+        guard let output, session != nil else { return nil }
+        let angle = LensCamera.angle
+        if let connection = output.connection(with: .video), connection.isVideoRotationAngleSupported(angle) {
+            connection.videoRotationAngle = angle
+        }
+        let catcher = LensCamera.PhotoCatcher()
+        return await withCheckedContinuation { (done: CheckedContinuation<Data?, Never>) in
+            catcher.done = { done.resume(returning: $0) }
+            output.capturePhoto(with: AVCapturePhotoSettings(), delegate: catcher)
+        }
+    }
+}
+
+/// The live picture from another lens, filling the screen as the room camera does.
+struct LensPreview: UIViewRepresentable {
+    let session: AVCaptureSession
+
+    final class Holder: UIView {
+        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+        var preview: AVCaptureVideoPreviewLayer? { layer as? AVCaptureVideoPreviewLayer }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            turn()
+        }
+
+        func turn() {
+            let angle = LensCamera.angle
+            if let connection = preview?.connection, connection.isVideoRotationAngleSupported(angle), connection.videoRotationAngle != angle {
+                connection.videoRotationAngle = angle
+            }
+        }
+    }
+
+    func makeUIView(context: Context) -> Holder {
+        let view = Holder()
+        view.backgroundColor = .black
+        view.preview?.videoGravity = .resizeAspectFill
+        view.preview?.session = session
+        view.turn()
+        return view
+    }
+
+    func updateUIView(_ view: Holder, context: Context) {
+        if view.preview?.session !== session { view.preview?.session = session }
+        view.turn()
     }
 }
 
