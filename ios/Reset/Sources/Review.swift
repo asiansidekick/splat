@@ -393,7 +393,9 @@ struct FramePage: View {
                         baseZoom = zoom
                         basePan = pan
                         Task { try? await Task.sleep(for: .milliseconds(250)); pinching = false }
-                    }
+                    },
+                // Phil, 2026-11-11: while placing models a pinch is for the model. The photo keeps the zoom it has.
+                including: editingModels ? .none : .all
             )
             .gesture(
                 DragGesture(minimumDistance: 0)

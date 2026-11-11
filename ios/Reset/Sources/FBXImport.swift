@@ -22,6 +22,18 @@ enum FBXImport {
         String(path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last ?? Substring(path))
     }
 
+    /// Pictures over 2048 across are made smaller: a few 4K ones would fill the phone's memory.
+    private static func sized(_ image: UIImage?) -> UIImage? {
+        guard let image else { return nil }
+        let longest = max(image.size.width * image.scale, image.size.height * image.scale)
+        guard longest > 2048 else { return image }
+        let factor = 2048 / longest
+        let size = CGSize(width: (image.size.width * image.scale * factor).rounded(), height: (image.size.height * image.scale * factor).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+    }
+
     private static func floats<T>(_ tuple: T) -> [Float] {
         withUnsafeBytes(of: tuple) { Array($0.bindMemory(to: Float.self)) }
     }
@@ -124,10 +136,10 @@ enum FBXImport {
                     let embedded: UnsafeRawPointer? = part.texture_data
                     if let data = embedded, part.texture_size > 0 {
                         let cacheKey = "embedded-\(UInt(bitPattern: data))"
-                        picture = pictures[cacheKey] ?? UIImage(data: Data(bytes: data, count: part.texture_size))
+                        picture = pictures[cacheKey] ?? sized(UIImage(data: Data(bytes: data, count: part.texture_size)))
                         pictures[cacheKey] = picture
                     } else if !key.isEmpty {
-                        picture = pictures[key] ?? UIImage(contentsOfFile: textures.appendingPathComponent(key).path)
+                        picture = pictures[key] ?? sized(UIImage(contentsOfFile: textures.appendingPathComponent(key).path))
                         pictures[key] = picture
                     }
                 }

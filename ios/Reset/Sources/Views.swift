@@ -1706,7 +1706,10 @@ struct CaptureStage: View {
                 LensPreview(session: session).ignoresSafeArea().allowsHitTesting(false)
             }
         }
-        .onReceive(recorder.placer.$selectedModel) { editingModel = $0 != nil }
+        .onReceive(recorder.placer.$selectedModel) { picked in
+            editingModel = picked != nil
+            if picked != nil, lens != 1 { lens = 1 }
+        }
         .onChange(of: lens) { _, _ in syncLens() }
         .onChange(of: mode) { _, _ in syncLens() }
         .onChange(of: recorder.capturing) { _, _ in syncLens() }
@@ -1794,7 +1797,7 @@ struct CaptureStage: View {
                 if mode == .snapshot, !recorder.capturing, !editingModel {
                     // On its side the lenses stand in a column beside the shutter, clear of the mode words.
                     if verticalSize == .compact {
-                        LensChooser(zoom: $lens, vertical: true, register: { name, frame, action in tapCatcher.targets[name] = (frame, action) })
+                        LensChooser(zoom: $lens, vertical: true)
                             .offset(x: leftHanded ? 52 : -52).disabled(lensBusy)
                     } else {
                         // Upright they sit above the mode words, not on them.

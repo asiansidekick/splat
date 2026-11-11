@@ -195,8 +195,6 @@ struct LensPreview: UIViewRepresentable {
 struct LensChooser: View {
     @Binding var zoom: Double
     var vertical = false
-    /// Hands each button to the window's tap watcher, as the shutter is (taps on its side can go astray otherwise).
-    var register: ((String, CGRect, @escaping () -> Void) -> Void)? = nil
 
     var body: some View {
         if LensCamera.lenses.count > 1 {
@@ -214,7 +212,9 @@ struct LensChooser: View {
                             .foregroundStyle(zoom == lens.zoom ? Theme.onAccent : Color.white)
                             .fixedSize()
                     }
-                    .modifier(WindowFrame { frame in register?("Lens \(lens.label)", frame, { zoom = lens.zoom }) })
+                    // On its side the window's tap watcher has each button too (taps there can go astray), and lets go
+                    // of it when the buttons leave: left behind, its spot kept switching lenses under the model tools.
+                    .caughtTap("Lens \(lens.label)", enabled: vertical) { zoom = lens.zoom }
                 }
             }
         }
