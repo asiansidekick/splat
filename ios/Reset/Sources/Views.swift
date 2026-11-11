@@ -1694,7 +1694,26 @@ struct CaptureStage: View {
         .foregroundStyle(.white)
     }
 
+    /// The stage with the live view of another lens behind its controls (split from `stage` for the compiler's sake).
     var body: some View {
+        stage
+        .background {
+            if let session = lensLive.session {
+                LensPreview(session: session).ignoresSafeArea().allowsHitTesting(false)
+            }
+        }
+        .onChange(of: lens) { _, _ in syncLens() }
+        .onChange(of: mode) { _, _ in syncLens() }
+        .onChange(of: recorder.capturing) { _, _ in syncLens() }
+        .onChange(of: recorder.pendingSave) { _, _ in syncLens() }
+        .onChange(of: recorder.saving) { _, _ in syncLens() }
+        // Measuring and placing models need the room camera: back to 1× for them.
+        .onReceive(recorder.measurer.$active) { on in if on, lensLive.lens != nil { lens = 1 } }
+        .onChange(of: choosingModel) { _, on in if on, lens != 1 { lens = 1 } }
+        .onReceive(NotificationCenter.default.publisher(for: SurfaceTest.willStart)) { _ in dropLens() }
+    }
+
+    private var stage: some View {
         CameraLayout(evenRow: true) {
             // Phil, 2026-11-10: nothing clipped. The full row when it fits, then tighter, then LiDAR as its lit icon only.
             ViewThatFits(in: .horizontal) {
@@ -1822,20 +1841,6 @@ struct CaptureStage: View {
             recorder.prepare(useLiDAR: useLiDAR)
         }
         .onAppear { tapCatcher.install() }
-        .background {
-            if let session = lensLive.session {
-                LensPreview(session: session).ignoresSafeArea().allowsHitTesting(false)
-            }
-        }
-        .onChange(of: lens) { _, _ in syncLens() }
-        .onChange(of: mode) { _, _ in syncLens() }
-        .onChange(of: recorder.capturing) { _, _ in syncLens() }
-        .onChange(of: recorder.pendingSave) { _, _ in syncLens() }
-        .onChange(of: recorder.saving) { _, _ in syncLens() }
-        // Measuring and placing models need the room camera: back to 1× for them.
-        .onReceive(recorder.measurer.$active) { on in if on, lensLive.lens != nil { lens = 1 } }
-        .onChange(of: choosingModel) { _, on in if on, lens != 1 { lens = 1 } }
-        .onReceive(NotificationCenter.default.publisher(for: SurfaceTest.willStart)) { _ in dropLens() }
         .onDisappear {
             pausedTracking = nil
             lensLive.stop()

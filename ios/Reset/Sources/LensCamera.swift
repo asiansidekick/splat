@@ -109,11 +109,12 @@ final class LensLive: ObservableObject {
         observer = NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 // The room camera letting go can interrupt it for a moment as it starts: only a lasting one counts.
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .seconds(1.5))
-                    guard let self, self.session === session, session.isInterrupted else { return }
-                    Diagnostics.log("Lens view interrupted")
-                    self.onInterrupted?()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self, self.session === session, session.isInterrupted else { return }
+                        Diagnostics.log("Lens view interrupted")
+                        self.onInterrupted?()
+                    }
                 }
             }
         }
