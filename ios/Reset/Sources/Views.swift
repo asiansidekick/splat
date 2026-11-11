@@ -666,6 +666,8 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
             ZStack {
                 VStack(spacing: 0) {
                     top()
+                        // A top row that is too wide must not widen the whole screen's layout.
+                        .frame(minWidth: 0, maxWidth: .infinity)
                         .frame(height: Self.topHeight)
                         .background(shade(.bottom, .top).ignoresSafeArea(edges: .top))
                     Spacer(minLength: 0)
@@ -1634,6 +1636,8 @@ struct CaptureStage: View {
     @StateObject private var lensLive = LensLive()
     /// The room tracking as it was set, while it waits for the lens to go back to 1×.
     @State private var pausedTracking: ARConfiguration?
+    /// A model or cut-out is picked: its tools have the edges, so the lens buttons step aside (Phil, 2026-11-11).
+    @State private var editingModel = false
     @AppStorage("useLiDAR") private var useLiDAR = true
     @AppStorage("leftHanded") private var leftHanded = false
     @Environment(\.verticalSizeClass) private var verticalSize
@@ -1654,9 +1658,9 @@ struct CaptureStage: View {
         ScreenshotMode.shared.viewing = true
     }
 
-    private func topBar(lidarWord: Bool, spacing: CGFloat) -> some View {
+    private func topBar(lidarWord: Bool, spacing: CGFloat, nextWord: Bool = true) -> some View {
         HStack(spacing: spacing) {
-            TopPill(text: "Next: \(slate.isEmpty ? "no slate" : slate)", systemImage: "pencil") {
+            TopPill(text: (nextWord ? "Next: " : "") + (slate.isEmpty ? "no slate" : slate), systemImage: "pencil") {
                 TapGate.run("Slate") { open(.nextSlate) }
             }
             .disabled(recorder.capturing)
@@ -1702,6 +1706,7 @@ struct CaptureStage: View {
                 LensPreview(session: session).ignoresSafeArea().allowsHitTesting(false)
             }
         }
+        .onReceive(recorder.placer.$selectedModel) { editingModel = $0 != nil }
         .onChange(of: lens) { _, _ in syncLens() }
         .onChange(of: mode) { _, _ in syncLens() }
         .onChange(of: recorder.capturing) { _, _ in syncLens() }
@@ -1720,6 +1725,9 @@ struct CaptureStage: View {
                 topBar(lidarWord: true, spacing: 10)
                 topBar(lidarWord: true, spacing: 6)
                 topBar(lidarWord: false, spacing: 6)
+                // Phil's 1275 screenshot (Tk 66, upright): still too wide, Help ran off the edge and pushed
+                // everything below it sideways. The slate without the word "Next" is the last resort.
+                topBar(lidarWord: false, spacing: 4, nextWord: false)
             }
         } preview: {
             ZStack {
@@ -1783,13 +1791,14 @@ struct CaptureStage: View {
             }
             .modifier(WindowFrame { frame in tapCatcher.targets["Capture shutter"] = (frame, { shutterOnce() }) })
             .overlay(alignment: verticalSize == .compact ? (leftHanded ? .trailing : .leading) : .top) {
-                if mode == .snapshot, !recorder.capturing {
+                if mode == .snapshot, !recorder.capturing, !editingModel {
                     // On its side the lenses stand in a column beside the shutter, clear of the mode words.
                     if verticalSize == .compact {
                         LensChooser(zoom: $lens, vertical: true, register: { name, frame, action in tapCatcher.targets[name] = (frame, action) })
                             .offset(x: leftHanded ? 52 : -52).disabled(lensBusy)
                     } else {
-                        LensChooser(zoom: $lens).offset(y: -44).disabled(lensBusy)
+                        // Upright they sit above the mode words, not on them.
+                        LensChooser(zoom: $lens).offset(y: -66).disabled(lensBusy)
                     }
                 }
             }

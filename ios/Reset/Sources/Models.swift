@@ -960,7 +960,8 @@ struct ModelOverlay: View {
                 let cutout = placer.selectedIsCutout
                 HStack(alignment: .bottom, spacing: 0) {
                     VStack(spacing: 0) {
-                        ForEach(ModelPlacer.CutoutJob.allCases.filter { cutout ? $0 != .lift : $0 != .tilt }, id: \.self) { job in
+                        // Phil, 2026-11-11: Lift for cut-outs too (only a flat cut-out tips, so Tilt stays theirs alone).
+                        ForEach(ModelPlacer.CutoutJob.allCases.filter { cutout || $0 != .tilt }, id: \.self) { job in
                             CutoutTool(word: job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
                         }
                         // Carry walks it along with the live camera, so not over a saved frame (Review).
@@ -974,6 +975,10 @@ struct ModelOverlay: View {
                             CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
                         }
                     }
+                    // Phil's 1275 screenshot: "Place here" and "Straighten" ran off the screen's edge. The columns keep
+                    // the width of their longest word whatever sits between them.
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                     Spacer(minLength: 0)
                     if showsCutoutHelp || placer.carrying {
                         MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText)
@@ -992,6 +997,8 @@ struct ModelOverlay: View {
                         CutoutTool(word: "Delete", symbol: "trash", tint: .red) { placer.deleteSelectedModel() }
                         CutoutTool(word: "Done", symbol: "checkmark") { placer.selectedModel = nil }
                     }
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                 }
                 .frame(maxWidth: .infinity)
                 .task(id: "\(placer.selectedModel?.uuidString ?? "")-\(placer.cutoutJob.rawValue)") {
