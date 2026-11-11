@@ -105,19 +105,24 @@ struct TorchButton: View {
                 .foregroundStyle(torch.on ? Theme.accent : Color.white)
                 .frame(minWidth: 28, minHeight: 28)
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    Haptics.tap()
-                    torch.toggle()
-                }
-                .onLongPressGesture {
-                    Haptics.tap()
-                    if !torch.on { torch.set(on: true) }
-                    torch.showDial()
-                }
+                .onTapGesture { TapGate.run("Torch") { tap() } }
+                .onLongPressGesture { TapGate.run("hold Torch") { hold() } }
+                .caughtTap("Torch", hold: { hold() }) { tap() }
                 .holdHint("torchDial", "Hold: brightness", delay: 3)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityLabel(torch.on ? "Torch off" : "Torch on")
         }
+    }
+
+    private func tap() {
+        Haptics.tap()
+        torch.toggle()
+    }
+
+    private func hold() {
+        Haptics.tap()
+        if !torch.on { torch.set(on: true) }
+        torch.showDial()
     }
 }
 

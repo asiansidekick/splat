@@ -887,7 +887,8 @@ struct ModelOverlay: View {
                     .allowsHitTesting(false)
             }
             if placer.selectedModelName == nil, !placer.models.isEmpty {
-                Button("Find model") { placer.bringToView() }
+                Button("Find model") { TapGate.run("Find model") { placer.bringToView() } }
+                    .caughtTap("Find model") { placer.bringToView() }
                     .buttonStyle(.bordered)
                     .font(Theme.headline)
                     .controlSize(.small)

@@ -64,8 +64,10 @@ struct LayerChips: View {
             ForEach($layers) { $layer in
                 let reference = references.first { $0.id == layer.reference }
                 Button {
-                    layer.shown.toggle()
-                    Haptics.tap()
+                    TapGate.run("Layer \(layer.id)") {
+                        layer.shown.toggle()
+                        Haptics.tap()
+                    }
                 } label: {
                     VStack(spacing: 2) {
                         ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 40)
@@ -79,6 +81,10 @@ struct LayerChips: View {
                     }
                 }
                 .buttonStyle(PressScale())
+                .caughtTap("Layer \(layer.id)") {
+                    layer.shown.toggle()
+                    Haptics.tap()
+                }
                 .contextMenu {
                     Text(reference.map { $0.slate.isEmpty ? "Layer" : $0.slate } ?? "Layer")
                     ForEach([0.25, 0.5, 0.75, 1.0], id: \.self) { value in

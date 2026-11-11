@@ -99,10 +99,16 @@ enum Mannequin {
             s.addChildNode(shape(SCNCapsule(capRadius: CGFloat(d.waist), height: CGFloat(d.torso * 0.5)), at: SIMD3(0, d.torso * 0.3, 0),
                                  scale: SIMD3(1.05, 1, 0.85)))
             s.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.torso * 0.08, -0.003 * k), scale: SIMD3(d.hips * 0.4, d.torso * 0.16, 0.085 * k)))
-            s.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.torso * 0.7, 0), scale: SIMD3(d.shoulders * 0.43, d.torso * 0.29, d.chestDepth * 0.85)))
+            // Phil's 1274 recording: a round chest with two round busts read as a face. A shoulder line across the
+            // top, a narrower rib cage and a smaller, lower, flatter bust set into it.
+            s.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.torso * 0.68, 0), scale: SIMD3(d.shoulders * 0.38, d.torso * 0.26, d.chestDepth * 0.82)))
+            let collar = SCNCapsule(capRadius: CGFloat(0.042 * k), height: CGFloat(d.shoulders * 0.95))
+            let line = shape(collar, at: SIMD3(0, d.torso * 0.9, -0.005 * k))
+            line.simdEulerAngles = SIMD3(0, 0, .pi / 2)
+            s.addChildNode(line)
             for side: Float in [-1, 1] {
-                s.addChildNode(shape(SCNSphere(radius: CGFloat(d.bust)), at: SIMD3(side * d.shoulders * 0.15, d.torso * 0.63, d.chestDepth * 0.5),
-                                     scale: SIMD3(1, 0.92, 0.85)))
+                s.addChildNode(shape(SCNSphere(radius: CGFloat(d.bust * 0.85)), at: SIMD3(side * d.shoulders * 0.13, d.torso * 0.6, d.chestDepth * 0.45),
+                                     scale: SIMD3(1.05, 0.85, 0.7)))
             }
         } else {
             s.addChildNode(shape(SCNCapsule(capRadius: CGFloat(d.waist), height: CGFloat(d.torso * 0.55)), at: SIMD3(0, d.torso * 0.35, 0),

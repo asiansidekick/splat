@@ -156,7 +156,7 @@ struct CameraHome: View {
         }
         .overlay(alignment: .topLeading) {
             if let id = justSaved, selectedID == nil, !showingRecent {
-                Button { useAsOverlay(id, from: "the button after a snapshot") } label: {
+                Button { TapGate.run("Use as overlay") { useAsOverlay(id, from: "the button after a snapshot") } } label: {
                     Label("Use as overlay", systemImage: "square.on.square")
                         .font(Theme.subheadline.bold())
                         .padding(.horizontal, 14)
@@ -165,6 +165,7 @@ struct CameraHome: View {
                         .foregroundStyle(.black)
                         .fixedSize()
                 }
+                .caughtTap("Use as overlay") { useAsOverlay(id, from: "the button after a snapshot") }
                 .padding(.leading, 16)
                 .padding(.top, 166)
                 .transition(.opacity)
@@ -185,7 +186,7 @@ struct CameraHome: View {
             if lastPhoto != nil {
                 HStack(spacing: 8) {
                     Button {
-                        if let lastPhoto { editing = EditTarget(photo: lastPhoto) }
+                        TapGate.run("Edit last photo") { editLastPhoto() }
                     } label: {
                         Label("Edit", systemImage: "wand.and.stars")
                             .font(Theme.subheadline.bold())
@@ -194,8 +195,9 @@ struct CameraHome: View {
                             .background(Color.white, in: Capsule())
                             .foregroundStyle(.black)
                     }
+                    .caughtTap("Edit last photo") { editLastPhoto() }
                     Button {
-                        if let lastPhoto { sketching = SketchPhoto(image: lastPhoto) }
+                        TapGate.run("Sketch last photo") { sketchLastPhoto() }
                     } label: {
                         Label("Sketch", systemImage: "pencil.tip")
                             .font(Theme.subheadline.bold())
@@ -204,9 +206,9 @@ struct CameraHome: View {
                             .background(Color.white, in: Capsule())
                             .foregroundStyle(.black)
                     }
+                    .caughtTap("Sketch last photo") { sketchLastPhoto() }
                     Button {
-                        sharingPhoto = lastPhoto
-                        panel = .sharePhoto
+                        TapGate.run("Share last photo") { shareLastPhoto() }
                     } label: {
                         Label("Share", systemImage: "square.and.arrow.up")
                             .font(Theme.subheadline.bold())
@@ -215,6 +217,7 @@ struct CameraHome: View {
                             .background(Theme.accent, in: Capsule())
                             .foregroundStyle(.black)
                     }
+                    .caughtTap("Share last photo") { shareLastPhoto() }
                 }
                 .padding(.trailing, 16)
                 .padding(.top, 112)
@@ -262,17 +265,34 @@ struct CameraHome: View {
         }
     }
 
+    private func editLastPhoto() { if let lastPhoto { editing = EditTarget(photo: lastPhoto) } }
+    private func sketchLastPhoto() { if let lastPhoto { sketching = SketchPhoto(image: lastPhoto) } }
+    private func shareLastPhoto() {
+        sharingPhoto = lastPhoto
+        panel = .sharePhoto
+    }
+
+    /// Just recorded: one tap loads it, the next step anyone wants. Otherwise the gallery. Hold for all references.
+    private func openReferences() {
+        guard !CaptureStage.capturing else { return }
+        Haptics.tap()
+        if nudgeLoad, let newest = references.first {
+            endNudge()
+            selectedID = newest.id
+        } else {
+            panel = .gallery
+        }
+    }
+
+    private func toggleRecent() {
+        Haptics.tap()
+        withAnimation(.snappy) { showingRecent.toggle() }
+    }
+
     /// The newest reference, bottom left like the last photo in the Camera app; opens the gallery.
     private var thumbnail: AnyView {
         AnyView(Button {
-            Haptics.tap()
-            // Just recorded: one tap loads it, the next step anyone wants. Hold for all references.
-            if nudgeLoad, let newest = references.first {
-                endNudge()
-                selectedID = newest.id
-            } else {
-                panel = .gallery
-            }
+            TapGate.run("Reference") { openReferences() }
         } label: {
             // The title hangs under the thumbnail so it stays level with the shutter.
             ReferenceThumbnail(reference: references.first, thumbnails: thumbnails, size: 50)
@@ -294,8 +314,7 @@ struct CameraHome: View {
                 // Upright it sits in the mode line at the left edge; on its side, under "Reference".
                 let sideways = homeVerticalSize == .compact
                 Button {
-                    Haptics.tap()
-                    withAnimation(.snappy) { showingRecent.toggle() }
+                    TapGate.run("Recent") { toggleRecent() }
                 } label: {
                     Text("RECENT")
                     .font(Theme.font(size: 13, weight: .semibold))
@@ -305,8 +324,10 @@ struct CameraHome: View {
                     .fixedSize()
                 }
                 .offset(x: sideways ? 0 : -10, y: sideways ? 80 : -40)
+                .caughtTap("Recent") { toggleRecent() }
             }
         }
+        .caughtTap("Reference") { openReferences() }
         .holdHint("captureThumb", "Hold: options", above: true, delay: 4)
         .contextMenu {
             // Hold the thumbnail for the newest reference's options, the same ones the gallery has.
@@ -763,13 +784,14 @@ struct ModePicker<Mode: Hashable>: View {
     let label: (Mode) -> String
     @Binding var selection: Mode
     var vertical = false
+    @Environment(\.isEnabled) private var enabled
 
     var body: some View {
         let layout = vertical ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 24))
         layout {
             ForEach(modes, id: \.self) { mode in
                 Button {
-                    choose(mode)
+                    TapGate.run("Mode " + label(mode)) { choose(mode) }
                 } label: {
                     Text(label(mode))
                         .font(Theme.footnote.weight(.semibold))
@@ -777,6 +799,7 @@ struct ModePicker<Mode: Hashable>: View {
                         .minimumScaleFactor(0.7)
                         .foregroundStyle(selection == mode ? Theme.accent : Color.white)
                 }
+                .caughtTap("Mode " + label(mode), enabled: enabled) { choose(mode) }
             }
         }
         .frame(minHeight: 22)
@@ -853,7 +876,10 @@ struct ModelsBesideScreenshot: View {
     @Environment(\.chromeVertical) private var vertical
 
     var body: some View {
-        if !vertical { SideButton(title: "3D models", systemImage: "cube", action: action) }
+        if !vertical {
+            SideButton(title: "3D models", systemImage: "cube") { TapGate.run("3D models", action) }
+                .caughtTap("3D models", perform: action)
+        }
     }
 }
 
@@ -867,7 +893,8 @@ struct ModelsEdgeButton: View {
 
     var body: some View {
         if !measurer.active, placer.selectedModel == nil {
-            SideButton(title: "3D models", systemImage: "cube", action: action)
+            SideButton(title: "3D models", systemImage: "cube") { TapGate.run("3D models", action) }
+                .caughtTap("3D models", perform: action)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
                 .hiddenInScreenshots()
@@ -972,12 +999,13 @@ private struct RecentStrip: View {
                 Text("Tap one to use as the overlay")
                     .font(Theme.subheadline.bold())
                 Spacer()
-                Button("Close", action: close).font(Theme.subheadline)
+                Button("Close") { TapGate.run("Recent close", close) }.font(Theme.subheadline)
+                    .caughtTap("Recent close", perform: close)
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(references) { reference in
-                        Button { pick(reference.id) } label: {
+                        Button { TapGate.run("Recent \(reference.id)") { pick(reference.id) } } label: {
                             VStack(spacing: 4) {
                                 ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 64)
                                 Text(reference.slate.isEmpty ? "Reference" : reference.slate)
@@ -987,6 +1015,7 @@ private struct RecentStrip: View {
                             }
                         }
                         .buttonStyle(PressScale())
+                        .caughtTap("Recent \(reference.id)") { pick(reference.id) }
                     }
                 }
             }
@@ -1586,6 +1615,8 @@ struct CaptureStage: View {
     @State private var tapCatcher = WindowTapCatcher()
     @State private var lastShutter = Date.distantPast
     @StateObject private var recorder = Recorder()
+    /// While recording, the reference thumbnail stays shut (it is disabled; this stops the window watcher too).
+    @MainActor static var capturing = false
     let scene: String
     var shot = ""
     let setup: String
@@ -1614,21 +1645,28 @@ struct CaptureStage: View {
 
     private var slate: String { Reference.label(scene: scene, setup: setup, shot: shot) }
 
+    private func startCleanView() {
+        Diagnostics.log("Clean view started")
+        ScreenshotMode.shared.viewing = true
+    }
+
     private func topBar(lidarWord: Bool, spacing: CGFloat) -> some View {
         HStack(spacing: spacing) {
             TopPill(text: "Next: \(slate.isEmpty ? "no slate" : slate)", systemImage: "pencil") {
-                open(.nextSlate)
+                TapGate.run("Slate") { open(.nextSlate) }
             }
             .disabled(recorder.capturing)
+            .caughtTap("Slate", enabled: !recorder.capturing) { open(.nextSlate) }
             // A bump when the take number moves on, so the change is noticed.
             .scaleEffect(justSaved ? 1.15 : 1, anchor: .leading)
             .animation(.spring(duration: 0.35, bounce: 0.5), value: justSaved)
             Spacer()
             if Recorder.lidarAvailable {
                 TopPill(text: lidarWord ? "LiDAR" : "", systemImage: "dot.circle.viewfinder", highlighted: useLiDAR) {
-                    useLiDAR.toggle()
+                    TapGate.run("LiDAR") { useLiDAR.toggle() }
                 }
                 .disabled(recorder.capturing)
+                .caughtTap("LiDAR", enabled: !recorder.capturing) { useLiDAR.toggle() }
                 .accessibilityLabel(useLiDAR ? "LiDAR on" : "LiDAR off")
             }
             TorchButton()
@@ -1640,12 +1678,13 @@ struct CaptureStage: View {
                     .accessibilityLabel("Scan")
             }
             Button {
-                Diagnostics.log("Clean view started")
-                ScreenshotMode.shared.viewing = true
+                TapGate.run("Hide controls") { startCleanView() }
             } label: { Image(systemName: "eye.slash").font(Theme.title3) }
                 .accessibilityLabel("Hide controls")
-            Button { open(.help) } label: { Image(systemName: "questionmark.circle").font(Theme.title3) }
+                .caughtTap("Hide controls") { startCleanView() }
+            Button { TapGate.run("Help") { open(.help) } } label: { Image(systemName: "questionmark.circle").font(Theme.title3) }
                 .accessibilityLabel("Help")
+                .caughtTap("Help") { open(.help) }
         }
         .padding(.horizontal, 12)
         .foregroundStyle(.white)
@@ -1713,6 +1752,8 @@ struct CaptureStage: View {
                 .opacity(recorder.capturing ? 0.4 : 1)
         } leading: {
             thumbnail.disabled(recorder.capturing)
+                .onAppear { Self.capturing = recorder.capturing }
+                .onChange(of: recorder.capturing) { _, value in Self.capturing = value }
         } shutter: {
             ShutterButton(style: shutterStyle, busy: recorder.pendingSave || recorder.saving) {
                 shutterOnce()
@@ -1951,6 +1992,9 @@ struct ResetStage: View {
     @State private var layers: [OverlayLayer] = []
     @State private var layerPictures: [UUID: (photo: UIImage, mask: UIImage?)] = [:]
     @State private var addingLayer = false
+    /// Phil, 2026-11-11: the ••• menu did nothing on its side. It is a sheet of plain buttons now, which
+    /// opens from the window watcher too.
+    @State private var showingMore = false
     /// While swiping the ghost strength, the cursor shows.
     @State private var swipingStrength = false
     /// While swiping, how far towards now the view is, for the THEN and NOW tags; nil hides them.
@@ -2101,23 +2145,23 @@ struct ResetStage: View {
 
     private var topBar: some View {
         HStack(spacing: 12) {
-            Button { close() } label: { Image(systemName: "xmark").font(Theme.title3) }
+            Button { TapGate.run("Back to recording") { close() } } label: { Image(systemName: "xmark").font(Theme.title3) }
                 .accessibilityLabel("Back to recording")
+                .caughtTap("Back to recording") { close() }
             // This reference: tap to hide or show the ghost, press and hold for all references.
             ReferenceThumbnail(reference: reference, thumbnails: thumbnails, size: 34, selected: ghostShown)
                 .opacity(ghostShown ? 1 : 0.5)
-                .onTapGesture {
-                    Haptics.tap()
-                    ghostShown.toggle()
-                }
-                .onLongPressGesture { open(.gallery) }
+                .onTapGesture { TapGate.run("Ghost") { toggleGhost() } }
+                .onLongPressGesture { TapGate.run("hold Ghost") { open(.gallery) } }
+                .caughtTap("Ghost", hold: { open(.gallery) }) { toggleGhost() }
                 .holdHint("resetThumb", "Hold: all references", delay: 2.5)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityLabel(ghostShown ? "Hide the ghost" : "Show the ghost")
             TopPill(text: reference.slate.isEmpty ? "Take \(reference.nextTakeNumber)" : "\(reference.slate) · T\(reference.nextTakeNumber)",
                     short: "Take \(reference.nextTakeNumber)") {
-                open(.takeLog(reference.id))
+                TapGate.run("Take pill") { open(.takeLog(reference.id)) }
             }
+            .caughtTap("Take pill") { open(.takeLog(reference.id)) }
             Spacer(minLength: 0)
             if restorer.paused {
                 // Small, in the top bar, so it covers none of the picture.
@@ -2126,25 +2170,27 @@ struct ResetStage: View {
                     .foregroundStyle(Color.orange)
                     .accessibilityLabel("Paused")
                 TopPill(text: wipe ? "Wipe" : "Fade", systemImage: wipe ? "rectangle.split.2x1" : "square.on.square") {
-                    Haptics.tap()
-                    wipe.toggle()
+                    TapGate.run("Fade or wipe") { toggleWipe() }
                 }
                 .accessibilityLabel(wipe ? "Wiping. Switch to fade" : "Fading. Switch to wipe")
+                .caughtTap("Fade or wipe") { toggleWipe() }
             } else {
                 if restorer.usesDepth {
-                    Button { restorer.showDifferences.toggle() } label: {
+                    Button { TapGate.run("Changes") { restorer.showDifferences.toggle() } } label: {
                         Image(systemName: "square.2.layers.3d").font(Theme.title3)
                             .foregroundStyle(restorer.showDifferences ? Theme.accent : Color.white)
                     }
                     .accessibilityLabel(restorer.showDifferences ? "Hide LiDAR changes" : "Show LiDAR changes")
+                    .caughtTap("Changes") { restorer.showDifferences.toggle() }
                 }
                 if !reference.photoOnly {
-                    Button { restorer.toggleLock() } label: {
+                    Button { TapGate.run("Hold view") { restorer.toggleLock() } } label: {
                         Image(systemName: restorer.lockedKeyframe == nil ? "lock.open" : "lock.fill")
                             .font(Theme.title3)
                             .foregroundStyle(restorer.lockedKeyframe == nil ? Color.white : Theme.accent)
                     }
                     .accessibilityLabel(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow the camera")
+                    .caughtTap("Hold view") { restorer.toggleLock() }
                 }
             }
             if !restorer.paused {
@@ -2152,65 +2198,78 @@ struct ResetStage: View {
                 MeasureToggle(measurer: restorer.measurer)
                     .disabled(restorer.status != .ready)
             }
-            Menu {
-                if reference.photoOnly {
-                    Button {
-                        photoPose.flipped.toggle()
-                        photoPose.save(reference.id)
-                    } label: { Label("Flip photo", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right") }
-                    if !photoPose.isStraight {
-                        Button {
-                            photoPose = PhotoPose()
-                            photoPose.save(reference.id)
-                        } label: { Label("Put photo back", systemImage: "arrow.uturn.backward") }
-                    }
-                    Button {
-                        if let photo = restorer.startPhoto { editingPhoto = EditTarget(photo: photo, reference: reference) }
-                    } label: { Label("Edit photo (select, show only part)", systemImage: "wand.and.stars") }
-                    if ghostMask != nil {
-                        Button {
-                            GhostMask.remove(reference.id)
-                            ghostMask = nil
-                        } label: { Label("Show the whole photo", systemImage: "photo") }
-                    }
-                }
-                Button { open(.gallery) } label: { Label("References", systemImage: "photo.on.rectangle") }
-                if !others.isEmpty {
-                    Button { addingLayer = true } label: { Label("Add a layer", systemImage: "square.3.layers.3d") }
-                }
-                Button { importingModel = true } label: { Label("Add 3D model", systemImage: "cube") }
-                    .disabled(restorer.status != .ready)
-                Button { makingCutout = true } label: { Label("Add cut-out from photos", systemImage: "figure.stand") }
-                    .disabled(restorer.status != .ready)
-                Button { choosingExample = true } label: { Label("Add an example (people, set pieces)", systemImage: "figure.stand.dress") }
-                    .disabled(restorer.status != .ready)
-                if ExploreView.offered {
-                    Button { open(.explore(reference.id)) } label: { Label("Explore in 3D", systemImage: "view.3d") }
-                }
-                Button { open(.review(reference.id)) } label: { Label("Review frames", systemImage: "rectangle.stack") }
-                Button { open(.compare(reference.id)) } label: { Label("Compare", systemImage: "rectangle.split.2x1") }
-                Button { open(.takeLog(reference.id)) } label: { Label("Take log", systemImage: "list.number") }
-                Button { open(.pdf(reference.id)) } label: { Label("Share PDF report", systemImage: "square.and.arrow.up") }
-                Button { open(.slate(reference.id)) } label: { Label("Edit slate", systemImage: "pencil") }
-                Button { open(.sync) } label: { Label("Sync phones", systemImage: "arrow.triangle.2.circlepath") }
-                Toggle(isOn: $leftHanded) { Label("Left-handed", systemImage: "hand.raised") }
-                Button {
-                    HintStore.resetAll()
-                    showToast("Tips will show again")
-                } label: { Label("Show tips again", systemImage: "lightbulb") }
-                Button {
-                    Diagnostics.log("Clean view started")
-                    ScreenshotMode.shared.viewing = true
-                } label: { Label("Hide controls", systemImage: "eye.slash") }
-                Button { open(.help) } label: { Label("Help", systemImage: "questionmark.circle") }
-            } label: {
+            Button { TapGate.run("More") { showingMore = true } } label: {
                 Image(systemName: "ellipsis.circle").font(Theme.title3)
             }
             .accessibilityLabel("More")
+            .caughtTap("More") { showingMore = true }
         }
         .padding(.horizontal, 12)
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.6), radius: 3)
+        .sheet(isPresented: $showingMore) {
+            MoreSheet(items: moreItems).themed()
+        }
+    }
+
+    private func toggleGhost() {
+        Haptics.tap()
+        ghostShown.toggle()
+    }
+
+    private func toggleWipe() {
+        Haptics.tap()
+        wipe.toggle()
+    }
+
+    /// What the ••• button offers, in the order the old menu had.
+    private var moreItems: [MoreSheet.Item] {
+        var items: [MoreSheet.Item] = []
+        let ready = restorer.status == .ready
+        if reference.photoOnly {
+            items.append(.init("Flip photo", "arrow.left.and.right.righttriangle.left.righttriangle.right") {
+                photoPose.flipped.toggle()
+                photoPose.save(reference.id)
+            })
+            if !photoPose.isStraight {
+                items.append(.init("Put photo back", "arrow.uturn.backward") {
+                    photoPose = PhotoPose()
+                    photoPose.save(reference.id)
+                })
+            }
+            items.append(.init("Edit photo", "wand.and.stars") {
+                if let photo = restorer.startPhoto { editingPhoto = EditTarget(photo: photo, reference: reference) }
+            })
+            if ghostMask != nil {
+                items.append(.init("Show the whole photo", "photo") {
+                    GhostMask.remove(reference.id)
+                    ghostMask = nil
+                })
+            }
+        }
+        items.append(.init("References", "photo.on.rectangle") { open(.gallery) })
+        if !others.isEmpty { items.append(.init("Add a layer", "square.3.layers.3d") { addingLayer = true }) }
+        items.append(.init("Add 3D model", "cube", enabled: ready) { importingModel = true })
+        items.append(.init("Add cut-out", "figure.stand", enabled: ready) { makingCutout = true })
+        items.append(.init("Add an example", "figure.stand.dress", enabled: ready) { choosingExample = true })
+        if ExploreView.offered { items.append(.init("Explore in 3D", "view.3d") { open(.explore(reference.id)) }) }
+        items.append(.init("Review frames", "rectangle.stack") { open(.review(reference.id)) })
+        items.append(.init("Compare", "rectangle.split.2x1") { open(.compare(reference.id)) })
+        items.append(.init("Take log", "list.number") { open(.takeLog(reference.id)) })
+        items.append(.init("PDF report", "square.and.arrow.up") { open(.pdf(reference.id)) })
+        items.append(.init("Edit slate", "pencil") { open(.slate(reference.id)) })
+        items.append(.init("Sync phones", "arrow.triangle.2.circlepath") { open(.sync) })
+        items.append(.init(leftHanded ? "Left-handed: on" : "Left-handed: off", "hand.raised") { leftHanded.toggle() })
+        items.append(.init("Show tips again", "lightbulb") {
+            HintStore.resetAll()
+            showToast("Tips will show again")
+        })
+        items.append(.init("Hide controls", "eye.slash") {
+            Diagnostics.log("Clean view started")
+            ScreenshotMode.shared.viewing = true
+        })
+        items.append(.init("Help", "questionmark.circle") { open(.help) })
+        return items
     }
 
     private var preview: some View {
@@ -2298,6 +2357,8 @@ struct ResetStage: View {
                             .padding(.trailing, 10)
                     }
                     .frame(maxHeight: .infinity)
+                    // On its side the control column covers the right edge: keep the chips clear of it.
+                    .clearOfControls()
                 }
                 VStack(spacing: 8) {
                     if restorer.status == .relocalizing, !reference.photoOnly, let photo = restorer.startPhoto, !restorer.paused {
@@ -2769,5 +2830,57 @@ struct SearchWhen: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// The ••• choices of the reset screen as a sheet of buttons, in columns that fit without scrolling
+/// on its side (Phil, 2026-11-11: the menu did nothing in landscape).
+struct MoreSheet: View {
+    struct Item: Identifiable {
+        let id = UUID()
+        let title: String
+        let icon: String
+        var enabled = true
+        let action: () -> Void
+        init(_ title: String, _ icon: String, enabled: Bool = true, action: @escaping () -> Void) {
+            self.title = title
+            self.icon = icon
+            self.enabled = enabled
+            self.action = action
+        }
+    }
+
+    let items: [Item]
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 8)], spacing: 8) {
+                ForEach(items) { item in
+                    Button {
+                        dismiss()
+                        // Let this sheet close before the next one opens.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { item.action() }
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: item.icon).frame(width: 24)
+                            Text(item.title).lineLimit(1).minimumScaleFactor(0.8)
+                            Spacer(minLength: 0)
+                        }
+                        .font(Theme.subheadline.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 44)
+                        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+                        .foregroundStyle(item.enabled ? Color.white : Color.white.opacity(0.35))
+                    }
+                    .disabled(!item.enabled)
+                }
+            }
+            .padding(16)
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .background(Color.black.ignoresSafeArea())
+        .preferredColorScheme(.dark)
     }
 }

@@ -1927,6 +1927,9 @@ struct MeasureBar: View {
     @ObservedObject var measurer: Measurer
     @State private var confirmingClear = false
     @State private var showingGuide = false
+    /// Phil, 2026-11-11: menus did nothing on its side, so Exact and Text size open choices from a plain button.
+    @State private var choosingExact = false
+    @State private var choosingTextSize = false
     /// iPhone on its side: the buttons stand in a column at the left edge instead of a row over the picture.
     @Environment(\.verticalSizeClass) private var verticalSize
 
@@ -1943,11 +1946,10 @@ struct MeasureBar: View {
                         small("arrow.up.and.down.and.arrow.left.and.right", "Move", tint: Theme.accent) { measurer.toggleMove() }
                     }
                 } else if measurer.moving == nil {
-                    small("arrow.uturn.backward", "Undo") { measurer.undo() }
-                        .disabled(measurer.start == nil && measurer.isEmpty)
+                    small("arrow.uturn.backward", "Undo", enabled: !(measurer.start == nil && measurer.isEmpty)) { measurer.undo() }
                     fineTune
                 }
-                Button { measurer.addPoint() } label: {
+                Button { TapGate.run("Measure point") { measurer.addPoint() } } label: {
                     Image(systemName: measurer.start == nil && measurer.moving == nil ? "plus" : "checkmark")
                         .font(Theme.title3.bold())
                         .frame(width: 46, height: 46)
@@ -1955,24 +1957,14 @@ struct MeasureBar: View {
                         .foregroundStyle(.black)
                 }
                 .accessibilityLabel(measurer.moving != nil ? "Put the note down here" : measurer.start == nil ? "Start a line here" : "End the line here")
+                .caughtTap("Measure point") { measurer.addPoint() }
                 if measurer.moving == nil {
                     small("text.bubble", "Note") { measurer.askNote() }
-                    Menu {
-                        Button { measurer.scaleText(by: 1.25) } label: { Label("Bigger text", systemImage: "textformat.size.larger") }
-                        Button { measurer.scaleText(by: 0.8) } label: { Label("Smaller text", systemImage: "textformat.size.smaller") }
-                    } label: {
-                        VStack(spacing: 1) {
-                            Image(systemName: "textformat.size").font(Theme.body)
-                            Text("Text size").font(Theme.font(size: 9, weight: .semibold))
-                        }
-                        .frame(minWidth: 36)
-                        .foregroundStyle(Color.white.opacity(0.95))
-                    }
+                    small("textformat.size", "Text size") { choosingTextSize = true }
                     if measurer.selected != nil {
                         small("trash.fill", "Delete", tint: .red) { measurer.deleteSelected() }
                     } else {
-                        small("trash", "Delete") { confirmingClear = true }
-                            .disabled(measurer.isEmpty)
+                        small("trash", "Delete", enabled: !measurer.isEmpty) { confirmingClear = true }
                     }
                 }
             }
@@ -1983,32 +1975,34 @@ struct MeasureBar: View {
             .confirmationDialog("Delete every dimension and note?", isPresented: $confirmingClear, titleVisibility: .visible) {
                 Button("Delete all", role: .destructive) { measurer.clear() }
             }
+            .confirmationDialog("Text size", isPresented: $choosingTextSize) {
+                Button("Bigger text") { measurer.scaleText(by: 1.25) }
+                Button("Smaller text") { measurer.scaleText(by: 0.8) }
+            }
+            .confirmationDialog("Make sizes exact", isPresented: $choosingExact) {
+                Button(measurer.tapeMode ? "Stop calibrating with a tape" : "Calibrate with a tape") { measurer.tapeMode.toggle() }
+                Button("Calibrate with A4 paper") { measurer.calibrateToPaper() }
+                if measurer.calibration != 1 {
+                    Button(String(format: "Remove correction ×%.2f", measurer.calibration), role: .destructive) { measurer.resetCalibration() }
+                }
+                Button("How it works") { showingGuide = true }
+            }
             .sheet(isPresented: $showingGuide) { MeasureGuideSheet().themed() }
         }
     }
 
     /// Everything about making sizes exact in one place, so the bar stays short.
     private var fineTune: some View {
-        Menu {
-            Button { measurer.tapeMode.toggle() } label: { Label(measurer.tapeMode ? "Drag a line on the tape now" : "Calibrate with a tape", systemImage: "ruler.fill") }
-            Button { measurer.calibrateToPaper() } label: { Label("Calibrate with A4 paper", systemImage: "doc.viewfinder") }
-            if measurer.calibration != 1 {
-                Button(role: .destructive) { measurer.resetCalibration() } label: { Label(String(format: "Remove correction ×%.2f", measurer.calibration), systemImage: "arrow.uturn.backward") }
-            }
-            Button { showingGuide = true } label: { Label("How it works", systemImage: "questionmark.circle") }
-        } label: {
-            VStack(spacing: 1) {
-                Image(systemName: measurer.tapeMode ? "ruler.fill" : "slider.horizontal.3").font(Theme.body)
-                Text(measurer.tapeMode ? "Drag on tape" : measurer.calibration != 1 ? String(format: "Exact ×%.2f", measurer.calibration) : "Exact").font(Theme.font(size: 9, weight: .semibold))
-            }
-            .frame(minWidth: 36)
-            .foregroundStyle((measurer.tapeMode ? Color.green : Color.white).opacity(0.95))
-        }
-        .accessibilityLabel("Make sizes exact")
+        small(measurer.tapeMode ? "ruler.fill" : "slider.horizontal.3",
+              measurer.tapeMode ? "Drag on tape" : measurer.calibration != 1 ? String(format: "Exact ×%.2f", measurer.calibration) : "Exact",
+              tint: measurer.tapeMode ? .green : .white, key: "Exact") { choosingExact = true }
+            .accessibilityLabel("Make sizes exact")
     }
 
-    private func small(_ symbol: String, _ title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    private func small(_ symbol: String, _ title: String, tint: Color = .white, enabled: Bool = true, key: String? = nil,
+                       action: @escaping () -> Void) -> some View {
+        let name = "Measure " + (key ?? title)
+        return Button { TapGate.run(name, action) } label: {
             VStack(spacing: 1) {
                 Image(systemName: symbol).font(Theme.body)
                 Text(title).font(Theme.font(size: 9, weight: .semibold))
@@ -2016,7 +2010,9 @@ struct MeasureBar: View {
             .frame(minWidth: 36)
             .foregroundStyle(tint.opacity(0.95))
         }
+        .disabled(!enabled)
         .accessibilityLabel(title)
+        .caughtTap(name, enabled: enabled, perform: action)
     }
 }
 
@@ -2385,11 +2381,11 @@ struct Starburst: Shape {
 /// The top-bar ruler that turns measuring on and off.
 struct MeasureToggle: View {
     @ObservedObject var measurer: Measurer
+    @Environment(\.isEnabled) private var enabled
 
     var body: some View {
         Button {
-            Haptics.tap()
-            measurer.active.toggle()
+            TapGate.run("Measure") { toggle() }
         } label: {
             // On: dark ruler on a mint pill, like the LiDAR button, so it reads at a glance (Phil, 2026-11-08).
             Image(systemName: measurer.active ? "ruler.fill" : "ruler").font(Theme.title3)
@@ -2398,5 +2394,11 @@ struct MeasureToggle: View {
                 .background(Capsule().fill(measurer.active ? Theme.accent : Color.clear))
         }
         .accessibilityLabel(measurer.active ? "Stop measuring" : "Measure")
+        .caughtTap("Measure", enabled: enabled) { toggle() }
+    }
+
+    private func toggle() {
+        Haptics.tap()
+        measurer.active.toggle()
     }
 }

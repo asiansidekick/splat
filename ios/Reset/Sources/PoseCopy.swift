@@ -153,19 +153,30 @@ struct PoseCopyBar: View {
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.8), radius: 3)
             // Body tracking reads joints only, not whether it is a woman or a man: pick for each actor here.
-            Picker("Mannequin", selection: $copier.body) {
-                ForEach(Mannequin.Body.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            // Plain buttons, not a segmented control, so they answer on its side too.
+            HStack(spacing: 0) {
+                ForEach(Mannequin.Body.allCases, id: \.self) { kind in
+                    Button { TapGate.run("Pose body " + kind.rawValue) { copier.body = kind } } label: {
+                        Text(kind.rawValue)
+                            .font(Theme.footnote.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                            .background(copier.body == kind ? Theme.accent : Color.white.opacity(0.15), in: Capsule())
+                            .foregroundStyle(copier.body == kind ? Theme.onAccent : Color.white)
+                    }
+                    .caughtTap("Pose body " + kind.rawValue) { copier.body = kind }
+                }
             }
-            .pickerStyle(.segmented)
             .frame(maxWidth: 200)
             HStack(spacing: 12) {
-                Button(copier.copied > 0 ? "Done" : "Cancel") { copier.finish() }
+                Button(copier.copied > 0 ? "Done" : "Cancel") { TapGate.run("Pose finish") { copier.finish() } }
                     .buttonStyle(.bordered)
-                Button { copier.copy() } label: { Label("Copy pose", systemImage: "figure.stand") }
+                    .caughtTap("Pose finish") { copier.finish() }
+                Button { TapGate.run("Pose copy") { copier.copy() } } label: { Label("Copy pose", systemImage: "figure.stand") }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.accent)
                     .foregroundStyle(Theme.onAccent)
                     .disabled(!copier.seen)
+                    .caughtTap("Pose copy", enabled: copier.seen) { copier.copy() }
             }
             .font(Theme.headline)
         }

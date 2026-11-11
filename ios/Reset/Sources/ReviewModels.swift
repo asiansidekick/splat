@@ -84,8 +84,10 @@ enum ReviewPick {
     static var options: [SCNHitTestOption: Any] { [.categoryBitMask: ~occluderMask] }
 }
 
-/// The saved depth of one frame as a mesh in room coordinates, pushed 5 cm back so a model standing on
-/// the floor or against a wall is not cut by it. Jumps in depth (the edge of a pillar) are left open.
+/// The saved depth of one frame as a mesh in room coordinates, pushed back (5 cm, more far away where the
+/// depth is rougher) so a model standing against a wall is not cut by it. Jumps in depth (the edge of a
+/// pillar) are left open. Phil, 2026-11-11: feet and legs were chopped into blocks by the floor, so the
+/// floor itself never hides anything (a table top still does), and the mesh uses every depth reading.
 struct OccluderMesh: Sendable {
     var positions: [Float] = []
     var indices: [UInt32] = []
@@ -100,7 +102,7 @@ struct OccluderMesh: Sendable {
         let k = frame.cameraIntrinsics
         let pose = frame.cameraToWorld
         let w = Float(frame.imageWidth), h = Float(frame.imageHeight)
-        let step = 2
+        let step = 1
         let cols = (dw - 1) / step + 1, rows = (dh - 1) / step + 1
         var mesh = OccluderMesh()
         mesh.positions.reserveCapacity(cols * rows * 3)
@@ -112,7 +114,7 @@ struct OccluderMesh: Sendable {
                 let d = depth[y * dw + x]
                 var p = SIMD3<Float>.zero
                 if d.isFinite, d > 0.12, d < 8 {
-                    let back = d + 0.05
+                    let back = d + 0.05 + 0.03 * d
                     let u = (Float(x) + 0.5) / Float(dw) * w, v = (Float(y) + 0.5) / Float(dh) * h
                     let world = pose * SIMD4((u - k[2][0]) / k[0][0] * back, -(v - k[2][1]) / k[1][1] * back, -back, 1)
                     p = SIMD3(world.x, world.y, world.z)
@@ -122,6 +124,13 @@ struct OccluderMesh: Sendable {
                 mesh.positions.append(contentsOf: [p.x, p.y, p.z])
             }
         }
+        // The floor: the lowest level that much of the picture sits on.
+        var heights: [Float] = []
+        heights.reserveCapacity(cols * rows / 4)
+        for i in stride(from: 0, to: cols * rows, by: 4) where valid[i] { heights.append(mesh.positions[i * 3 + 1]) }
+        heights.sort()
+        let floor: Float? = heights.count > 50 ? heights[heights.count / 50] : nil
+        func point(_ i: Int) -> SIMD3<Float> { SIMD3(mesh.positions[i * 3], mesh.positions[i * 3 + 1], mesh.positions[i * 3 + 2]) }
         for gy in 0..<(rows - 1) {
             for gx in 0..<(cols - 1) {
                 let a = gy * cols + gx, b = a + 1, c = a + cols, e = c + 1
@@ -129,6 +138,13 @@ struct OccluderMesh: Sendable {
                 let ds = [values[a], values[b], values[c], values[e]]
                 let low = ds.min() ?? 0, high = ds.max() ?? 0
                 guard high - low < 0.03 + 0.05 * low else { continue }
+                if let floor {
+                    let pa = point(a), pe = point(e)
+                    let normal = simd_cross(point(c) - pa, point(b) - pa)
+                    let length = simd_length(normal)
+                    let flat = length > 0 && abs(normal.y) / length > 0.8
+                    if flat, (pa.y + pe.y) / 2 < floor + 0.12 { continue }
+                }
                 mesh.indices.append(contentsOf: [UInt32(a), UInt32(c), UInt32(b), UInt32(b), UInt32(c), UInt32(e)])
             }
         }

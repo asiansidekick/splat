@@ -125,6 +125,13 @@ final class WindowTapCatcher: NSObject, UIGestureRecognizerDelegate {
 
     /// The watcher of the screen showing now, for controls drawn outside it (the model tools).
     @MainActor static weak var current: WindowTapCatcher?
+    /// Controls registered with `.caughtTap`, whichever screen shows them (Phil, 2026-11-11: check every
+    /// control on its side). Each has a tap action and, for a few, a press-and-hold action.
+    @MainActor static var shared: [String: (frame: CGRect, tap: () -> Void, hold: (() -> Void)?)] = [:]
+    private var holdRecognizer: UILongPressGestureRecognizer?
+    /// A press and hold is never also a tap.
+    private var holding = false
+    private var holdEnded = Date.distantPast
 
     @MainActor func install() {
         Self.current = self
@@ -138,6 +145,14 @@ final class WindowTapCatcher: NSObject, UIGestureRecognizerDelegate {
         tap.delegate = self
         window.addGestureRecognizer(tap)
         recognizer = tap
+        let hold = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
+        hold.minimumPressDuration = 0.5
+        hold.cancelsTouchesInView = false
+        hold.delaysTouchesBegan = false
+        hold.delaysTouchesEnded = false
+        hold.delegate = self
+        window.addGestureRecognizer(hold)
+        holdRecognizer = hold
         self.window = window
     }
 
@@ -145,7 +160,9 @@ final class WindowTapCatcher: NSObject, UIGestureRecognizerDelegate {
         if Self.current === self { Self.current = nil }
         targets = targets.filter { !$0.key.hasPrefix("Tool ") }
         if let recognizer { window?.removeGestureRecognizer(recognizer) }
+        if let holdRecognizer { window?.removeGestureRecognizer(holdRecognizer) }
         recognizer = nil
+        holdRecognizer = nil
     }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
@@ -155,12 +172,79 @@ final class WindowTapCatcher: NSObject, UIGestureRecognizerDelegate {
     @MainActor @objc private func tapped(_ gesture: UITapGestureRecognizer) {
         // Not through a sheet or menu covering the screen.
         guard let window, window.rootViewController?.presentedViewController == nil, !ScreenshotMode.shared.viewing else { return }
+        if holding || Date().timeIntervalSince(holdEnded) < 0.3 { return }
         let point = gesture.location(in: window)
         for (name, target) in targets where target.frame.insetBy(dx: -6, dy: -6).contains(point) {
             let top = window.hitTest(point, with: nil).map { String(describing: type(of: $0)) } ?? "nothing"
             Diagnostics.log("Tap on \(name) (\(Screen.orientation.isLandscape ? "landscape" : "portrait")), top view \(top)")
             target.action?()
         }
+        for (name, target) in Self.shared where target.frame.insetBy(dx: -6, dy: -6).contains(point) {
+            Diagnostics.log("Tap on \(name) (\(Screen.orientation.isLandscape ? "landscape" : "portrait"))")
+            TapGate.run(name, target.tap)
+        }
+    }
+
+    @MainActor @objc private func held(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began: holding = true
+        case .ended, .cancelled, .failed:
+            holding = false
+            holdEnded = Date()
+            return
+        default: return
+        }
+        guard let window, window.rootViewController?.presentedViewController == nil,
+              !ScreenshotMode.shared.viewing else { return }
+        let point = gesture.location(in: window)
+        for (name, target) in Self.shared where target.frame.insetBy(dx: -6, dy: -6).contains(point) {
+            guard let hold = target.hold else { continue }
+            Diagnostics.log("Hold on \(name) (\(Screen.orientation.isLandscape ? "landscape" : "portrait"))")
+            TapGate.run("hold " + name, hold)
+        }
+    }
+}
+
+/// Runs an action once when the button and the window watcher both report the same tap.
+@MainActor
+enum TapGate {
+    private static var last: [String: Date] = [:]
+
+    static func run(_ name: String, _ action: () -> Void) {
+        let now = Date()
+        if let time = last[name], now.timeIntervalSince(time) < 0.6 { return }
+        last[name] = now
+        action()
+    }
+}
+
+/// Makes a control answer taps (and, with `hold`, a press and hold) from the window watcher too, so it
+/// works on its side, where some taps never reach SwiftUI. The control's own action must go through
+/// `TapGate.run(name)` with the same name, so one tap never runs it twice.
+struct CaughtTap: ViewModifier {
+    let name: String
+    var enabled = true
+    var hold: (() -> Void)?
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        content.background(GeometryReader { geometry in
+            Color.clear
+                .onAppear { update(geometry.frame(in: .global)) }
+                .onChange(of: geometry.frame(in: .global)) { _, frame in update(frame) }
+                .onChange(of: enabled) { _, _ in update(geometry.frame(in: .global)) }
+                .onDisappear { WindowTapCatcher.shared[name] = nil }
+        })
+    }
+
+    @MainActor private func update(_ frame: CGRect) {
+        WindowTapCatcher.shared[name] = enabled && frame.width > 1 ? (frame, action, hold) : nil
+    }
+}
+
+extension View {
+    func caughtTap(_ name: String, enabled: Bool = true, hold: (() -> Void)? = nil, perform action: @escaping () -> Void) -> some View {
+        modifier(CaughtTap(name: name, enabled: enabled, hold: hold, action: action))
     }
 }
 
