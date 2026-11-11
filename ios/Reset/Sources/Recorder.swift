@@ -99,18 +99,47 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         NotificationCenter.default.addObserver(forName: SurfaceTest.didEnd, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, !self.capturing, !self.pendingSave, !self.saving else { return }
-                self.prepare(useLiDAR: self.lastUseLiDAR)
+                self.prepare(useLiDAR: self.lastUseLiDAR, keepModels: true)
             }
         }
     }
 
-    func prepare(useLiDAR: Bool) {
+    /// Where things placed in the old session sit in a new one. A new session starts at the phone, level,
+    /// looking the way the phone points; the old camera's place and heading say how the old room maps onto that.
+    static func intoNewSession(from camera: simd_float4x4) -> simd_float4x4 {
+        var forward = SIMD3(-camera.columns.2.x, 0, -camera.columns.2.z)
+        // Pointing straight down or up: the top of the phone gives the heading instead.
+        if simd_length(forward) < 0.2 { forward = SIMD3(camera.columns.1.x, 0, camera.columns.1.z) }
+        guard simd_length(forward) > 0.01 else { return matrix_identity_float4x4 }
+        forward = simd_normalize(forward)
+        let heading = atan2(-forward.x, -forward.z)
+        var shift = matrix_identity_float4x4
+        shift.columns.3 = SIMD4(-camera.columns.3.x, -camera.columns.3.y, -camera.columns.3.z, 1)
+        return simd_float4x4(simd_quatf(angle: -heading, axis: SIMD3(0, 1, 0))) * shift
+    }
+
+    /// `keepModels`: the camera is only starting again (a sensor failure, a call, the LiDAR switch), so the
+    /// models and cut-outs stay where they were in the room instead of being lost (Phil, 2026-11-11).
+    func prepare(useLiDAR: Bool, keepModels: Bool = false) {
         watchSurfaceTest()
         lastUseLiDAR = useLiDAR
-        // A new session has new coordinates, so models placed in the old one are cleared.
-        placer.removeAll()
+        // A new session has new coordinates: models placed in the old one are carried over into them, or cleared.
+        var carried = false
+        if keepModels, !placer.models.isEmpty {
+            placer.rebase(session.currentFrame.map { Self.intoNewSession(from: $0.camera.transform) } ?? matrix_identity_float4x4)
+            carried = true
+            Diagnostics.log("Camera restart: \(placer.models.count) models kept")
+        } else {
+            placer.removeAll()
+        }
         measurer.load(measurements: [], notes: [], removed: [])
-        try? FileManager.default.removeItem(at: Recorder.staging)
+        if carried {
+            // Their files live in the staging folder: clear everything else in it.
+            let items = (try? FileManager.default.contentsOfDirectory(at: Recorder.staging, includingPropertiesForKeys: nil)) ?? []
+            for item in items where item.lastPathComponent != "models" { try? FileManager.default.removeItem(at: item) }
+        } else {
+            try? FileManager.default.removeItem(at: Recorder.staging)
+        }
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal, .vertical]
         if useLiDAR && Recorder.lidarAvailable {
@@ -275,7 +304,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
             guard !self.capturing, !self.pendingSave, !self.saving else { return }
             Diagnostics.log("Record: restarting the camera after a failure (try \(attempt))")
             self.error = nil
-            self.prepare(useLiDAR: self.lastUseLiDAR)
+            self.prepare(useLiDAR: self.lastUseLiDAR, keepModels: true)
         }
     }
 
@@ -301,13 +330,13 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
             if self.capturing, !self.pendingSave, !self.saving, away > 2.5 {
                 Diagnostics.log("Record: thrown away after \(Int(away)) s away, starting the camera afresh")
                 self.stop()
-                self.prepare(useLiDAR: self.lastUseLiDAR)
+                self.prepare(useLiDAR: self.lastUseLiDAR, keepModels: true)
                 self.error = "The recording was interrupted, so it was stopped. Tap the shutter to start again."
                 return
             }
             guard !self.capturing, !self.pendingSave, !self.saving else { return }
             Diagnostics.log("Record: starting the camera afresh after the interruption")
-            self.prepare(useLiDAR: self.lastUseLiDAR)
+            self.prepare(useLiDAR: self.lastUseLiDAR, keepModels: true)
         }
     }
 

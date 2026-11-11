@@ -627,6 +627,15 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         if gesture.state == .ended { commit(id) }
     }
 
+    /// Moves every model by `change`, for a camera that started again with new coordinates.
+    func rebase(_ change: simd_float4x4) {
+        for index in models.indices {
+            guard let node = modelNodes[models[index].id] else { continue }
+            node.simdTransform = change * node.simdTransform
+            models[index].transform = flatten(node.simdTransform)
+        }
+    }
+
     private func commit(_ id: UUID) {
         guard let node = modelNodes[id], let index = models.firstIndex(where: { $0.id == id }) else { return }
         models[index].transform = flatten(node.simdTransform)
@@ -914,6 +923,10 @@ struct ModelOverlay: View {
     @ObservedObject var placer: ModelPlacer
     /// Off in Review, where there is no live LiDAR to find the floor with.
     var showsFloor = true
+    /// Opens the add menu. On its side the 3D models button gives its corner to these tools, so the way to add
+    /// another model is the first of them (Phil, 2026-11-11: could not add cut-outs in landscape).
+    var onAdd: (() -> Void)? = nil
+    @Environment(\.verticalSizeClass) private var verticalSize
     @State private var showsCutoutHelp = true
     @State private var posing = false
 
@@ -986,6 +999,9 @@ struct ModelOverlay: View {
                     }
                     Spacer(minLength: 0)
                     VStack(spacing: 0) {
+                        if let onAdd, verticalSize == .compact {
+                            CutoutTool(word: "Add", symbol: "plus", tint: Theme.accent, action: onAdd)
+                        }
                         CutoutTool(word: "Place here", symbol: "scope") { placer.bringToView() }
                         if cutout {
                             CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }

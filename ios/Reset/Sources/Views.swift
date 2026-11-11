@@ -1767,7 +1767,7 @@ struct CaptureStage: View {
                     TorchDial()
                     MeasureHint(measurer: recorder.measurer)
                     MeasureBar(measurer: recorder.measurer)
-                    ModelOverlay(placer: recorder.placer)
+                    ModelOverlay(placer: recorder.placer, onAdd: { choosingModel = true })
                     if let error = recorder.error {
                         Text(error).font(Theme.callout).padding(10)
                             .background(Color.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
@@ -1863,7 +1863,7 @@ struct CaptureStage: View {
         .onChange(of: useLiDAR) { _, on in
             dropLens()
             recorder.stop()
-            recorder.prepare(useLiDAR: on)
+            recorder.prepare(useLiDAR: on, keepModels: true)
         }
     }
 
