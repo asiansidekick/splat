@@ -991,10 +991,12 @@ struct RecentWord: View {
         Button {
             TapGate.run("Recent", toggle)
         } label: {
+            // The same type as MANUAL SCAN and AUTO SCAN (Phil, 2026-11-12).
             Text("RECENT")
-                .font(Theme.font(size: 13, weight: .semibold))
+                .font(Theme.footnote.weight(.semibold))
+                .lineLimit(1)
                 .foregroundStyle(on ? Theme.accent : Color.white)
-                .padding(.vertical, 6)
+                .frame(minHeight: 22)
                 .contentShape(Rectangle())
                 .fixedSize()
         }
