@@ -133,7 +133,8 @@ struct CameraHome: View {
             } else {
                 CaptureStage(
                     scene: nextScene, shot: nextShot, setup: nextSetup, name: nextName, thumbnail: thumbnail,
-                    open: { panel = $0 }, onSaved: saved, onPhoto: took, showToast: show)
+                    open: { panel = $0 }, onSaved: saved, onPhoto: took, showToast: show,
+                    recent: references.count > 1 ? RecentWord(on: showingRecent, toggle: toggleRecent) : nil)
             }
         }
         .background(Color.black.ignoresSafeArea())
@@ -309,22 +310,11 @@ struct CameraHome: View {
         }
         .buttonStyle(PressScale())
         .overlay(alignment: .top) {
-            if references.count > 1 {
+            if references.count > 1, homeVerticalSize == .compact {
                 // Phil, 2026-11-10: plain words like MANUAL SCAN, no pill or shadow, and off the thumbnail.
-                // Upright it sits in the mode line at the left edge; on its side, under "Reference".
-                let sideways = homeVerticalSize == .compact
-                Button {
-                    TapGate.run("Recent") { toggleRecent() }
-                } label: {
-                    Text("RECENT")
-                    .font(Theme.font(size: 13, weight: .semibold))
-                    .foregroundStyle(showingRecent ? Theme.accent : Color.white)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
-                    .fixedSize()
-                }
-                .offset(x: sideways ? 0 : -10, y: sideways ? 68 : -40)
-                .caughtTap("Recent") { toggleRecent() }
+                // On its side it sits under "Reference"; upright it stands in the mode line (CaptureStage.recent).
+                RecentWord(on: showingRecent, toggle: toggleRecent)
+                    .offset(y: 68)
             }
         }
         .caughtTap("Reference") { openReferences() }
@@ -992,6 +982,26 @@ struct Banner: View {
 
 /// One reference's first photo, square, with its slate on it.
 /// The last few references in a row over the camera: tap one and it is the overlay (Phil, 2026-11-09).
+/// The word RECENT: tap to show or hide the strip of the last few references.
+struct RecentWord: View {
+    let on: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button {
+            TapGate.run("Recent", toggle)
+        } label: {
+            Text("RECENT")
+                .font(Theme.font(size: 13, weight: .semibold))
+                .foregroundStyle(on ? Theme.accent : Color.white)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .fixedSize()
+        }
+        .caughtTap("Recent", perform: toggle)
+    }
+}
+
 private struct RecentStrip: View {
     let references: [Reference]
     @ObservedObject var thumbnails: Thumbnails
@@ -1665,6 +1675,8 @@ struct CaptureStage: View {
     let onSaved: (Reference) -> Void
     let onPhoto: (UIImage) -> Void
     let showToast: (String) -> Void
+    /// Upright, RECENT stands in the mode line after AUTO SCAN, clear of the other words (Phil, 2026-11-12).
+    var recent: RecentWord? = nil
     @AppStorage("captureMode") private var mode: CaptureMode = .snapshot
     /// Which lens a snapshot uses; anything but 1× is a plain photo (LensCamera.swift).
     @AppStorage("snapshotLens") private var lens = 1.0
@@ -1834,9 +1846,12 @@ struct CaptureStage: View {
                 .hiddenInScreenshots()
             }
         } modes: { vertical in
-            ModePicker(modes: CaptureMode.allCases, label: \.label, selection: $mode, vertical: vertical)
-                .disabled(recorder.capturing)
-                .opacity(recorder.capturing ? 0.4 : 1)
+            HStack(spacing: 24) {
+                ModePicker(modes: CaptureMode.allCases, label: \.label, selection: $mode, vertical: vertical)
+                    .disabled(recorder.capturing)
+                    .opacity(recorder.capturing ? 0.4 : 1)
+                if !vertical, let recent, !recorder.capturing { recent }
+            }
         } leading: {
             thumbnail.disabled(recorder.capturing)
                 .onAppear { Self.capturing = recorder.capturing }
