@@ -1093,7 +1093,7 @@ struct ReferenceThumbnail: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Theme.accent : Color.white.opacity(0.8), lineWidth: selected ? 3 : 1))
-        .task(id: reference?.id) {
+        .task(id: "\(reference?.id.uuidString ?? "")-\(reference.map { Thumbnails.stamp($0) } ?? "")") {
             if let reference { await thumbnails.load(reference) }
         }
     }
@@ -1573,9 +1573,38 @@ struct GalleryPage: View {
 @MainActor
 final class Thumbnails: ObservableObject {
     @Published private(set) var images: [UUID: UIImage] = [:]
+    /// Which placed models each picture was made with, so it is made again when they change.
+    private var stamps: [UUID: String] = [:]
+
+    /// Changes whenever a model or cut-out is added, removed, moved or posed.
+    static func stamp(_ reference: Reference) -> String {
+        reference.models.map { "\($0.id.uuidString.prefix(8))\($0.moved?.timeIntervalSince1970 ?? 0)\($0.transform.reduce(0, +))" }.joined(separator: ",")
+    }
+
+    /// Phil, 2026-11-12: the thumbnail shows the cut-outs and models placed in the reference, drawn into its
+    /// first photo from where that photo was taken.
+    @MainActor private func withModels(_ image: UIImage, reference: Reference, frame: Keyframe) -> UIImage? {
+        guard let projection = frame.uprightProjection() else { return nil }
+        let size = CGSize(width: 300, height: (300 * image.size.height / max(image.size.width, 1)).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let photo = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+        let root = SCNNode()
+        let placer = ModelPlacer(session: ARSession(), root: root, folder: ReferenceStore.folder(for: reference.id))
+        let stage = ReviewStage(modelRoot: root)
+        placer.load(reference.models)
+        defer { placer.removeAll() }
+        guard !placer.models.isEmpty else { return nil }
+        stage.cameraNode.simdTransform = frame.cameraToWorld
+        stage.cameraNode.camera?.projectionTransform = SCNMatrix4(projection)
+        return stage.render(over: photo, size: size)
+    }
 
     func load(_ reference: Reference) async {
-        guard images[reference.id] == nil, let first = reference.keyframes.first else { return }
+        let stamp = Self.stamp(reference)
+        guard images[reference.id] == nil || stamps[reference.id] != stamp, let first = reference.keyframes.first else { return }
+        stamps[reference.id] = stamp
         let url = ReferenceStore.folder(for: reference.id).appendingPathComponent(first.imageFile)
         let orientation = first.uprightOrientation
         let image = await Task.detached(priority: .utility) { () -> UIImage? in
@@ -1584,7 +1613,12 @@ final class Thumbnails: ObservableObject {
             guard let cg = full.preparingThumbnail(of: size)?.cgImage else { return nil }
             return UIImage(cgImage: cg, scale: 1, orientation: orientation)
         }.value
-        if let image { images[reference.id] = image }
+        guard let image else { return }
+        if !reference.models.isEmpty, let drawn = withModels(image, reference: reference, frame: first) {
+            images[reference.id] = drawn
+        } else {
+            images[reference.id] = image
+        }
     }
 }
 
@@ -1809,6 +1843,7 @@ struct CaptureStage: View {
             .accessibilityLabel(shutterLabel)
         } trailing: {
             WithScreenshot(camera: { holder.view }, toast: showToast, size: 74, evenCells: true,
+                           lens: { await lensLive.photo().flatMap { UIImage(data: $0) } },
                            register: { frame, action in tapCatcher.targets["Screenshot"] = (frame, action) }) {
                 if recorder.capturing {
                     ViewsCounter(count: recorder.keyframeCount)

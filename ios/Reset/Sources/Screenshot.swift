@@ -146,6 +146,8 @@ struct WithScreenshot<Content: View>: View {
     var evenCells = false
     /// With `evenCells`: the screenshot button comes before the control instead of after it.
     var screenshotFirst = false
+    /// The picture through another lens while one is live (nil on 1×): the screenshot is that picture then.
+    var lens: (() async -> UIImage?)? = nil
     /// Hands the button's frame and action to the window's tap watcher (taps on its side can go astray otherwise).
     var register: ((CGRect, @escaping () -> Void) -> Void)? = nil
     @ViewBuilder let content: () -> Content
@@ -155,17 +157,17 @@ struct WithScreenshot<Content: View>: View {
         if evenCells && !vertical {
             Group {
                 if screenshotFirst {
-                    ScreenshotButton(camera: camera, toast: toast, size: size, register: register).frame(maxWidth: .infinity)
+                    ScreenshotButton(camera: camera, toast: toast, size: size, lens: lens, register: register).frame(maxWidth: .infinity)
                     content().frame(maxWidth: .infinity)
                 } else {
                     content().frame(maxWidth: .infinity)
-                    ScreenshotButton(camera: camera, toast: toast, size: size, register: register).frame(maxWidth: .infinity)
+                    ScreenshotButton(camera: camera, toast: toast, size: size, lens: lens, register: register).frame(maxWidth: .infinity)
                 }
             }
         } else {
             let layout = vertical ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 6))
             layout {
-                ScreenshotButton(camera: camera, toast: toast, size: size, register: register)
+                ScreenshotButton(camera: camera, toast: toast, size: size, lens: lens, register: register)
                 content()
             }
         }
@@ -177,6 +179,7 @@ struct ScreenshotButton: View {
     let camera: () -> ARSCNView?
     let toast: (String) -> Void
     var size: CGFloat = 40
+    var lens: (() async -> UIImage?)? = nil
     var register: ((CGRect, @escaping () -> Void) -> Void)? = nil
     /// The button and the window's tap watcher can both fire for one tap: the second within 0.8 s is ignored.
     @MainActor private static var last = Date.distantPast
@@ -199,6 +202,13 @@ struct ScreenshotButton: View {
         Self.last = Date()
         Diagnostics.log("Screenshot pressed (\(Screen.orientation.isLandscape ? "landscape" : "portrait"))")
         Task { @MainActor in
+                // Phil, 2026-11-12: with 0.5× or 3× picked, the screenshot is the view through that lens.
+                if let picture = await lens?() {
+                    Haptics.success()
+                    let saved = await PhotoLibrary.save([picture])
+                    toast(saved ? "Screenshot saved to Photos" : "Allow Photos in Settings, Reset, Photos to save there")
+                    return
+                }
                 // Hide the controls, give the screen a moment to redraw, take the picture, bring them back.
                 ScreenshotMode.shared.clean = true
                 try? await Task.sleep(for: .milliseconds(180))
