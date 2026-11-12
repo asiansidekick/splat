@@ -1744,8 +1744,18 @@ struct CaptureStage: View {
             editingModel = picked != nil
             if picked != nil, lens != 1 { lens = 1 }
         }
-        .onChange(of: lens) { _, _ in syncLens() }
-        .onChange(of: mode) { _, _ in syncLens() }
+        .onChange(of: lens) { _, picked in
+            syncLens()
+            // Phil, 2026-11-12: say what the other lenses cost, every time one is picked.
+            if picked != 1 { showToast("\(picked == 0.5 ? "0.5×" : "\(Int(picked))×") works in Manual scan only: no room map, models or measuring") }
+        }
+        .onChange(of: mode) { _, new in
+            if new == .walk, lens != 1 {
+                lens = 1
+                showToast("Auto scan always uses the 1× lens")
+            }
+            syncLens()
+        }
         .onChange(of: recorder.capturing) { _, _ in syncLens() }
         .onChange(of: recorder.pendingSave) { _, _ in syncLens() }
         .onChange(of: recorder.saving) { _, _ in syncLens() }
