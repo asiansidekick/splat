@@ -323,7 +323,7 @@ struct CameraHome: View {
                     .contentShape(Rectangle())
                     .fixedSize()
                 }
-                .offset(x: sideways ? 0 : -10, y: sideways ? 80 : -40)
+                .offset(x: sideways ? 0 : -10, y: sideways ? 68 : -40)
                 .caughtTap("Recent") { toggleRecent() }
             }
         }
@@ -715,7 +715,9 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         if !left { Spacer(minLength: 0) }
                         // Grouped round the shutter in the middle, like the Camera app, so nothing
                         // sits in the screen's top corner (taps there went unanswered).
-                        VStack(spacing: 18) {
+                        // Phil, 2026-11-12: RECENT hung down into the home-indicator strip, where taps never reach the app.
+                        // Closer spacing and a lift keep the whole column, RECENT too, clear of the bottom edge.
+                        VStack(spacing: 10) {
                             Spacer(minLength: 0)
                             trailing().environment(\.chromeVertical, true)
                             modes(true)
@@ -723,7 +725,8 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                             leading()
                             Spacer(minLength: 0)
                         }
-                        .padding(.vertical, 8)
+                        .padding(.top, 8)
+                        .padding(.bottom, 48)
                         .frame(width: Self.sideWidth)
                         .frame(maxHeight: .infinity)
                         .background((left ? shade(.trailing, .leading) : shade(.leading, .trailing)).ignoresSafeArea(edges: [.top, .bottom]))
@@ -1687,6 +1690,13 @@ struct CaptureStage: View {
 
     private var slate: String { Reference.label(scene: scene, setup: setup, shot: shot) }
 
+    private var statusBanner: some View {
+        Banner(text: status, tint: recorder.capturing ? .red : .black,
+               fadesAfter: recorder.capturing || recorder.pendingSave || recorder.saving ? nil : 5)
+            .onAppear { timeBearingsHint(recorder.trackingNormal) }
+            .onChange(of: recorder.trackingNormal) { _, normal in timeBearingsHint(normal) }
+    }
+
     private func startCleanView() {
         Diagnostics.log("Clean view started")
         ScreenshotMode.shared.viewing = true
@@ -1806,10 +1816,8 @@ struct CaptureStage: View {
                         .transition(.opacity)
                 }
                 VStack {
-                    Banner(text: status, tint: recorder.capturing ? .red : .black,
-                           fadesAfter: recorder.capturing || recorder.pendingSave || recorder.saving ? nil : 5)
-                        .onAppear { timeBearingsHint(recorder.trackingNormal) }
-                        .onChange(of: recorder.trackingNormal) { _, normal in timeBearingsHint(normal) }
+                    // Phil, 2026-11-12: on its side the instruction line goes to the bottom, out of the top row's way.
+                    if verticalSize != .compact { statusBanner }
                     Spacer()
                     TorchDial()
                     MeasureHint(measurer: recorder.measurer)
@@ -1819,6 +1827,7 @@ struct CaptureStage: View {
                         Text(error).font(Theme.callout).padding(10)
                             .background(Color.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
                     }
+                    if verticalSize == .compact { statusBanner }
                 }
                 .padding(8)
                 .clearOfControls()
