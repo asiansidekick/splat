@@ -16,9 +16,9 @@ struct BackdropPiece: @unchecked Sendable {
 /// ray it was shot on, sized so that from where it was taken it looks exactly like the photo. Standing near
 /// where a frame was shot, you see the recorded place around you. Offline, no training.
 enum Backdrop {
-    /// More frames than this are thinned evenly (memory: each picture is a few MB as a texture).
-    static let maxFrames = 40
-    static let maxPixels = 1024
+    /// More frames than this are thinned evenly (memory: 1024 px × 40 frames crashed Reset on 1289 after a few openings; now 768 px × 24).
+    static let maxFrames = 24
+    static let maxPixels = 768
     static let fallbackDistance: Float = 3.5
 
     /// The pieces for every frame and snapshot of the reference. Reads files: call off the main thread.
@@ -93,7 +93,6 @@ enum Backdrop {
             let plane = SCNPlane(width: CGFloat(piece.width), height: CGFloat(piece.height))
             let material = SCNMaterial()
             material.diffuse.contents = piece.image
-            material.diffuse.mipFilter = .linear
             material.lightingModel = .constant
             material.isDoubleSided = false
             plane.materials = [material]

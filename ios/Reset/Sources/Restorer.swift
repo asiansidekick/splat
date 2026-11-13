@@ -72,6 +72,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var backdropOn = false
     @Published private(set) var backdropBuilding = false
     private var backdropBuilt = false
+    private var stopped = false
     lazy var placer: ModelPlacer = {
         let placer = ModelPlacer(session: session, root: modelsNode, folder: ReferenceStore.folder(for: reference.id))
         // One-finger drags draw measurements while measuring, instead of moving models.
@@ -184,6 +185,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let points = mapPoints
         Task {
             let pieces = await Task.detached(priority: .userInitiated) { Backdrop.pieces(reference: saved, mapPoints: points) }.value
+            guard !stopped else { backdropBuilding = false; return }
             for node in Backdrop.nodes(from: pieces) { backdropNode.addChildNode(node) }
             backdropBuilt = true
             backdropBuilding = false
@@ -274,6 +276,13 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     func stop() {
         measurer.active = false
+        stopped = true
+        // The backdrop's pictures are big: let go of them now, not whenever this screen is freed (1289 ran out of memory).
+        for node in backdropNode.childNodes {
+            node.geometry = nil
+            node.removeFromParentNode()
+        }
+        backdropBuilt = false
         session.pause()
     }
 
