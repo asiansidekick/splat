@@ -8,6 +8,8 @@ struct BackdropPiece: @unchecked Sendable {
     let image: CGImage
     /// Plane-to-world: the camera's pose, then out along its view to the plane's centre.
     let transform: simd_float4x4
+    /// Where the camera was, and which way it faced, when the frame was shot.
+    let camera: simd_float4x4
     let width: Float
     let height: Float
 }
@@ -22,11 +24,11 @@ enum Backdrop {
     static let fallbackDistance: Float = 3.5
 
     /// The pieces for every frame and snapshot of the reference. Reads files: call off the main thread.
-    static func pieces(reference: Reference, mapPoints: [SIMD3<Float>]) -> [BackdropPiece] {
+    static func pieces(reference: Reference, mapPoints: [SIMD3<Float>], limit: Int = maxFrames) -> [BackdropPiece] {
         var frames = reference.keyframes + reference.snapshots.map(\.frame)
-        if frames.count > maxFrames {
-            let step = Double(frames.count) / Double(maxFrames)
-            frames = (0..<maxFrames).map { frames[Int(Double($0) * step)] }
+        if frames.count > limit {
+            let step = Double(frames.count) / Double(limit)
+            frames = (0..<limit).map { frames[Int(Double($0) * step)] }
         }
         let folder = ReferenceStore.folder(for: reference.id)
         return frames.compactMap { piece(for: $0, folder: folder, mapPoints: mapPoints) }
@@ -50,7 +52,7 @@ enum Backdrop {
         let centre = SIMD3<Float>((w / 2 - cx) / fx * d, -(h / 2 - cy) / fy * d, -d)
         var local = matrix_identity_float4x4
         local.columns.3 = SIMD4(centre, 1)
-        return BackdropPiece(image: image, transform: frame.cameraToWorld * local, width: w / fx * d, height: h / fy * d)
+        return BackdropPiece(image: image, transform: frame.cameraToWorld * local, camera: frame.cameraToWorld, width: w / fx * d, height: h / fy * d)
     }
 
     /// How far out the picture hangs: the median real depth of the frame, else the median distance of the

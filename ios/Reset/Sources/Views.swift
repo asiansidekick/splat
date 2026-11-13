@@ -102,7 +102,7 @@ struct CameraHome: View {
     @State private var showingRecent = false
 
     enum Panel: Identifiable {
-        case takeLog(UUID), compare(UUID), review(UUID), explore(UUID), slate(UUID), pdf(UUID), cutoutScan(UUID), nextSlate, help, gallery, sharePhoto, sync, sketch
+        case takeLog(UUID), compare(UUID), review(UUID), explore(UUID), walk(UUID), slate(UUID), pdf(UUID), cutoutScan(UUID), nextSlate, help, gallery, sharePhoto, sync, sketch
 
         var id: String {
             switch self {
@@ -110,6 +110,7 @@ struct CameraHome: View {
             case .compare(let id): return "compare-\(id)"
             case .review(let id): return "review-\(id)"
             case .explore(let id): return "explore-\(id)"
+            case .walk(let id): return "walk-\(id)"
             case .cutoutScan(let id): return "cutscan-\(id)"
             case .slate(let id): return "slate-\(id)"
             case .pdf(let id): return "pdf-\(id)"
@@ -325,6 +326,7 @@ struct CameraHome: View {
                 Button { endNudge(); selectedID = newest.id } label: { Label("Load \(newest.slate.isEmpty ? "it" : newest.slate)", systemImage: "arrow.down.circle") }
                 Button { endNudge(); perform(.hero, newest) } label: { Label(newest.hero ? "Remove hero star" : "Hero", systemImage: newest.hero ? "star.slash" : "star") }
                 Button { endNudge(); perform(.review, newest) } label: { Label("Review frames", systemImage: "rectangle.stack") }
+                if !newest.photoOnly { Button { endNudge(); panel = .walk(newest.id) } label: { Label("Walk through", systemImage: "figure.walk") } }
                 Button { endNudge(); perform(.slate, newest) } label: { Label("Edit slate", systemImage: "pencil") }
                 Button { endNudge(); perform(.takeLog, newest) } label: { Label("Take log", systemImage: "list.number") }
                 Button { endNudge(); perform(.compare, newest) } label: { Label("Compare", systemImage: "rectangle.split.2x1") }
@@ -540,6 +542,8 @@ struct CameraHome: View {
             }
         case .explore(let id):
             if let reference = references.first(where: { $0.id == id }) { ExploreView(reference: reference) }
+        case .walk(let id):
+            if let reference = references.first(where: { $0.id == id }) { WalkView(reference: reference) }
         case .cutoutScan(let id):
             if let reference = references.first(where: { $0.id == id }) { CutoutFromScan(reference: reference) }
         case .slate(let id):
@@ -2469,6 +2473,7 @@ struct ResetStage: View {
         items.append(.init("Add cut-out", "figure.stand", enabled: ready) { makingCutout = true })
         items.append(.init("Add example", "figure.stand.dress", enabled: ready) { choosingExample = true })
         if ExploreView.offered { items.append(.init("Explore in 3D", "view.3d") { open(.explore(reference.id)) }) }
+        if !reference.photoOnly { items.append(.init("Walk through", "figure.walk") { open(.walk(reference.id)) }) }
         items.append(.init("Frames", "rectangle.stack") { open(.review(reference.id)) })
         items.append(.init("Compare", "rectangle.split.2x1") { open(.compare(reference.id)) })
         items.append(.init("Take log", "list.number") { open(.takeLog(reference.id)) })
