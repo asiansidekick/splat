@@ -2447,6 +2447,16 @@ struct ResetStage: View {
         }
         items.append(.init("References", "photo.on.rectangle") { open(.gallery) })
         if !others.isEmpty { items.append(.init("Add a layer", "square.3.layers.3d") { addingLayer = true }) }
+        if !reference.photoOnly {
+            // Phil, 2026-11-13: the recorded frames hung in the room, so the place can be looked around in.
+            items.append(.init(restorer.backdropOn ? "Backdrop off" : "Backdrop from frames", "photo.stack", enabled: ready) {
+                let turningOn = !restorer.backdropOn
+                restorer.setBackdrop(turningOn) { count in
+                    showToast(count == 0 ? "No frames to hang" : "Backdrop: \(count) frames hung where they were shot")
+                }
+                if turningOn { showToast("Building the backdrop… stand where you recorded and look around") }
+            })
+        }
         items.append(.init("Add 3D model", "cube", enabled: ready) { importingModel = true })
         items.append(.init("Add cut-out", "figure.stand", enabled: ready) { makingCutout = true })
         items.append(.init("Add an example", "figure.stand.dress", enabled: ready) { choosingExample = true })
@@ -2478,7 +2488,7 @@ struct ResetStage: View {
                     restorer.measurer.attachGestures(to: view)
                     holder.view = view
                 }
-                if ghostShown {
+                if ghostShown, !restorer.backdropOn {
                     if reference.photoOnly, let photo = restorer.startPhoto {
                         Image(uiImage: photo)
                             .resizable()
@@ -2539,7 +2549,7 @@ struct ResetStage: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .allowsHitTesting(false)
                 }
-                if restorer.status == .ready, !restorer.show3D, !reference.photoOnly, !restorer.paused {
+                if restorer.status == .ready, !restorer.show3D, !reference.photoOnly, !restorer.paused, !restorer.backdropOn {
                     AimOverlay(state: restorer.aim).hiddenInScreenshots()
                     EdgeGuideOverlay(state: restorer.edges).hiddenInScreenshots()
                 }

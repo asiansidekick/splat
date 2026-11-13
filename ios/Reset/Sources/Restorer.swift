@@ -67,6 +67,11 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     let modelsNode = SCNNode()
     /// Everything this screen draws in 3D.
     let sceneContent = SCNNode()
+    /// The recorded frames hung in the room as a virtual set (Backdrop.swift); built the first time it is switched on.
+    let backdropNode = SCNNode()
+    @Published private(set) var backdropOn = false
+    @Published private(set) var backdropBuilding = false
+    private var backdropBuilt = false
     lazy var placer: ModelPlacer = {
         let placer = ModelPlacer(session: session, root: modelsNode, folder: ReferenceStore.folder(for: reference.id))
         // One-finger drags draw measurements while measuring, instead of moving models.
@@ -121,7 +126,27 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         self.reference = reference
         super.init()
         modelsNode.isHidden = true
+        backdropNode.isHidden = true
+        sceneContent.addChildNode(backdropNode)
         sceneContent.addChildNode(modelsNode)
+    }
+
+    /// Shows or hides the recorded frames as a backdrop in the room. Returns how many pictures it hangs, once built.
+    func setBackdrop(_ on: Bool, done: @escaping (Int) -> Void = { _ in }) {
+        backdropOn = on
+        backdropNode.isHidden = !(on && status == .ready)
+        guard on, !backdropBuilt, !backdropBuilding else { return }
+        backdropBuilding = true
+        let saved = reference
+        let points = mapPoints
+        Task {
+            let pieces = await Task.detached(priority: .userInitiated) { Backdrop.pieces(reference: saved, mapPoints: points) }.value
+            for node in Backdrop.nodes(from: pieces) { backdropNode.addChildNode(node) }
+            backdropBuilt = true
+            backdropBuilding = false
+            Diagnostics.log("Backdrop: \(pieces.count) pictures")
+            done(pieces.count)
+        }
     }
 
     /// Whether the reference has LiDAR depth, which the 3D ghost is built from. Viewing it works on
@@ -272,6 +297,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
                 Diagnostics.log("Reset lost tracking: \(frame.camera.trackingState)")
             }
             modelsNode.isHidden = true
+            backdropNode.isHidden = true
             if !slowToFind, let since = relocalizingSince, Date().timeIntervalSince(since) > 20 {
                 slowToFind = true
                 Diagnostics.log("Reset still looking for the room after 20 s: \(frame.camera.trackingState)")
@@ -286,6 +312,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             slowToFind = false
         }
         modelsNode.isHidden = false
+        backdropNode.isHidden = !backdropOn
         // Read every frame: during a rotation the new orientation arrives after the size change.
         let screen = Screen.orientation
         if orientation != screen { orientation = screen }
