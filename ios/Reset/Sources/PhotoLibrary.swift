@@ -44,6 +44,28 @@ enum PhotoLibrary {
         }
     }
 
+    /// Phil, 2026-11-13: any saved frame as a plain see-through overlay for a different place, where the reference's
+    /// own room cannot be found. It becomes a photo-only reference (hand-aligned over the live camera, with the live
+    /// LiDAR there for measuring). Asking again for the same frame gives the one already made.
+    static func makeOverlay(from reference: Reference, frame: Keyframe, number: Int) throws -> Reference {
+        let key = "overlay.\(reference.id.uuidString).\(frame.imageFile)"
+        if let text = UserDefaults.standard.string(forKey: key), let id = UUID(uuidString: text),
+           let existing = try? ReferenceStore.load(metaURL: ReferenceStore.folder(for: id).appendingPathComponent("reference.json")) {
+            return existing
+        }
+        let url = ReferenceStore.folder(for: reference.id).appendingPathComponent(frame.imageFile)
+        guard let cg = UIImage(contentsOfFile: url.path)?.cgImage else { throw CocoaError(.fileReadCorruptFile) }
+        let upright = UIImage(cgImage: cg, scale: 1, orientation: frame.uprightOrientation)
+        guard let data = upright.jpegData(compressionQuality: 0.9) else { throw CocoaError(.fileWriteUnknown) }
+        var overlay = try makeReference(from: data, scene: reference.scene, setup: reference.setup)
+        overlay.shot = reference.shot
+        overlay.name = "Overlay of view \(number)"
+        overlay.group = reference.group
+        try ReferenceStore.save(overlay)
+        UserDefaults.standard.set(overlay.id.uuidString, forKey: key)
+        return overlay
+    }
+
     /// Makes a photo-only reference from an imported photo: the photo becomes its ghost.
     static func makeReference(from data: Data, scene: String, setup: String) throws -> Reference {
         guard let source = UIImage(data: data) else { throw CocoaError(.fileReadCorruptFile) }

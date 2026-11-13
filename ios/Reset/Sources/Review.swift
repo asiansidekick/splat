@@ -32,13 +32,31 @@ struct FrameReview: View {
     private var sideways: Bool { verticalSize == .compact }
     private var showsStrip: Bool { !sideways && !editingModels && !measuring }
 
-    init(reference: Reference, startMeasuring: Bool = false, onSave: @escaping (Reference) -> Void) {
+    /// Opens the new overlay reference over the camera (the sheet closes first).
+    var onOverlay: ((UUID) -> Void)?
+    @State private var overlayFailed = false
+
+    init(reference: Reference, startMeasuring: Bool = false, onOverlay: ((UUID) -> Void)? = nil, onSave: @escaping (Reference) -> Void) {
+        self.onOverlay = onOverlay
         _reference = State(initialValue: reference)
         _measuring = State(initialValue: startMeasuring)
         self.onSave = onSave
         let root = SCNNode()
         _placer = StateObject(wrappedValue: ModelPlacer(session: ARSession(), root: root, folder: ReferenceStore.folder(for: reference.id)))
         _stage = StateObject(wrappedValue: ReviewStage(modelRoot: root))
+    }
+
+    private func useFrameAsOverlay() {
+        guard frames.indices.contains(index) else { return }
+        do {
+            let overlay = try PhotoLibrary.makeOverlay(from: reference, frame: frames[index], number: index + 1)
+            Diagnostics.log("Frame \(index + 1) of \(reference.slate) made into an overlay")
+            dismiss()
+            onOverlay?(overlay.id)
+        } catch {
+            Diagnostics.log("Overlay from a frame failed: \(error)")
+            overlayFailed = true
+        }
     }
 
     private var frames: [Keyframe] { reference.keyframes + reference.snapshots.map(\.frame) }
@@ -92,6 +110,11 @@ struct FrameReview: View {
             }
         }
         .fullScreenCover(isPresented: $exploring) { ExploreView(reference: reference).themed() }
+        .alert("Couldn't make the overlay", isPresented: $overlayFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This frame's photo could not be read.")
+        }
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled()
         .onAppear {
@@ -171,6 +194,11 @@ struct FrameReview: View {
                     .accessibilityLabel("Smaller text")
                 Button { measurer.scaleText(by: 1.25) } label: { Text("A").font(Theme.title3.weight(.bold)).frame(width: 40, height: 36) }
                     .accessibilityLabel("Bigger text")
+                // Phil, 2026-11-13: this frame over the live camera somewhere else, to compare and line up by hand.
+                if onOverlay != nil {
+                    Button { useFrameAsOverlay() } label: { Image(systemName: "rectangle.on.rectangle.angled").frame(width: 40, height: 36) }
+                        .accessibilityLabel("Use frame as overlay")
+                }
                 // Phil, 2026-11-10: save this frame, with its models and marks, to Photos.
                 Button { exportCount += 1 } label: { Image(systemName: "square.and.arrow.down").frame(width: 40, height: 36) }
                     .disabled(!frames.indices.contains(index))

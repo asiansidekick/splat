@@ -526,7 +526,14 @@ struct CameraHome: View {
             if let reference = references.first(where: { $0.id == id }) { CompareView(reference: reference) }
         case .review(let id):
             if let reference = references.first(where: { $0.id == id }) {
-                FrameReview(reference: reference, startMeasuring: reviewMeasuring) { updated in
+                FrameReview(reference: reference, startMeasuring: reviewMeasuring, onOverlay: { newID in
+                    // The frame's overlay is a new photo reference: add it to the list and open it over the camera.
+                    if let made = ReferenceStore.all().first(where: { $0.id == newID }), !references.contains(where: { $0.id == newID }) {
+                        references.insert(made, at: 0)
+                    }
+                    self.panel = nil
+                    useAsOverlay(newID, from: "a frame in Review")
+                }) { updated in
                     if let saved = binding(for: id) { saved.wrappedValue = updated }
                     try? ReferenceStore.save(updated)
                 }
