@@ -131,6 +131,49 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         sceneContent.addChildNode(modelsNode)
     }
 
+    /// Phil, 2026-11-13: view and edit anything anywhere. Works without finding the saved room: a new session starts here and,
+    /// once it tracks, its world is shifted so the phone stands where the reference's first frame was shot (turned and
+    /// moved level, never tilted). Everything of the reference (models, marks, backdrop, ghost) then sits around the phone,
+    /// and what is edited is saved in the reference's own coordinates as usual.
+    @Published private(set) var placedHere = false
+    private var pendingPlaceHere = false
+
+    func placeHere() {
+        guard !reference.photoOnly, !placedHere, !pendingPlaceHere, reference.keyframes.first != nil else { return }
+        let config = ARWorldTrackingConfiguration()
+        config.planeDetection = [.horizontal, .vertical]
+        if Recorder.lidarAvailable { config.frameSemantics.insert(.sceneDepth) }
+        pendingPlaceHere = true
+        status = .relocalizing
+        relocalizingSince = Date()
+        session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        Diagnostics.log("Reset place here: new session without the room map")
+    }
+
+    private func anchorHere(_ frame: ARFrame) {
+        guard let first = reference.keyframes.first else { return }
+        let there = first.cameraToWorld
+        let here = frame.camera.transform
+        let turn = Self.heading(of: here) - Self.heading(of: there)
+        var shift = simd_float4x4(simd_quatf(angle: turn, axis: SIMD3(0, 1, 0)))
+        let moved = here.columns.3.xyz - (shift * there.columns.3).xyz
+        shift.columns.3 = SIMD4(moved, 1)
+        session.setWorldOrigin(relativeTransform: shift)
+        placedHere = true
+        Diagnostics.log("Reset placed here: turned \(Int(turn * 180 / .pi))°")
+    }
+
+    /// Which way a camera faces on the floor plan (radians), from its view direction, or the top of the picture when it looks steeply down.
+    private static func heading(of camera: simd_float4x4) -> Float {
+        var ahead = -camera.columns.2.xyz
+        ahead.y = 0
+        if simd_length(ahead) < 0.3 {
+            ahead = camera.columns.1.xyz
+            ahead.y = 0
+        }
+        return atan2(ahead.x, ahead.z)
+    }
+
     /// Shows or hides the recorded frames as a backdrop in the room. Returns how many pictures it hangs, once built.
     func setBackdrop(_ on: Bool, done: @escaping (Int) -> Void = { _ in }) {
         backdropOn = on
@@ -303,6 +346,10 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
                 Diagnostics.log("Reset still looking for the room after 20 s: \(frame.camera.trackingState)")
             }
             return
+        }
+        if pendingPlaceHere {
+            pendingPlaceHere = false
+            anchorHere(frame)
         }
         if status != .ready {
             status = .ready

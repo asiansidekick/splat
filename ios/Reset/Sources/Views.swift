@@ -2449,26 +2449,34 @@ struct ResetStage: View {
         if !others.isEmpty { items.append(.init("Add a layer", "square.3.layers.3d") { addingLayer = true }) }
         if !reference.photoOnly {
             // Phil, 2026-11-13: the recorded frames hung in the room, so the place can be looked around in.
-            items.append(.init(restorer.backdropOn ? "Backdrop off" : "Backdrop from frames", "photo.stack", enabled: ready) {
+            // Not in the recorded room yet: it is hung around where you stand instead (Restorer.placeHere).
+            items.append(.init(restorer.backdropOn ? "Backdrop off" : "Backdrop", "photo.stack") {
                 let turningOn = !restorer.backdropOn
+                if turningOn, !ready { restorer.placeHere() }
                 restorer.setBackdrop(turningOn) { count in
-                    showToast(count == 0 ? "No frames to hang" : "Backdrop: \(count) frames hung where they were shot")
+                    showToast(count == 0 ? "No frames to hang" : "Backdrop: \(count) frames hung round you")
                 }
-                if turningOn { showToast("Building the backdrop… stand where you recorded and look around") }
+                if turningOn { showToast(ready ? "Building the backdrop… stand where you recorded and look around" : "Building the backdrop round where you stand…") }
             })
+            if !ready, !restorer.placedHere {
+                items.append(.init("Place here", "mappin.and.ellipse") {
+                    restorer.placeHere()
+                    showToast("Placed here: the set, models and notes now stand round you")
+                })
+            }
         }
         items.append(.init("Add 3D model", "cube", enabled: ready) { importingModel = true })
         items.append(.init("Add cut-out", "figure.stand", enabled: ready) { makingCutout = true })
-        items.append(.init("Add an example", "figure.stand.dress", enabled: ready) { choosingExample = true })
+        items.append(.init("Add example", "figure.stand.dress", enabled: ready) { choosingExample = true })
         if ExploreView.offered { items.append(.init("Explore in 3D", "view.3d") { open(.explore(reference.id)) }) }
-        items.append(.init("Review frames", "rectangle.stack") { open(.review(reference.id)) })
+        items.append(.init("Frames", "rectangle.stack") { open(.review(reference.id)) })
         items.append(.init("Compare", "rectangle.split.2x1") { open(.compare(reference.id)) })
         items.append(.init("Take log", "list.number") { open(.takeLog(reference.id)) })
         items.append(.init("PDF report", "square.and.arrow.up") { open(.pdf(reference.id)) })
         items.append(.init("Edit slate", "pencil") { open(.slate(reference.id)) })
         items.append(.init("Sync phones", "arrow.triangle.2.circlepath") { open(.sync) })
-        items.append(.init(leftHanded ? "Left-handed: on" : "Left-handed: off", "hand.raised") { leftHanded.toggle() })
-        items.append(.init("Show tips again", "lightbulb") {
+        items.append(.init(leftHanded ? "Left hand: on" : "Left hand: off", "hand.raised") { leftHanded.toggle() })
+        items.append(.init("Tips again", "lightbulb") {
             HintStore.resetAll()
             showToast("Tips will show again")
         })
