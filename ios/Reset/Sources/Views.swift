@@ -714,13 +714,15 @@ struct CameraLayout<Top: View, Preview: View, Modes: View, Leading: View, Shutte
                         // sits in the screen's top corner (taps there went unanswered).
                         // Phil, 2026-11-12: RECENT hung down into the home-indicator strip, where taps never reach the app.
                         // Closer spacing and a lift keep the whole column, RECENT too, clear of the bottom edge.
+                        // Phil, 2026-11-13: screenshot in the top corner, the Reference thumbnail (with RECENT)
+                        // in the bottom corner, the shutter and mode words between them.
                         VStack(spacing: 10) {
-                            Spacer(minLength: 0)
                             trailing().environment(\.chromeVertical, true)
+                            Spacer(minLength: 0)
                             modes(true)
                             shutter()
-                            leading()
                             Spacer(minLength: 0)
+                            leading()
                         }
                         .padding(.top, 8)
                         .padding(.bottom, 48)
@@ -855,18 +857,37 @@ struct SideButton: View {
     let title: String
     let systemImage: String
     var tint: Color = .white
+    /// The word hangs under the circle like the Reference thumbnail's, so the circle's centre and the word's
+    /// line match the thumbnail's in the bottom row (Phil, 2026-11-13: "Align the icons").
+    var hanging = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 4) {
+            if hanging {
                 Image(systemName: systemImage)
                     .font(Theme.title3)
                     .frame(width: 50, height: 50)
                     .background(Color.white.opacity(0.15), in: Circle())
-                Text(title).font(Theme.caption.bold()).lineLimit(1).minimumScaleFactor(0.7)
+                    .overlay(alignment: .bottom) {
+                        Text(title)
+                            .font(Theme.font(size: 14, weight: .semibold))
+                            .shadow(color: .black.opacity(0.9), radius: 2)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .offset(y: 18)
+                    }
+                    .foregroundStyle(tint)
+            } else {
+                VStack(spacing: 4) {
+                    Image(systemName: systemImage)
+                        .font(Theme.title3)
+                        .frame(width: 50, height: 50)
+                        .background(Color.white.opacity(0.15), in: Circle())
+                    Text(title).font(Theme.caption.bold()).lineLimit(1).minimumScaleFactor(0.7)
+                }
+                .foregroundStyle(tint)
             }
-            .foregroundStyle(tint)
         }
         .buttonStyle(PressScale())
     }
@@ -879,7 +900,7 @@ struct ModelsBesideScreenshot: View {
 
     var body: some View {
         if !vertical {
-            SideButton(title: "3D models", systemImage: "cube") { TapGate.run("3D models", action) }
+            SideButton(title: "3D models", systemImage: "cube", hanging: true) { TapGate.run("3D models", action) }
                 .caughtTap("3D models", perform: action)
         }
     }
@@ -895,10 +916,12 @@ struct ModelsEdgeButton: View {
 
     var body: some View {
         if !measurer.active, placer.selectedModel == nil {
-            SideButton(title: "3D models", systemImage: "cube") { TapGate.run("3D models", action) }
+            // Bottom corner, its circle level with the Reference thumbnail across the screen (48 up, like the
+            // column's bottom padding), the word above the home-indicator strip.
+            SideButton(title: "3D models", systemImage: "cube", hanging: true) { TapGate.run("3D models", action) }
                 .caughtTap("3D models", perform: action)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 16)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 48)
                 .hiddenInScreenshots()
         }
     }
