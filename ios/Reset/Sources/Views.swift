@@ -2140,7 +2140,9 @@ struct CaptureStage: View {
             return "Mapping the room. Move the phone gently side to side and it saves by itself. Tap again to save now."
         }
         if recorder.capturing {
-            return "Recording \(slate). Walk slowly round the props, then tap stop."
+            return recorder.tilesTotal > 0
+                ? "Recording \(slate). Walk round, or turn on the spot to fill the rings (\(recorder.tilesFilled) of \(recorder.tilesTotal)). Tap stop to save."
+                : "Recording \(slate). Walk slowly round the props, then tap stop."
         }
         if !recorder.trackingNormal && !bearingsHintDone {
             let start = mode == .walk ? "Press record" : "Tap the shutter"

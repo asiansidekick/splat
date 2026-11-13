@@ -151,6 +151,85 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         Diagnostics.log("Camera start: LiDAR \(config.frameSemantics.contains(.sceneDepth))")
     }
 
+    // MARK: Tiling guide (Phil, 2026-11-13)
+
+    /// Rings round the phone, 1.6 m out, three rows (down, level, up) of twelve: turn on the spot until each one fills,
+    /// and the frames overlap enough to hang as a seamless view from this place (see Backdrop, WalkView).
+    private let tileNode = SCNNode()
+    private var tileDots: [(node: SCNNode, direction: SIMD3<Float>)] = []
+    @Published private(set) var tilesFilled = 0
+    var tilesTotal: Int { tileDots.count }
+    private static let tileEmpty = tileImage(filled: false)
+    private static let tileFull = tileImage(filled: true)
+
+    private static func tileImage(filled: Bool) -> UIImage {
+        let size = CGSize(width: 64, height: 64)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            let box = CGRect(origin: .zero, size: size).insetBy(dx: 6, dy: 6)
+            if filled {
+                UIColor(red: 0.45, green: 0.95, blue: 0.75, alpha: 0.9).setFill()
+                UIBezierPath(ovalIn: box).fill()
+            } else {
+                UIColor.white.withAlphaComponent(0.8).setStroke()
+                let ring = UIBezierPath(ovalIn: box)
+                ring.lineWidth = 5
+                ring.stroke()
+            }
+        }
+    }
+
+    private func buildTiles() {
+        clearTiles()
+        guard let frame = session.currentFrame else { return }
+        let camera = frame.camera.transform
+        var ahead = -camera.columns.2.xyz
+        ahead.y = 0
+        if simd_length(ahead) < 0.2 { ahead = camera.columns.1.xyz; ahead.y = 0 }
+        let start = atan2(-ahead.x, -ahead.z)
+        tileNode.simdPosition = camera.columns.3.xyz
+        if tileNode.parent == nil { modelsNode.addChildNode(tileNode) }
+        for pitchDegrees in [Float(-35), 0, 35] {
+            let pitch = pitchDegrees * .pi / 180
+            for step in 0..<12 {
+                let yaw = start + Float(step) * (.pi / 6)
+                let direction = SIMD3<Float>(-sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch))
+                let plane = SCNPlane(width: 0.17, height: 0.17)
+                let material = SCNMaterial()
+                material.diffuse.contents = Self.tileEmpty
+                material.lightingModel = .constant
+                material.isDoubleSided = true
+                material.readsFromDepthBuffer = false
+                plane.materials = [material]
+                let node = SCNNode(geometry: plane)
+                node.simdPosition = direction * 1.6
+                node.constraints = [SCNBillboardConstraint()]
+                node.renderingOrder = 150
+                tileNode.addChildNode(node)
+                tileDots.append((node, direction))
+            }
+        }
+        tilesFilled = 0
+    }
+
+    private func clearTiles() {
+        tileNode.childNodes.forEach { $0.removeFromParentNode() }
+        tileDots = []
+        tilesFilled = 0
+    }
+
+    /// Fills the rings the frames kept so far point at (within 20°).
+    private func updateTiles() {
+        guard !tileDots.isEmpty, let frames = reference?.keyframes else { return }
+        let limit = cos(20 * Float.pi / 180)
+        var filled = 0
+        for dot in tileDots {
+            let covered = frames.contains { simd_dot($0.forward, dot.direction) > limit }
+            if covered { filled += 1 }
+            dot.node.geometry?.firstMaterial?.diffuse.contents = covered ? Self.tileFull : Self.tileEmpty
+        }
+        if filled != tilesFilled { tilesFilled = filled }
+    }
+
     /// Starts a new reference in the running session.
     func begin(scene: String, setup: String, name: String, shot: String = "") {
         guard reference == nil else { return }
@@ -168,6 +247,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         capturing = true
         error = nil
         Diagnostics.log("Record start: \(scene)\(setup) \(name), auto \(autoCapture)")
+        if autoCapture { buildTiles() }
     }
 
     /// Saves as soon as there is at least one view and the map is ready.
@@ -248,6 +328,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
             self.reference = nil
             capturing = false
             keyframeCount = 0
+            clearTiles()
             Diagnostics.log("Record saved: \(reference.keyframes.count) keyframes")
             return reference
         } catch {
@@ -271,6 +352,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         capturing = false
         pendingSave = false
         showDots = false
+        clearTiles()
     }
 
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -403,6 +485,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         reference.keyframes.append(keyframe)
         self.reference = reference
         keyframeCount = reference.keyframes.count
+        updateTiles()
 
         let folder = ReferenceStore.folder(for: reference.id)
         let context = ciContext
