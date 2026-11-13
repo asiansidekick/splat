@@ -247,7 +247,8 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         capturing = true
         error = nil
         Diagnostics.log("Record start: \(scene)\(setup) \(name), auto \(autoCapture)")
-        if autoCapture { buildTiles() }
+        // Off unless asked for (Phil, 2026-11-13): Help, Tiling guide.
+        if autoCapture, UserDefaults.standard.bool(forKey: "tileGuide") { buildTiles() }
     }
 
     /// Saves as soon as there is at least one view and the map is ready.

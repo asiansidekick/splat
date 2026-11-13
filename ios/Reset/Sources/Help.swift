@@ -9,6 +9,7 @@ struct HelpView: View {
     @AppStorage("leftHanded") private var leftHanded = false
     @AppStorage("cutoutMatchLight") private var cutoutMatchLight = true
     @AppStorage("measureRaycast") private var measureRaycast = true
+    @AppStorage("tileGuide") private var tileGuide = false
     /// Made again each time this page shows, so a test just run (Surface test) is in the log sent.
     @State private var report = Diagnostics.reportURL()
 
@@ -71,6 +72,10 @@ struct HelpView: View {
                     Toggle("Match cut-outs to the room's light", isOn: $cutoutMatchLight)
                     step("sun.max", "On, a cut-out darkens in dim light and warms or cools with the room's lamps, so it sits in the shot. Each stands on a soft shadow.")
                     step("paintbrush.pointed", "Touch up, under each photo when making a cut-out, fixes its edges: Keep, Erase, Loop round what you want, or Tap subject to pick one person or thing.")
+                }
+                Section("Tiling guide") {
+                    Toggle("Rings to fill when scanning", isOn: $tileGuide)
+                    step("circle.dashed", "Off unless you want it. In Auto scan, rings hang round you; turn on the spot until each fills. Walk through (hold the Reference thumbnail) then works like street view.")
                 }
                 Section("Measuring") {
                     Toggle("Measure with ARKit surfaces", isOn: $measureRaycast)
