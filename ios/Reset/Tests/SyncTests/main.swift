@@ -1,0 +1,627 @@
+// Tests for syncing references with nearby phones, run on a Mac by CI:
+//   swiftc -O Sources/ReferenceModel.swift Sources/ReferenceSync.swift Sources/Shared/PhotoPrivacy.swift \
+//     Sources/Shared/SecurePack.swift Sources/Shared/SyncEngine.swift Tests/SyncTests/main.swift -o sync-tests
+//   ./sync-tests
+// Phones, each with its own references folder (written and read back as JSON, as on the
+// phone), run the shared sync engine and Reset's reference library; the radio is a queue that
+// seals and unseals files as NearbySync does. Checks references, photos, depth, room maps and
+// models spread both ways and through a middle phone, edits and deletions settle on the same
+// answer everywhere instead of bouncing, the no-depth option, other passcodes, and bad files.
+
+import CoreGraphics
+import Foundation
+import ImageIO
+import simd
+import UniformTypeIdentifiers
+
+var failures = 0
+func expect(_ condition: Bool, _ message: String) {
+    print((condition ? "PASS  " : "FAIL  ") + message)
+    if !condition { failures += 1 }
+}
+
+let manager = FileManager.default
+let scratch = manager.temporaryDirectory.appendingPathComponent("reset-sync-tests-\(UUID().uuidString)")
+try manager.createDirectory(at: scratch, withIntermediateDirectories: true)
+defer { try? manager.removeItem(at: scratch) }
+
+func jpeg(shade: CGFloat, gps: Bool = false) -> Data {
+    let context = CGContext(data: nil, width: 40, height: 30, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+    context.setFillColor(CGColor(red: shade, green: 0.4, blue: 1 - shade, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: 40, height: 30))
+    let out = NSMutableData()
+    let destination = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil)!
+    var properties: [CFString: Any] = [:]
+    if gps { properties[kCGImagePropertyGPSDictionary] = [kCGImagePropertyGPSLatitude: 51.5, kCGImagePropertyGPSLatitudeRef: "N"] }
+    CGImageDestinationAddImage(destination, context.makeImage()!, properties as CFDictionary)
+    CGImageDestinationFinalize(destination)
+    return out as Data
+}
+
+let depthBytes = Data((0..<4 * 6).map { UInt8($0) })
+let mapBytes = Data("bplist00".utf8) + Data(repeating: 7, count: 40)
+let modelBytes = Data([0x50, 0x4B, 0x03, 0x04]) + Data(repeating: 1, count: 60)
+
+let teamKey = SyncKey(passcode: "blue-door-42", service: "reset-sync")
+let otherKey = SyncKey(passcode: "red-door-7", service: "reset-sync")
+
+// MARK: File names
+
+expect(ReferenceSyncLibrary.kind("frame_0003.jpg") == .photo && ReferenceSyncLibrary.kind("depth_0003.bin") == .depth
+    && ReferenceSyncLibrary.kind("snap_1A2B3C4D.jpg") == .photo && ReferenceSyncLibrary.kind("worldmap.arexperience") == .map,
+    "Reset's own file names are known")
+let modelID = UUID().uuidString
+expect(ReferenceSyncLibrary.kind("model-\(modelID).usdz") == .model && ReferenceSyncLibrary.path("model-\(modelID).usdz") == "models/\(modelID).usdz"
+    && ReferenceSyncLibrary.syncName(modelFile: "models/\(modelID).usdz") == "model-\(modelID).usdz", "models travel as model-<id>.usdz")
+expect(ReferenceSyncLibrary.kind("../frame.jpg") == nil && ReferenceSyncLibrary.kind("reference.json") == nil
+    && ReferenceSyncLibrary.kind("evil.sh") == nil && ReferenceSyncLibrary.kind("model-x.usdz") == nil
+    && ReferenceSyncLibrary.kind(".jpg") == nil && ReferenceSyncLibrary.kind("frame 1.jpg") == nil, "anything else is refused")
+
+// MARK: Merge rules on their own
+
+let base = Date(timeIntervalSince1970: 1_800_000_000)
+func frame(_ i: Int, depth: Bool = true) -> Keyframe {
+    Keyframe(
+        imageFile: String(format: "frame_%04d.jpg", i), depthFile: depth ? String(format: "depth_%04d.bin", i) : nil,
+        transform: Array(repeating: 0, count: 16), intrinsics: Array(repeating: 1, count: 9),
+        imageWidth: 40, imageHeight: 30, depthWidth: 2, depthHeight: 3)
+}
+var one = Reference(id: UUID(), scene: "12", setup: "A", name: "desk", created: base, keyframes: [frame(0)])
+let t1 = Take(number: 1, logged: base)
+one.takes = [t1]
+var mine = one, theirs = one
+mine.scene = "12"; mine.setup = "B"; mine.slateEdited = base.addingTimeInterval(10)
+theirs.name = "kitchen"; theirs.slateEdited = base.addingTimeInterval(20)
+let everything: (String) -> Bool = { _ in true }
+let ab = ReferenceSyncLibrary.merged(local: mine, incoming: theirs, has: everything)!
+let ba = ReferenceSyncLibrary.merged(local: theirs, incoming: mine, has: everything)!
+expect(Reference.label(scene: "1", setup: "3") == "Sc 1 · Tk 3" && Reference.label(scene: "12", setup: "B") == "12B" && Reference.label(scene: "", setup: "2") == "Tk 2" && Reference.label(scene: "1", setup: "2C") == "Sc 1 · Tk 2C",
+    "numbered takes read Sc 1 · Tk 3, old letters still read 12B")
+expect(Reference.label(scene: "12", setup: "3", shot: "A") == "Sc 12 · Shot A · Tk 3" && Reference.label(scene: "", setup: "3", shot: "A") == "Shot A · Tk 3" && Reference.label(scene: "12", setup: "3", shot: "") == "Sc 12 · Tk 3", "the slate reads Scene, Shot, Take")
+expect(ab.slate == ba.slate && ab.name == "kitchen" && ab.setup == "A", "the newest slate edit wins on both phones")
+var grouped = one, plain = one
+grouped.group = "Hair"; grouped.slateEdited = base.addingTimeInterval(30)
+plain.slateEdited = base.addingTimeInterval(5)
+let gm = ReferenceSyncLibrary.merged(local: plain, incoming: grouped, has: everything)!
+let gb = ReferenceSyncLibrary.merged(local: grouped, incoming: plain, has: everything)!
+expect(gm.group == "Hair" && gb.group == "Hair", "a newer group choice wins on both phones")
+var ungrouped = grouped
+ungrouped.group = ""; ungrouped.slateEdited = base.addingTimeInterval(40)
+expect(ReferenceSyncLibrary.merged(local: grouped, incoming: ungrouped, has: everything)!.group == "", "taking a reference out of its group syncs too")
+let decoded = try! JSONDecoder().decode(Reference.self, from: try! JSONEncoder().encode(grouped))
+expect(decoded.group == "Hair", "the group is saved with the reference")
+expect(one.number == "12A", "a letter-only setup reads 12A in the thumbnail")
+var old = try! JSONSerialization.jsonObject(with: JSONEncoder().encode(one)) as! [String: Any]
+old.removeValue(forKey: "group")
+expect((try! JSONDecoder().decode(Reference.self, from: JSONSerialization.data(withJSONObject: old))).group == "", "references saved before groups load with none")
+expect(Reference(id: UUID(), scene: "1", setup: "18", name: "", created: base, keyframes: []).number == "18"
+    && Reference(id: UUID(), scene: "12", setup: "B", name: "", created: base, keyframes: []).number == "12B", "the thumbnail number is the take, or 12B for old slates")
+var tie1 = one, tie2 = one
+tie1.name = "aaa"; tie2.name = "zzz"
+expect(ReferenceSyncLibrary.merged(local: tie1, incoming: tie2, has: everything)!.name
+    == ReferenceSyncLibrary.merged(local: tie2, incoming: tie1, has: everything)!.name, "unedited differences settle the same way")
+expect(ReferenceSyncLibrary.merged(local: ab, incoming: ab, has: everything) == ab, "merging the same thing changes nothing")
+var noDepth = one
+noDepth.keyframes = [frame(0, depth: false)]
+expect(ReferenceSyncLibrary.merged(local: noDepth, incoming: one, has: { $0 != "depth_0000.bin" })!.keyframes[0].depthFile == nil,
+       "depth stays off until its file is here")
+expect(ReferenceSyncLibrary.merged(local: noDepth, incoming: one, has: everything)!.keyframes[0].depthFile == "depth_0000.bin",
+       "and is added once it is")
+expect(ReferenceSyncLibrary.merged(local: nil, incoming: one, has: { $0 != "worldmap.arexperience" }) == nil,
+       "a new reference waits for its room map")
+expect(ReferenceSyncLibrary.merged(local: nil, incoming: one, has: { $0 != "frame_0000.jpg" }) == nil, "and for its photos")
+
+// MARK: Phones
+
+/// The radio: everything goes in a queue and is delivered in order, files sealed on the way.
+@MainActor
+final class Air {
+    var queue: [() -> Void] = []
+    var steps = 0
+    func run(limit: Int = 20_000) -> Bool {
+        while !queue.isEmpty {
+            steps += 1
+            if steps > limit { return false }
+            queue.removeFirst()()
+        }
+        return true
+    }
+}
+
+@MainActor
+final class Phone {
+    let name: String
+    let root: URL
+    var library: ReferenceSyncLibrary!
+    var engine: SyncEngine!
+    var strangers = 0
+    let key: SyncKey
+
+    init(_ name: String, key: SyncKey = teamKey, withDepth: Bool = true) throws {
+        self.name = name
+        self.key = key
+        root = scratch.appendingPathComponent("\(name)/References")
+        try manager.createDirectory(at: root, withIntermediateDirectories: true)
+        library = ReferenceSyncLibrary(root: root, withDepth: withDepth, references: { [unowned self] in self.references }, save: { [unowned self] in
+            self.store($0)
+        })
+        engine = SyncEngine(library: library, key: key, name: name)
+        engine.onStranger = { [unowned self] _ in self.strangers += 1 }
+    }
+
+    /// Read from reference.json in each folder, as ReferenceStore.all() does.
+    var references: [Reference] {
+        let folders = (try? manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        return folders.compactMap { folder in
+            (try? Data(contentsOf: folder.appendingPathComponent("reference.json")))
+                .flatMap { try? ReferenceSyncLibrary.decoder.decode(Reference.self, from: $0) }
+        }
+        .sorted { $0.created > $1.created }
+    }
+
+    func store(_ reference: Reference) {
+        let folder = root.appendingPathComponent(reference.id.uuidString)
+        try? manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? ReferenceSyncLibrary.encoder.encode(reference).write(to: folder.appendingPathComponent("reference.json"))
+    }
+
+    func reference(_ setup: String, views: Int, gps: Bool = false, models: Int = 0) throws -> Reference {
+        var reference = Reference(id: UUID(), scene: "12", setup: setup, name: "", created: base, keyframes: [])
+        let folder = root.appendingPathComponent(reference.id.uuidString)
+        try manager.createDirectory(at: folder.appendingPathComponent("models"), withIntermediateDirectories: true)
+        for i in 0..<views {
+            let view = frame(i)
+            try jpeg(shade: CGFloat(i) / 10, gps: gps && i == 0).write(to: folder.appendingPathComponent(view.imageFile))
+            try depthBytes.write(to: folder.appendingPathComponent(view.depthFile!))
+            reference.keyframes.append(view)
+        }
+        try mapBytes.write(to: folder.appendingPathComponent("worldmap.arexperience"))
+        for _ in 0..<models {
+            let id = UUID()
+            try modelBytes.write(to: folder.appendingPathComponent("models/\(id.uuidString).usdz"))
+            reference.models.append(PlacedModel(id: id, name: "chair", file: "models/\(id.uuidString).usdz", transform: Array(repeating: 1, count: 16)))
+        }
+        store(reference)
+        return reference
+    }
+
+    func has(_ reference: Reference) -> Reference? { references.first { $0.id == reference.id } }
+
+    func update(_ id: UUID, _ change: (inout Reference) -> Void) {
+        guard var reference = references.first(where: { $0.id == id }) else { return }
+        change(&reference)
+        store(reference)
+    }
+
+    func file(_ reference: Reference, _ name: String) -> Data? {
+        try? Data(contentsOf: root.appendingPathComponent(reference.id.uuidString).appendingPathComponent(name))
+    }
+}
+
+@MainActor
+func link(_ a: Phone, _ b: Phone, air: Air) {
+    for (from, to) in [(a, b), (b, a)] {
+        let previousMessage = from.engine.sendMessage
+        let previousFile = from.engine.sendFile
+        from.engine.sendMessage = { [unowned air] peer, data in
+            guard peer == to.name else { return previousMessage(peer, data) }
+            air.queue.append { to.engine.received(data, from: from.name) }
+        }
+        from.engine.sendFile = { [unowned air] peer, url, resource in
+            guard peer == to.name else { return previousFile(peer, url, resource) }
+            let sealed = scratch.appendingPathComponent("air-\(UUID().uuidString)")
+            let ok = (try? from.key.sealFile(at: url, to: sealed, name: resource)) != nil
+            air.queue.append {
+                let plain = scratch.appendingPathComponent("plain-\(UUID().uuidString)")
+                let opened = ok && to.key.openFile(at: sealed, to: plain, name: resource)
+                to.engine.receivedFile(opened ? plain : nil, resource: resource, from: from.name)
+                try? manager.removeItem(at: sealed)
+                try? manager.removeItem(at: plain)
+            }
+        }
+    }
+    air.queue.append { a.engine.connected(b.name) }
+    air.queue.append { b.engine.connected(a.name) }
+}
+
+@MainActor
+func runSyncTests() throws {
+    // Two phones, different references.
+    let air = Air()
+    let a = try Phone("A")
+    let b = try Phone("B")
+    let desk = try a.reference("A", views: 3, models: 1)
+    let door = try b.reference("B", views: 2)
+    link(a, b, air: air)
+    expect(air.run(), "A and B finish syncing (\(air.steps) steps)")
+    expect(a.references.count == 2 && b.references.count == 2, "both phones have both references")
+    let bDesk = b.has(desk)
+    expect(bDesk?.keyframes == desk.keyframes && (0..<3).allSatisfy { b.file(desk, frame($0).imageFile) != nil },
+           "A's three views reached B with their photos")
+    expect(b.file(desk, "depth_0002.bin") == depthBytes && b.file(desk, "worldmap.arexperience") == mapBytes, "with LiDAR depth and the room map")
+    expect(bDesk?.models.count == 1 && b.file(desk, desk.models[0].file) == modelBytes, "and the 3D model, in the models folder")
+    expect(a.has(door) != nil && a.file(door, "frame_0001.jpg") != nil, "B's reference came back the other way")
+    expect(a.engine.progress.waiting == 0 && b.engine.progress.waiting == 0, "nothing left waiting")
+
+    // Both phones log and edit at once; everything settles to the same answer.
+    let take2 = Take(number: 2, logged: base.addingTimeInterval(120))
+    let take3 = Take(number: 3, logged: base.addingTimeInterval(240))
+    a.update(desk.id) { $0.takes.append(take2) }
+    b.update(desk.id) {
+        $0.takes.append(take3)
+        $0.name = "desk wide"
+        $0.slateEdited = base.addingTimeInterval(300)
+        $0.models[0].transform = Array(repeating: 2, count: 16)
+        $0.models[0].moved = base.addingTimeInterval(300)
+    }
+    a.engine.localChanged()
+    b.engine.localChanged()
+    air.steps = 0
+    expect(air.run(limit: 2_000), "edits settle instead of bouncing (\(air.steps) steps)")
+    let finalA = a.has(desk)!, finalB = b.has(desk)!
+    expect(Set(finalA.takes.map(\.id)) == [take2.id, take3.id] && Set(finalB.takes.map(\.id)) == [take2.id, take3.id], "takes from both phones on both")
+    expect(finalA.name == "desk wide" && finalB.name == "desk wide", "the slate edit reached A")
+    expect(finalA.models[0].transform == Array(repeating: 2, count: 16), "the moved model moved on A too")
+
+    // A take edited on A and deleted on B: deleted wins everywhere and doesn't come back.
+    a.update(desk.id) {
+        $0.takes[$0.takes.firstIndex { $0.id == take2.id }!].note = "boom in shot"
+        $0.takes[$0.takes.firstIndex { $0.id == take2.id }!].edited = base.addingTimeInterval(400)
+        if let i = $0.takes.firstIndex(where: { $0.id == take3.id }) { $0.takes[i].circled = true; $0.takes[i].edited = base.addingTimeInterval(400) }
+    }
+    b.update(desk.id) {
+        $0.takes.removeAll { $0.id == take3.id }
+        $0.removedTakes.append(take3.id)
+    }
+    a.engine.localChanged()
+    b.engine.localChanged()
+    air.steps = 0
+    expect(air.run(limit: 2_000), "a deletion settles (\(air.steps) steps)")
+    expect(a.has(desk)!.takes.map(\.id) == [take2.id] && b.has(desk)!.takes.map(\.id) == [take2.id], "the deleted take is gone from both")
+    expect(b.has(desk)!.takes[0].note == "boom in shot", "the edited note reached B")
+    expect(a.has(desk)! == b.has(desk)!, "both phones end with the same reference")
+
+    // Measurements and notes go across; one deleted on B goes everywhere.
+    let line = RoomMeasurement(a: [0, 0, 0], b: [0.3, 0.4, 0], created: base)
+    let pin = RoomNote(text: "cup handle faces camera", position: [0.1, 0.8, -1], created: base)
+    let spare = RoomMeasurement(a: [0, 0, 0], b: [1, 0, 0], created: base)
+    a.update(desk.id) {
+        $0.measurements += [line, spare]
+        $0.notes.append(pin)
+    }
+    a.engine.localChanged()
+    expect(air.run(limit: 2_000), "measurements sync")
+    expect(b.has(desk)!.measurements.map(\.id) == [line.id, spare.id] && b.has(desk)!.notes == [pin], "B has A's measurements and note")
+    expect(abs(line.length - 0.5) < 0.0001, "a 30-40-50 line measures 50 cm")
+    func near(_ text: String, _ metres: Float) -> Bool { abs((LengthText.parse(text) ?? -1) - metres) < 0.00001 }
+    expect(near("29.7", 0.297) && near("29,7 cm", 0.297) && near("0.3 m", 0.3) && near("12 in", 0.3048) && near("300mm", 0.3) && near("2 ft", 0.6096),
+        "typed lengths read in cm, mm, m, in and ft")
+    expect(LengthText.parse("") == nil && LengthText.parse("abc") == nil && LengthText.parse("0") == nil && LengthText.parse("50000") == nil,
+        "nonsense isn't a length")
+    // A length typed on B reaches A; a later one typed on A wins everywhere.
+    b.update(desk.id) {
+        $0.measurements[$0.measurements.firstIndex { $0.id == line.id }!].typed = 0.52
+        $0.measurements[$0.measurements.firstIndex { $0.id == line.id }!].edited = base.addingTimeInterval(500)
+    }
+    b.engine.localChanged()
+    expect(air.run(limit: 2_000), "a typed length settles")
+    expect(a.has(desk)!.measurements.first { $0.id == line.id }?.length == 0.52, "A shows the length typed on B")
+    expect(abs((a.has(desk)!.measurements.first { $0.id == line.id }?.measured ?? 0) - 0.5) < 0.0001, "and still knows what was measured")
+    a.update(desk.id) {
+        $0.measurements[$0.measurements.firstIndex { $0.id == line.id }!].typed = 0.49
+        $0.measurements[$0.measurements.firstIndex { $0.id == line.id }!].edited = base.addingTimeInterval(600)
+    }
+    a.engine.localChanged()
+    expect(air.run(limit: 2_000), "a later edit settles")
+    expect(b.has(desk)!.measurements.first { $0.id == line.id }?.length == 0.49, "the newest typed length wins on B")
+    b.update(desk.id) {
+        $0.notes[0].position = [0.5, 1, -2]
+        $0.notes[0].text = "cup handle faces left"
+        $0.notes[0].edited = base.addingTimeInterval(700)
+    }
+    b.engine.localChanged()
+    expect(air.run(limit: 2_000), "a moved note settles")
+    expect(a.has(desk)!.notes.first?.position == [0.5, 1, -2] && a.has(desk)!.notes.first?.text == "cup handle faces left",
+        "A shows the note moved and reworded on B")
+    b.update(desk.id) {
+        $0.measurements.removeAll { $0.id == spare.id }
+        $0.removedMarks.append(spare.id)
+    }
+    b.engine.localChanged()
+    expect(air.run(limit: 2_000), "a deleted measurement settles")
+    expect(a.has(desk)!.measurements.map(\.id) == [line.id] && b.has(desk)!.measurements.map(\.id) == [line.id], "the deleted one is gone from both")
+    expect(a.has(desk)! == b.has(desk)!, "both phones still match")
+
+    // A third phone joins B only, and gets A's things through B.
+    let c = try Phone("C")
+    link(b, c, air: air)
+    expect(air.run(), "C joins through B")
+    expect(c.references.count == 2 && c.has(desk) == b.has(desk), "C has everything B had")
+
+    // No depth: photos and room maps only, then depth on a later sync.
+    let air2 = Air()
+    let d = try Phone("D", withDepth: false)
+    let e = try Phone("E")
+    let set = try e.reference("C", views: 2, models: 1)
+    link(d, e, air: air2)
+    expect(air2.run(), "D and E sync")
+    let quick = d.has(set)
+    expect(quick != nil && d.file(set, "frame_0001.jpg") != nil && d.file(set, "worldmap.arexperience") != nil, "D got the photos and room map")
+    expect(d.file(set, "depth_0000.bin") == nil && quick?.keyframes.allSatisfy { $0.depthFile == nil } == true, "but no depth")
+    expect(quick?.models.isEmpty == true && d.file(set, set.models[0].file) == nil, "and no 3D models")
+    expect(e.has(set)?.keyframes == set.keyframes, "E's own reference keeps its depth")
+    let d2 = try Phone("D2", withDepth: true)
+    try manager.removeItem(at: d2.root)
+    try manager.copyItem(at: d.root, to: d2.root)
+    let air3 = Air()
+    link(d2, e, air: air3)
+    expect(air3.run(), "D syncs again with depth")
+    expect(d2.has(set)?.keyframes == set.keyframes && d2.file(set, "depth_0001.bin") == depthBytes, "depth comes in later")
+    expect(d2.has(set)?.models.count == 1 && d2.file(set, set.models[0].file) == modelBytes, "and so does the model")
+
+    // Another passcode: nothing crosses.
+    let air4 = Air()
+    let f = try Phone("F", key: otherKey)
+    let g = try Phone("G")
+    let secret = try g.reference("D", views: 1)
+    link(f, g, air: air4)
+    expect(air4.run(), "a stranger's connection ends")
+    expect(f.references.isEmpty && !manager.fileExists(atPath: f.root.appendingPathComponent(secret.id.uuidString).path),
+           "no references or files cross between teams")
+    expect(g.strangers > 0, "G sees the other phone isn't on the team")
+
+    // Bad files: a damaged photo blocks only its reference, once; a fake room map is refused.
+    let air5 = Air()
+    let h = try Phone("H")
+    let i = try Phone("I")
+    let broken = try h.reference("E", views: 2)
+    let fine = try h.reference("F", views: 1, gps: true)
+    try Data("not a picture".utf8).write(to: h.root.appendingPathComponent(broken.id.uuidString).appendingPathComponent("frame_0001.jpg"))
+    link(h, i, air: air5)
+    expect(air5.run(limit: 2_000), "a bad photo doesn't loop (\(air5.steps) steps)")
+    expect(i.has(broken) == nil && i.has(fine) != nil, "the damaged reference waits; the good one arrives")
+    expect(i.file(fine, "frame_0000.jpg").map(PhotoPrivacy.isClean) == true, "a photo with a location arrives without it")
+    let fakeMap = scratch.appendingPathComponent("fake.map")
+    try Data("#!/bin/sh".utf8).write(to: fakeMap)
+    expect(!i.library.keep(fakeMap, itemID: UUID().uuidString, name: "worldmap.arexperience"), "a room map that isn't one is refused")
+    expect(!i.library.keep(fakeMap, itemID: UUID().uuidString, name: "model-\(UUID().uuidString).usdz"), "so is a model that isn't a USDZ")
+    expect(!i.library.keep(fakeMap, itemID: "../..", name: "frame_0000.jpg"), "and anything outside a reference folder")
+}
+
+/// Frame maths for reviewing a reference away from the set.
+func runFrameTests() {
+    let turns: [FrameTurn] = [.asShot, .half, .clockwise, .counterclockwise]
+    for turn in turns {
+        let p = SIMD2<Float>(0.2, 0.7)
+        let back = turn.sensor(fromUpright: turn.upright(fromSensor: p))
+        expect(simd_distance(back, p) < 1e-5, "\(turn) turns a place there and back")
+    }
+    expect(simd_distance(FrameTurn.clockwise.upright(fromSensor: SIMD2(0, 0)), SIMD2(1, 0)) < 1e-5, "a clockwise turn puts the sensor's top left at the top right")
+    expect(FrameTurn(cameraToWorld: matrix_identity_float4x4) == .asShot, "an upright camera needs no turn")
+    var sideways = matrix_identity_float4x4
+    sideways.columns.0 = SIMD4(0, -1, 0, 0)
+    sideways.columns.1 = SIMD4(1, 0, 0, 0)
+    expect(FrameTurn(cameraToWorld: sideways) == .clockwise, "a camera with its right side down is turned back clockwise")
+    sideways.columns.0 = SIMD4(0, 1, 0, 0)
+    sideways.columns.1 = SIMD4(-1, 0, 0, 0)
+    expect(FrameTurn(cameraToWorld: sideways) == .counterclockwise, "and the other way up counterclockwise")
+
+    let frame = Keyframe(imageFile: "a.jpg", depthFile: nil, transform: flatten(matrix_identity_float4x4),
+                         intrinsics: [1000, 0, 0, 0, 1000, 0, 960, 720, 1], imageWidth: 1920, imageHeight: 1440, depthWidth: 256, depthHeight: 192)
+    let world = SIMD3<Float>(0.3, -0.2, -2)
+    if let n = frame.project(world), let back = frame.point(atSensor: n, metres: 2) {
+        expect(simd_distance(back, world) < 1e-4, "a point projects into a frame and comes back")
+        let wantX: Float = (960 + 150) / 1920
+        let wantY: Float = (720 + 100) / 1440
+        expect(abs(n.x - wantX) < 1e-4 && abs(n.y - wantY) < 1e-4, "it lands where the camera model says")
+    } else {
+        expect(false, "a point in front of the camera projects")
+    }
+    expect(frame.project(SIMD3(0, 0, 1)) == nil, "a point behind the camera does not")
+    expect(abs(frame.uprightAspect - 4.0 / 3.0) < 1e-5, "an upright landscape frame keeps its shape")
+
+    // The projection matrix lands a point where project + turn say, for every way of holding the phone.
+    for (index, camera) in [matrix_identity_float4x4, sideways].enumerated() {
+        var shot = frame
+        shot = Keyframe(imageFile: "b.jpg", depthFile: nil, transform: flatten(camera),
+                        intrinsics: frame.intrinsics, imageWidth: 1920, imageHeight: 1440, depthWidth: 256, depthHeight: 192)
+        let target = shot.cameraToWorld * SIMD4<Float>(0.3, -0.2, -2, 1)
+        let point = SIMD3<Float>(target.x, target.y, target.z)
+        if let n = shot.project(point), let matrix = shot.uprightProjection() {
+            let u = shot.turn.upright(fromSensor: n)
+            let local = shot.cameraToWorld.inverse * SIMD4(point.x, point.y, point.z, 1)
+            let clip = matrix * local
+            let ndc = SIMD2<Float>(clip.x / clip.w, clip.y / clip.w)
+            let wantX = 2 * u.x - 1, wantY = 1 - 2 * u.y
+            expect(abs(ndc.x - wantX) < 1e-4 && abs(ndc.y - wantY) < 1e-4, "the projection matrix agrees with project for pose \(index) (\(ndc) vs \(wantX), \(wantY))")
+        } else {
+            expect(false, "pose \(index) projects a point")
+        }
+    }
+}
+
+// Call sheet scenes
+let sheetLines = ["CALL SHEET", "Day 3 of 20", "SC 12 INT. KITCHEN - DAY", "Scene 14A  EXT. PARK - NIGHT", "12A. INT BEDROOM", "5 EXT/INT CAR - DUSK", "Sc 20 – Rooftop", "12 INT. KITCHEN - DAY again", "Crew call 07:30", "2 hours"]
+let parsed = CallSheetParser.parse(sheetLines)
+expect(parsed.map(\.scene) == ["12", "14A", "12A", "5", "20"], "call sheet scene numbers: \(parsed.map(\.scene))")
+expect(parsed.first?.title == "INT. KITCHEN - DAY" && parsed.last?.title == "Rooftop", "call sheet scene names")
+
+// A call sheet laid out as a table (Phil's screenshot, 2026-11-09): numbers centred left of a heading cell.
+func cell(_ text: String, _ x: Double, _ y: Double, _ w: Double = 0.05) -> CallSheetText {
+    CallSheetText(text: text, minX: x, minY: y, maxX: x + w, maxY: y + 0.006)
+}
+let tablePage = [
+    cell("SCENE", 0.08, 0.10), cell("SET DESCRIPTION / SYNOPSIS", 0.2, 0.10, 0.2), cell("CAST", 0.55, 0.10),
+    cell("EXT - VILLAGE NEAR DOCK", 0.12, 0.12, 0.2), cell("94A", 0.08, 0.14, 0.03),
+    cell("3 trucks pull in to park, traffickers exit", 0.12, 0.14, 0.3), cell("100. STUNT COORD", 0.6, 0.13, 0.1),
+    cell("EXT - PENANG ISLAND COVE - APPROACHING A DOCK", 0.12, 0.17, 0.3), cell("95", 0.09, 0.20, 0.02),
+    cell("9. ROSALIE", 0.5, 0.20, 0.06), cell("2/8", 0.45, 0.20, 0.02),
+    cell("I/E - DOCK STRUCTURE", 0.12, 0.25, 0.15), cell("95A, 96pt", 0.07, 0.27, 0.04),
+    cell("Reveal Rake & Dalisay in a hide", 0.12, 0.27, 0.25),
+    cell("EXT - DOCK", 0.12, 0.30, 0.1), cell("96Apt,", 0.07, 0.31, 0.04), cell("101pt,", 0.07, 0.32, 0.04),
+    cell("104aApt", 0.07, 0.33, 0.04), cell("D5", 0.4, 0.32, 0.02),
+    cell("TOTAL PAGE COUNT FOR SEQUENCE:", 0.25, 0.36, 0.2), cell("CAST", 0.05, 0.37), cell("1", 0.06, 0.39, 0.01), cell("RAKE", 0.1, 0.39),
+]
+let tableScenes = CallSheetParser.parse(pages: [tablePage])
+expect(tableScenes.map(\.scene) == ["94A", "95", "95A", "96", "96A", "101", "104aA"], "table call sheet numbers: \(tableScenes.map(\.scene))")
+expect(tableScenes.first?.title == "EXT - VILLAGE NEAR DOCK" && tableScenes.last?.title == "EXT - DOCK", "table call sheet names: \(tableScenes.map(\.title))")
+
+// Another layout: a SC column, a D/N column, then the set with no INT/EXT, and an ID column in the cast list.
+let columnPage = [
+    cell("SC", 0.05, 0.10, 0.02), cell("D/N", 0.12, 0.10, 0.03), cell("SET", 0.2, 0.10, 0.04), cell("PAGES", 0.6, 0.10),
+    cell("12", 0.05, 0.13, 0.02), cell("D1", 0.12, 0.13, 0.02), cell("KITCHEN", 0.2, 0.13, 0.08), cell("1 3/8", 0.6, 0.13),
+    cell("14A, 15", 0.045, 0.16, 0.04), cell("N2", 0.12, 0.16, 0.02), cell("INT. GARAGE", 0.2, 0.16, 0.1), cell("2/8", 0.6, 0.16),
+    cell("ID", 0.05, 0.25, 0.02), cell("1", 0.05, 0.27, 0.01), cell("RAKE", 0.2, 0.27),
+]
+let columnScenes = CallSheetParser.parse(pages: [columnPage])
+expect(columnScenes.map(\.scene) == ["12", "14A", "15"], "column call sheet numbers: \(columnScenes.map(\.scene))")
+expect(columnScenes.map(\.title) == ["KITCHEN", "INT. GARAGE", "INT. GARAGE"], "column call sheet names: \(columnScenes.map(\.title))")
+expect(CallSheetParser.parse(pages: [tablePage]).count == tableScenes.count, "the column reader adds nothing wrong to the first sheet")
+
+// Scrapbook cut-outs
+let cutId = UUID()
+expect(ReferenceSyncLibrary.kind("model-\(cutId.uuidString).cutout") == .model && ReferenceSyncLibrary.path("model-\(cutId.uuidString).cutout") == "models/\(cutId.uuidString).cutout"
+    && ReferenceSyncLibrary.syncName(modelFile: "models/\(cutId.uuidString).cutout") == "model-\(cutId.uuidString).cutout", "a cut-out travels like a model")
+
+// A cut-out saved before poses existed reads as straight; a posed one keeps its tilt and slant.
+let oldCut = try! JSONDecoder().decode(CutoutPackage.self, from: Data(#"{"name":"Bob","height":1.7,"views":[]}"#.utf8))
+expect(oldCut.tilt == 0 && oldCut.skew == 0 && oldCut.name == "Bob", "an old cut-out has no pose")
+let posedCut = CutoutPackage(name: "Bob", height: 1.7, views: [], tilt: 14, skew: -7)
+let posedBack = try! JSONDecoder().decode(CutoutPackage.self, from: JSONEncoder().encode(posedCut))
+expect(posedBack == posedCut && posedBack.tilt == 14 && posedBack.skew == -7, "a cut-out keeps its pose")
+expect(Cutout.viewAngle(camera: SIMD3(0, 1.5, 3), position: .zero, front: SIMD3(0, 0, 1)) == 0, "in front of it reads 0")
+expect(abs(Cutout.viewAngle(camera: SIMD3(3, 1.5, 0), position: .zero, front: SIMD3(0, 0, 1)) - 90) < 0.01, "on its left reads 90")
+expect(abs(Cutout.viewAngle(camera: SIMD3(-3, 1.5, 0), position: .zero, front: SIMD3(0, 0, 1)) + 90) < 0.01, "on its right reads -90")
+expect(abs(abs(Cutout.viewAngle(camera: SIMD3(0, 1.5, -3), position: .zero, front: SIMD3(0, 0, 1))) - 180) < 0.01, "behind it reads 180")
+expect(Cutout.nearest([0, 90, 180, -90], to: 100) == 1 && Cutout.nearest([0, 90, 180, -90], to: -170) == 2 && Cutout.nearest([0, 180], to: -179) == 1, "the nearest side wins, round the back too")
+let faced = Cutout.frontFacing(camera: SIMD3(3, 1.5, 0), position: SIMD3(0, 0, 0))
+expect(abs(Cutout.viewAngle(camera: SIMD3(3, 1.5, 0), position: .zero, front: faced.columns.2.xyz)) < 0.01, "a new cut-out faces the camera")
+
+// Imported characters (RigMap.swift): the joints are found whatever the bones are called, and poses land right.
+func runRigTests() {
+    /// A plain figure, 1.85 m, facing +Z with its left at +X. `name` gets a part ("fore") and a side ("L", "R" or "").
+    func human(twist: Bool = false, armsDown: Bool = false, facingBack: Bool = false, name: (String, String) -> String) -> (nodes: [RigNode], index: [String: Int]) {
+        var nodes: [RigNode] = []
+        var index: [String: Int] = [:]
+        func add(_ part: String, _ side: String, _ parent: String?, _ x: Float, _ y: Float, _ z: Float, bone: Bool = true) {
+            let p = parent.flatMap { index[$0] } ?? -1
+            var world = matrix_identity_float4x4
+            world.columns.3 = facingBack ? SIMD4(-x, y, -z, 1) : SIMD4(x, y, z, 1)
+            var local = world
+            if p >= 0 { local.columns.3 = SIMD4(world.columns.3.xyz - nodes[p].position, 1) }
+            index[part + side] = nodes.count
+            nodes.append(RigNode(name: name(part, side), parent: p, isBone: bone, local: local, world: world))
+        }
+        add("root", "", nil, 0, 0, 0, bone: false)
+        add("hips", "", "root", 0, 1, 0)
+        add("spine1", "", "hips", 0, 1.1, 0)
+        add("spine2", "", "spine1", 0, 1.25, 0)
+        add("chest", "", "spine2", 0, 1.4, 0)
+        add("neck", "", "chest", 0, 1.55, 0)
+        add("head", "", "neck", 0, 1.65, 0)
+        add("headEnd", "", "head", 0, 1.85, 0)
+        for (s, n) in [(Float(1), "L"), (Float(-1), "R")] {
+            let d: SIMD2<Float> = armsDown ? SIMD2(s * 0.5, -0.866) : SIMD2(s, 0)
+            func at(_ t: Float) -> SIMD2<Float> { SIMD2(s * 0.18, 1.5) + d * t }
+            add("clav", n, "chest", s * 0.05, 1.5, 0)
+            add("upper", n, "clav" + n, at(0).x, at(0).y, 0)
+            var above = "upper" + n
+            if twist { add("upperTwist", n, above, at(0.14).x, at(0.14).y, 0); above = "upperTwist" + n }
+            add("fore", n, above, at(0.28).x, at(0.28).y, 0)
+            above = "fore" + n
+            if twist { add("foreTwist", n, above, at(0.41).x, at(0.41).y, 0); above = "foreTwist" + n }
+            add("hand", n, above, at(0.54).x, at(0.54).y, 0)
+            for (finger, z) in [("thumb", Float(-0.03)), ("index", 0), ("pinky", 0.03)] {
+                add(finger, n, "hand" + n, at(0.62).x, at(0.62).y, z)
+                add(finger + "Tip", n, finger + n, at(0.7).x, at(0.7).y, z)
+            }
+            add("thigh", n, "hips", s * 0.1, 0.95, 0)
+            above = "thigh" + n
+            if twist { add("thighTwist", n, above, s * 0.1, 0.73, 0); above = "thighTwist" + n }
+            add("shin", n, above, s * 0.1, 0.52, 0.02)
+            add("foot", n, "shin" + n, s * 0.1, 0.09, 0)
+            add("toe", n, "foot" + n, s * 0.1, 0.02, 0.14)
+            add("toeTip", n, "toe" + n, s * 0.1, 0.02, 0.2)
+        }
+        return (nodes, index)
+    }
+    func table(_ names: [String: String], _ join: @escaping (String, String) -> String) -> (String, String) -> String {
+        { part, side in join(names[part] ?? part, side) }
+    }
+    let long = ["L": "Left", "R": "Right", "": ""]
+    let mixamo = table(["root": "Armature", "hips": "Hips", "spine1": "Spine", "spine2": "Spine1", "chest": "Spine2", "neck": "Neck", "head": "Head", "headEnd": "HeadTop_End",
+                        "clav": "Shoulder", "upper": "Arm", "fore": "ForeArm", "hand": "Hand", "thumb": "HandThumb1", "index": "HandIndex1", "pinky": "HandPinky1",
+                        "thigh": "UpLeg", "shin": "Leg", "foot": "Foot", "toe": "ToeBase", "toeTip": "Toe_End"]) { "mixamorig:" + long[$1]! + $0 }
+    let unreal = table(["hips": "pelvis", "spine1": "spine_01", "spine2": "spine_02", "chest": "spine_03", "neck": "neck_01", "clav": "clavicle", "upper": "upperarm",
+                        "fore": "lowerarm", "thumb": "thumb_01", "index": "index_01", "pinky": "pinky_01", "shin": "calf", "toe": "ball"]) { $0 + ($1.isEmpty ? "" : "_" + $1.lowercased()) }
+    let unity = table(["hips": "Hips", "spine1": "Spine", "spine2": "Chest", "chest": "UpperChest", "neck": "Neck", "head": "Head", "clav": "Shoulder", "upper": "UpperArm",
+                       "fore": "LowerArm", "hand": "Hand", "thigh": "UpperLeg", "shin": "LowerLeg", "foot": "Foot", "toe": "Toes"]) { long[$1]! + $0 }
+    let blender = table(["hips": "spine", "spine1": "spine.001", "spine2": "spine.002", "chest": "spine.003", "neck": "spine.004", "head": "spine.006", "clav": "shoulder",
+                         "upper": "upper_arm", "fore": "forearm", "thumb": "thumb.01", "index": "f_index.01", "pinky": "f_pinky.01"]) { "DEF-" + $0 + ($1.isEmpty ? "" : "." + $1) }
+    let biped = table(["hips": "Pelvis", "spine1": "Spine", "spine2": "Spine1", "chest": "Spine2", "neck": "Neck", "head": "Head", "headEnd": "HeadNub", "clav": "Clavicle",
+                       "upper": "UpperArm", "fore": "Forearm", "hand": "Hand", "thigh": "Thigh", "shin": "Calf", "foot": "Foot", "toe": "Toe0"]) { "Bip01 " + ($1.isEmpty ? "" : $1 + " ") + $0 }
+    let daz = table(["hips": "pelvis", "spine1": "abdomenLower", "spine2": "abdomenUpper", "chest": "chestUpper", "neck": "neckLower", "clav": "Collar", "upper": "ShldrBend",
+                     "upperTwist": "ShldrTwist", "fore": "ForearmBend", "foreTwist": "ForearmTwist", "hand": "Hand", "thigh": "ThighBend", "thighTwist": "ThighTwist",
+                     "shin": "Shin", "foot": "Foot", "toe": "Metatarsals"]) { $1.lowercased() + $0 }
+    let nameless: (String, String) -> String = { _, _ in "joint" }
+    let cases: [(String, Bool, Bool, Bool, Bool, (String, String) -> String)] = [
+        ("Mixamo", false, false, false, true, mixamo), ("Unreal", false, false, false, true, unreal), ("Unity", false, false, false, true, unity),
+        ("Blender", false, false, false, true, blender), ("3ds Max", false, false, false, true, biped), ("Daz, with twist bones", true, false, false, true, daz),
+        ("no useful names", false, false, false, false, nameless), ("no names, arms down, facing back", false, true, true, false, nameless),
+        ("no names, twist bones", true, false, false, false, nameless),
+    ]
+    for (title, twist, armsDown, facingBack, fromNames, naming) in cases {
+        let (nodes, index) = human(twist: twist, armsDown: armsDown, facingBack: facingBack, name: naming)
+        func limb(_ a: String, _ b: String, _ c: String, _ side: String) -> [Int] { [index[a + side]!, index[b + side]!, index[c + side]!] }
+        guard let map = RigFinder.find(nodes) else {
+            expect(false, "character joints, \(title): found")
+            continue
+        }
+        let right = map.hips == index["hips"]! && map.spine == [index["spine1"]!, index["spine2"]!, index["chest"]!] && map.neck == index["neck"] && map.head == index["head"]
+            && map.armL == limb("upper", "fore", "hand", "L") && map.armR == limb("upper", "fore", "hand", "R")
+            && map.legL == limb("thigh", "shin", "foot", "L") && map.legR == limb("thigh", "shin", "foot", "R")
+        expect(right && map.fromNames == fromNames && map.facing == (facingBack ? -1 : 1), "character joints, \(title): hips, spine, head, arms and legs found"
+               + (right ? "" : " (arm \(map.armL.map { nodes[$0].name }), leg \(map.legL.map { nodes[$0].name }), spine \(map.spine.count), names \(map.fromNames), facing \(map.facing))"))
+
+        let poser = RigPoser(nodes: nodes, map: map)
+        let rest = poser.worlds(for: poser.restPose)
+        let off = zip(rest.worlds, nodes).map { simd_distance($0.columns.3.xyz, $1.position) }.max() ?? 0
+        expect(off < 0.03 && abs(rest.lift) < 0.01, "character pose, \(title): its own rest pose leaves it as it is")
+        // Seen as if it faced +Z.
+        let turn: SIMD3<Float> = facingBack ? SIMD3(-1, 1, -1) : SIMD3(1, 1, 1)
+        func spot(_ posed: [simd_float4x4], _ part: String) -> SIMD3<Float> { posed[index[part]!].columns.3.xyz * turn }
+        let standing = poser.worlds(for: .standing).worlds
+        let arm = spot(standing, "handL") - spot(standing, "upperL")
+        expect(arm.y < -0.45 && arm.x > 0.02 && arm.x < 0.2 && arm.z > 0.01 && spot(standing, "handR").x < spot(standing, "upperR").x
+               && abs(spot(standing, "indexTipL").y - spot(standing, "handL").y) > 0.1, "character pose, \(title): standing hangs the arms down with the fingers following")
+        let sitting = poser.worlds(for: .sitting)
+        let thigh = spot(sitting.worlds, "shinL") - spot(sitting.worlds, "thighL"), shin = spot(sitting.worlds, "footL") - spot(sitting.worlds, "shinL")
+        expect(thigh.z > 0.35 && abs(thigh.y) < 0.05 && shin.y < -0.35 && abs(shin.z) < 0.08 && sitting.lift < -0.3
+               && abs(spot(sitting.worlds, "toeL").y + sitting.lift - 0.02) < 0.02, "character pose, \(title): sitting puts the knees forward, the shins down and the feet on the floor")
+        var leaning = MannequinPose.standing
+        leaning.spineForward = 30
+        let leant = poser.worlds(for: leaning).worlds
+        expect(spot(leant, "head").z > 0.15 && spot(leant, "upperL").z > 0.1 && abs(spot(leant, "thighL").z) < 0.001, "character pose, \(title): leaning moves the chest and head, not the legs")
+        let locals = poser.locals(for: .sitting).locals
+        var rebuilt = [simd_float4x4](repeating: matrix_identity_float4x4, count: nodes.count)
+        for i in 0..<nodes.count { rebuilt[i] = nodes[i].parent >= 0 ? rebuilt[nodes[i].parent] * locals[i] : locals[i] }
+        let drift = zip(rebuilt, sitting.worlds).map { simd_distance($0.columns.3.xyz, $1.columns.3.xyz) }.max() ?? 0
+        expect(drift < 0.001, "character pose, \(title): the bones' own turns add up to the pose")
+    }
+    expect(RigFinder.label("mixamorig:LeftForeArm") == RigFinder.Label(side: 1, key: "forearm") && RigFinder.label("Bip01 R Calf").key == "calf"
+           && RigFinder.label("lowerarm_twist_01_l").twist && RigFinder.label("ik_hand_r").skip && RigFinder.label("lShldrBend") == RigFinder.Label(side: 1, key: "shldr")
+           && RigFinder.label("rightHand") == RigFinder.Label(side: -1, key: "hand"), "bone names are read whatever the style")
+    var codedModel = PlacedModel(name: "Dancer", file: "models/x.fbx", transform: flatten(matrix_identity_float4x4))
+    codedModel.rigPose = .sitting
+    let codedBack = try? JSONDecoder().decode(PlacedModel.self, from: JSONEncoder().encode(codedModel))
+    expect(codedBack?.rigPose == .sitting && ReferenceSyncLibrary.syncName(modelFile: "models/\(UUID().uuidString).fbx") != nil, "a character's pose is saved with it, and its file syncs")
+}
+runRigTests()
+
+try MainActor.assumeIsolated { try runSyncTests() }
+runFrameTests()
+
+print(failures == 0 ? "All sync tests passed" : "\(failures) sync test(s) failed")
+exit(failures == 0 ? 0 : 1)
+
