@@ -1016,6 +1016,29 @@ struct Banner: View {
 
 /// One reference's first photo, square, with its slate on it.
 /// The last few references in a row over the camera: tap one and it is the overlay (Phil, 2026-11-09).
+/// The word GUIDE: tap to switch the tiling guide (rings to fill by turning on the spot) on or off in Auto scan.
+struct GuideWord: View {
+    let on: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button {
+            TapGate.run("Guide", toggle)
+        } label: {
+            Text("GUIDE")
+                .font(Theme.footnote.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(on ? Theme.accent : Color.white)
+                .shadow(color: .black.opacity(0.8), radius: 2)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .fixedSize()
+        }
+        .caughtTap("Guide", perform: toggle)
+        .accessibilityLabel(on ? "Tiling guide on" : "Tiling guide off")
+    }
+}
+
 /// The word RECENT: tap to show or hide the strip of the last few references.
 struct RecentWord: View {
     let on: Bool
@@ -1724,6 +1747,7 @@ struct CaptureStage: View {
     /// A model or cut-out is picked: its tools have the edges, so the lens buttons step aside (Phil, 2026-11-11).
     @State private var editingModel = false
     @AppStorage("useLiDAR") private var useLiDAR = true
+    @AppStorage("tileGuide") private var tileGuide = false
     @AppStorage("leftHanded") private var leftHanded = false
     @Environment(\.verticalSizeClass) private var verticalSize
     @State private var holder = CameraViewHolder()
@@ -1907,6 +1931,10 @@ struct CaptureStage: View {
                         // Upright they sit above the mode words, not on them.
                         LensChooser(zoom: $lens).offset(y: -66).disabled(lensBusy)
                     }
+                } else if mode == .walk, !recorder.capturing {
+                    // Phil, 2026-11-14: the tiling guide's switch on the camera screen, where the lenses stand in Manual scan.
+                    GuideWord(on: tileGuide) { toggleGuide() }
+                        .offset(x: verticalSize == .compact ? (leftHanded ? 64 : -64) : 0, y: verticalSize == .compact ? 0 : -66)
                 }
             }
             .disabled(recorder.saving || lensBusy)
@@ -2003,6 +2031,12 @@ struct CaptureStage: View {
     /// The button and the window's tap watcher can both fire for one tap: the second within 0.6 s is ignored.
     private func volumeShutter() {
         if ScreenshotMode.shared.viewing { shutterOnce() }
+    }
+
+    private func toggleGuide() {
+        Haptics.tap()
+        tileGuide.toggle()
+        showToast(tileGuide ? "Guide on: rings appear round you when you start recording" : "Guide off")
     }
 
     private func shutterOnce() {
