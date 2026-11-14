@@ -2557,7 +2557,7 @@ struct ResetStage: View {
                                 .frame(width: geometry.size.width, height: geometry.size.height)
                                 .allowsHitTesting(false)
                         }
-                    } else if let ghost = restorer.ghost {
+                    } else if let ghost = restorer.ghost, !restorer.planeShowing {
                         Image(uiImage: ghost)
                             .resizable()
                             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -2676,6 +2676,7 @@ struct ResetStage: View {
                 // Every reference loads half ghost, half live.
                 ghostOpacity = 0.5
                 restorer.setGhostOpacity(ghostOpacity)
+                restorer.setGhostShown(ghostShown)
                 restorer.start()
                 showSwipeHint = true
                 Task {
@@ -2690,6 +2691,7 @@ struct ResetStage: View {
                 restorer.viewport = size
                 restorer.orientation = Screen.orientation
             }
+            .onChange(of: ghostShown) { _, shown in restorer.setGhostShown(shown) }
             .onChange(of: ghostOpacity) { _, value in
                 restorer.setGhostOpacity(value)
                 if swipingStrength { showTags(1 - value) }

@@ -34,19 +34,57 @@ enum Backdrop {
         return frames.compactMap { piece(for: $0, folder: folder, mapPoints: mapPoints) }
     }
 
-    private static func piece(for frame: Keyframe, folder: URL, mapPoints: [SIMD3<Float>]) -> BackdropPiece? {
+    /// One frame hung `distance` metres out with no feathering and a larger picture: the ghost, locked to the room
+    /// at the display's own rate instead of redrawn as a bitmap a few times a second (Phil, 2026-11-14: jitter).
+    static func ghostPiece(for frame: Keyframe, folder: URL, distance: Float) -> BackdropPiece? {
+        piece(for: frame, folder: folder, mapPoints: [], fixedDistance: distance, feather: false, pixels: 1280)
+    }
+
+    /// The picture with its outer tenth fading to clear, so neighbouring frames blend instead of showing hard seams.
+    private static func feathered(_ image: CGImage) -> CGImage {
+        let w = image.width, h = image.height
+        let fx = max(Float(w) * 0.1, 1), fy = max(Float(h) * 0.1, 1)
+        var gray = [UInt8](repeating: 255, count: w * h)
+        for y in 0..<h {
+            let ay = min(1, Float(min(y, h - 1 - y)) / fy)
+            for x in 0..<w {
+                let ax = min(1, Float(min(x, w - 1 - x)) / fx)
+                gray[y * w + x] = UInt8(255 * min(ax, ay))
+            }
+        }
+        let mask: CGImage? = gray.withUnsafeMutableBytes { buffer in
+            CGContext(
+                data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)?.makeImage()
+        }
+        guard let mask,
+            let context = CGContext(
+                data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return image }
+        let rect = CGRect(x: 0, y: 0, width: w, height: h)
+        context.clip(to: rect, mask: mask)
+        context.draw(image, in: rect)
+        return context.makeImage() ?? image
+    }
+
+    private static func piece(
+        for frame: Keyframe, folder: URL, mapPoints: [SIMD3<Float>],
+        fixedDistance: Float? = nil, feather: Bool = true, pixels: Int = maxPixels
+    ) -> BackdropPiece? {
         guard frame.imageWidth > 0, frame.imageHeight > 0,
             let source = CGImageSourceCreateWithURL(folder.appendingPathComponent(frame.imageFile) as CFURL, nil),
-            let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            let raw = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+                kCGImageSourceThumbnailMaxPixelSize: pixels,
                 kCGImageSourceCreateThumbnailWithTransform: false,
             ] as CFDictionary)
         else { return nil }
+        let image = feather ? feathered(raw) : raw
         let k = frame.cameraIntrinsics
         let fx = k.columns.0.x, fy = k.columns.1.y, cx = k.columns.2.x, cy = k.columns.2.y
         guard fx > 1, fy > 1 else { return nil }
-        let d = distance(for: frame, folder: folder, mapPoints: mapPoints)
+        let d = fixedDistance ?? distance(for: frame, folder: folder, mapPoints: mapPoints)
         let w = Float(frame.imageWidth), h = Float(frame.imageHeight)
         // Image pixel (u, v) sits at camera x = (u - cx) / fx * d, y = -(v - cy) / fy * d, z = -d.
         let centre = SIMD3<Float>((w / 2 - cx) / fx * d, -(h / 2 - cy) / fy * d, -d)
@@ -97,6 +135,8 @@ enum Backdrop {
             material.diffuse.contents = piece.image
             material.lightingModel = .constant
             material.isDoubleSided = false
+            // Feathered edges blend where frames overlap; no depth writes, so overlapping pictures never flicker against each other.
+            material.writesToDepthBuffer = false
             plane.materials = [material]
             let node = SCNNode(geometry: plane)
             node.simdTransform = piece.transform

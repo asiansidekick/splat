@@ -69,6 +69,13 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     let sceneContent = SCNNode()
     /// The recorded frames hung in the room as a virtual set (Backdrop.swift); built the first time it is switched on.
     let backdropNode = SCNNode()
+    /// The ghost photo hung in the room 40 m out (the same as turning the photo with the phone, as the bitmap ghost does),
+    /// so it follows ARKit at the screen's rate. The bitmap ghost stays as the fallback and for the picture checks.
+    let ghostPlane = SCNNode()
+    @Published private(set) var planeShowing = false
+    private var planeReadyID: String?
+    private var planeLoadingID: String?
+    private var ghostWanted = true
     @Published private(set) var backdropOn = false
     @Published private(set) var backdropBuilding = false
     private var backdropBuilt = false
@@ -128,6 +135,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         super.init()
         modelsNode.isHidden = true
         backdropNode.isHidden = true
+        ghostPlane.isHidden = true
+        ghostPlane.renderingOrder = -10
+        sceneContent.addChildNode(ghostPlane)
         sceneContent.addChildNode(backdropNode)
         sceneContent.addChildNode(modelsNode)
     }
@@ -200,6 +210,44 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     func setGhostOpacity(_ value: Double) {
         ghostStrength = Float(value)
+        ghostPlane.opacity = CGFloat(value)
+    }
+
+    func setGhostShown(_ shown: Bool) {
+        ghostWanted = shown
+        applyPlane()
+    }
+
+    private func applyPlane() {
+        let visible = ghostWanted && !paused && !show3D && !backdropOn && status == .ready && !reference.photoOnly
+            && planeReadyID != nil && planeReadyID == current?.id
+        if ghostPlane.isHidden == visible { ghostPlane.isHidden = !visible }
+        if planeShowing != visible { planeShowing = visible }
+    }
+
+    /// Hangs the current view's photo as the plane (loaded off the main thread), when it is not already.
+    private func loadPlane(_ keyframe: Keyframe) {
+        guard planeReadyID != keyframe.id, planeLoadingID != keyframe.id else { return }
+        planeLoadingID = keyframe.id
+        let folder = ReferenceStore.folder(for: reference.id)
+        Task {
+            let piece = await Task.detached(priority: .userInitiated) { Backdrop.ghostPiece(for: keyframe, folder: folder, distance: 40) }.value
+            guard planeLoadingID == keyframe.id, !stopped else { return }
+            guard let piece else { return }
+            let plane = SCNPlane(width: CGFloat(piece.width), height: CGFloat(piece.height))
+            let material = SCNMaterial()
+            material.diffuse.contents = piece.image
+            material.lightingModel = .constant
+            material.isDoubleSided = false
+            material.writesToDepthBuffer = false
+            material.readsFromDepthBuffer = false
+            plane.materials = [material]
+            ghostPlane.geometry = plane
+            ghostPlane.simdTransform = piece.transform
+            ghostPlane.opacity = CGFloat(ghostStrength)
+            planeReadyID = keyframe.id
+            applyPlane()
+        }
     }
 
     private func buildCloud() {
@@ -277,6 +325,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     func stop() {
         measurer.active = false
         stopped = true
+        ghostPlane.geometry = nil
+        planeReadyID = nil
         // The backdrop's pictures are big: let go of them now, not whenever this screen is freed (1289 ran out of memory).
         for node in backdropNode.childNodes {
             node.geometry = nil
@@ -369,6 +419,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
         modelsNode.isHidden = false
         backdropNode.isHidden = !backdropOn
+        applyPlane()
         // Read every frame: during a rotation the new orientation arrives after the size change.
         let screen = Screen.orientation
         if orientation != screen { orientation = screen }
@@ -388,6 +439,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         if current?.id != keyframe.id { lastMatch = nil }
         current = keyframe
         if !show3D { updateGhost(keyframe, frame: frame) }
+        if !reference.photoOnly, !show3D { loadPlane(keyframe) }
         // Less often when the phone is hot, so it does not throttle or shut the camera down.
         let hot = ProcessInfo.processInfo.thermalState.rawValue >= ProcessInfo.ThermalState.serious.rawValue
         if usesDepth && showDifferences && !show3D && (!hot || now.timeIntervalSince(lastDiff) > 0.5) {
