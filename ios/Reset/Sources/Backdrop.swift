@@ -19,13 +19,18 @@ struct BackdropPiece: @unchecked Sendable {
 /// where a frame was shot, you see the recorded place around you. Offline, no training.
 enum Backdrop {
     /// More frames than this are thinned evenly (memory: 1024 px × 40 frames crashed Reset on 1289 after a few openings; now 768 px × 24).
-    static let maxFrames = 32
+    static let maxFrames = 40
     static let maxPixels = 768
     static let fallbackDistance: Float = 3.5
 
     /// The pieces for every frame and snapshot of the reference. Reads files: call off the main thread.
     static func pieces(reference: Reference, mapPoints: [SIMD3<Float>], limit: Int = maxFrames) -> [BackdropPiece] {
-        var frames = reference.keyframes + reference.snapshots.map(\.frame)
+        // Near-duplicates (the same place, within 12° of each other) add nothing but doubled edges: keep one of each.
+        var frames: [Keyframe] = []
+        for frame in reference.keyframes + reference.snapshots.map(\.frame) {
+            let twin = frames.contains { simd_distance($0.position, frame.position) < 0.3 && simd_dot($0.forward, frame.forward) > 0.978 }
+            if !twin { frames.append(frame) }
+        }
         if frames.count > limit {
             let step = Double(frames.count) / Double(limit)
             frames = (0..<limit).map { frames[Int(Double($0) * step)] }

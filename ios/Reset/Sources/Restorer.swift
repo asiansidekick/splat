@@ -241,7 +241,11 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         Task {
             let pieces = await Task.detached(priority: .userInitiated) { Backdrop.pieces(reference: saved, mapPoints: points) }.value
             guard !stopped else { backdropBuilding = false; return }
-            for node in Backdrop.nodes(from: pieces) { backdropNode.addChildNode(node) }
+            for node in Backdrop.nodes(from: pieces) {
+                node.opacity = 0
+                backdropNode.addChildNode(node)
+            }
+            pieceTarget = []
             backdropCameras = pieces.map(\.camera)
             stops = WalkScene.cluster(backdropCameras)
             backdropBuilt = true
@@ -293,6 +297,38 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         var there = matrix_identity_float4x4
         there.columns.3 = SIMD4(pivot + by, 1)
         return there * simd_float4x4(simd_quatf(angle: turn, axis: SIMD3(0, 1, 0))) * back
+    }
+
+    /// Only the few frames that look the way the camera does show, the closest on top, the others faded out: more frames
+    /// at once only double the edges (Phil, 2026-11-15: "notchy").
+    private var pieceTarget: [CGFloat] = []
+
+    private func updateBackdropFocus(_ camera: simd_float4x4) {
+        let nodes = backdropNode.childNodes
+        guard backdropBuilt, nodes.count == backdropCameras.count else { return }
+        if pieceTarget.count != nodes.count { pieceTarget = Array(repeating: -1, count: nodes.count) }
+        let place: Set<Int>? = look == .walk && stops.indices.contains(walkStop) ? Set(stops[walkStop].members) : nil
+        let ahead = -camera.columns.2.xyz
+        let at = camera.columns.3.xyz
+        var scored: [(index: Int, score: Float)] = []
+        for index in nodes.indices {
+            if let place, !place.contains(index) { continue }
+            let frame = backdropCameras[index]
+            let angle = acos(min(1, max(-1, simd_dot(ahead, -frame.columns.2.xyz))))
+            let score = angle + 0.35 * simd_distance(at, frame.columns.3.xyz)
+            if score < 1.1 { scored.append((index, score)) }
+        }
+        scored.sort { $0.score < $1.score }
+        var rank: [Int: Int] = [:]
+        for (r, item) in scored.prefix(3).enumerated() { rank[item.index] = r }
+        for index in nodes.indices {
+            let target: CGFloat = rank[index] != nil ? 1 : 0
+            if let r = rank[index] { nodes[index].renderingOrder = 10 + (2 - r) }
+            if pieceTarget[index] != target {
+                pieceTarget[index] = target
+                nodes[index].runAction(.fadeOpacity(to: target, duration: 0.25), forKey: "fade")
+            }
+        }
     }
 
     private func enterWalk() {
@@ -619,6 +655,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         guard let keyframe else { return }
         if current?.id != keyframe.id { lastMatch = nil }
         current = keyframe
+        if look != .ghost { updateBackdropFocus(camera) }
         if !show3D { updateGhost(keyframe, frame: frame) }
         if !reference.photoOnly, !show3D { loadPlane(keyframe) }
         // Less often when the phone is hot, so it does not throttle or shut the camera down.
