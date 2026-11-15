@@ -75,6 +75,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     var isSuspended: () -> Bool = { false }
     /// Whether a tap may pick a model (the Reset screen's EDIT section only).
     var selectionAllowed: () -> Bool = { true }
+    /// Simple touch mode: a one-finger drag moves a model only when it starts on one; elsewhere it moves the view.
+    var strictTouch: () -> Bool = { false }
+    private var ignoringPan = false
+
+    /// Whether a model is under the finger.
+    func modelAt(_ point: CGPoint, in view: SCNView) -> Bool {
+        view.hitTest(point, options: ReviewPick.options).contains { modelID(of: $0.node) != nil }
+    }
     let session: ARSession
     /// Models are added under this node, in the session's world coordinates.
     let root: SCNNode
@@ -417,12 +425,15 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let location = gesture.location(in: view)
         if gesture.state == .began {
             let touched = view.hitTest(location, options: ReviewPick.options).lazy.compactMap { self.modelID(of: $0.node) }.first
+            ignoringPan = strictTouch() && touched == nil
+            if ignoringPan { return }
             if let touched {
                 selectedModel = touched
             } else if selectedModel == nil, models.count == 1 {
                 selectedModel = models[0].id
             }
         }
+        if ignoringPan { return }
         guard let id = selectedModel, let node = modelNodes[id] else { return }
         // Phil, 2026-11-10: USDZ and other models use the cut-out way too: one job at a time for one finger.
         if cutoutJob != .move, !carrying {

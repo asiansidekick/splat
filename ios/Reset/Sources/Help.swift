@@ -10,6 +10,7 @@ struct HelpView: View {
     @AppStorage("cutoutMatchLight") private var cutoutMatchLight = true
     @AppStorage("measureRaycast") private var measureRaycast = true
     @AppStorage("tileGuide") private var tileGuide = false
+    @AppStorage("simpleTouch") private var simpleTouch = false
     /// Made again each time this page shows, so a test just run (Surface test) is in the log sent.
     @State private var report = Diagnostics.reportURL()
 
@@ -72,6 +73,10 @@ struct HelpView: View {
                     Toggle("Match cut-outs to the room's light", isOn: $cutoutMatchLight)
                     step("sun.max", "On, a cut-out darkens in dim light and warms or cools with the room's lamps, so it sits in the shot. Each stands on a soft shadow.")
                     step("paintbrush.pointed", "Touch up, under each photo when making a cut-out, fixes its edges: Keep, Erase, Loop round what you want, or Tap subject to pick one person or thing.")
+                }
+                Section("Touch") {
+                    Toggle("Simple touch mode (experiment)", isOn: $simpleTouch)
+                    step("hand.draw", "On, the Reset screen has no BACKGROUND and EDIT words. Touch a model and it moves; touch empty space and the view moves. Pinch sizes a picked model, or zooms the view. Two fingers slide the view. Double tap is Back to live. + adds things.")
                 }
                 Section("Tiling guide") {
                     Toggle("Rings to fill when scanning", isOn: $tileGuide)

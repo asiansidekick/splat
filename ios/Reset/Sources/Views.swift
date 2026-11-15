@@ -1111,6 +1111,30 @@ struct EditTools: View {
     }
 }
 
+/// Simple touch mode's one + button: add a model, cut-out, example or measure. Steps aside while measuring or a model is picked.
+struct AddTool: View {
+    @ObservedObject var placer: ModelPlacer
+    @ObservedObject var measurer: Measurer
+    let action: () -> Void
+
+    var body: some View {
+        if placer.selectedModel == nil {
+            HStack {
+                if !measurer.active {
+                    SideButton(title: "Add", systemImage: "plus") { TapGate.run("Add", action) }
+                        .caughtTap("Add", perform: action)
+                }
+                Spacer(minLength: 0)
+                if measurer.active {
+                    SideButton(title: "Done", systemImage: "checkmark", tint: Theme.accent) { TapGate.run("Done measuring") { measurer.active = false } }
+                        .caughtTap("Done measuring") { measurer.active = false }
+                }
+            }
+            .shadow(color: .black.opacity(0.6), radius: 3)
+        }
+    }
+}
+
 /// The word GUIDE: tap to switch the tiling guide (rings to fill by turning on the spot) on or off in Auto scan.
 struct GuideWord: View {
     let on: Bool
@@ -2314,6 +2338,9 @@ struct ResetStage: View {
     @State private var ghostShown = true
     /// Phil, 2026-11-15: background functions (ghost, backdrop, walk) apart from editing (models, cut-outs, measuring).
     @State private var section: ResetSection = .background
+    /// Help > Touch: no sections, the touch decides (Restorer.simpleTouch).
+    @AppStorage("simpleTouch") private var simpleTouch = false
+    @State private var showingAdd = false
     /// Where an imported photo sits over the camera (moved, scaled, turned, mirrored by hand).
     @State private var photoPose = PhotoPose()
     /// Phil, 2026-11-09: an imported photo can be masked by hand so only part of it (the props on the table)
@@ -2377,7 +2404,7 @@ struct ResetStage: View {
         } preview: {
             preview
         } modes: { vertical in
-            if !restorer.paused {
+            if !restorer.paused, !simpleTouch {
                 ModePicker(modes: ResetSection.allCases, label: \.label, selection: $section, vertical: vertical)
             }
         } leading: {
@@ -2404,6 +2431,7 @@ struct ResetStage: View {
             }
             .themed()
         }
+        .sheet(isPresented: $showingAdd) { MoreSheet(items: addItems).themed() }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: restorer.placer).themed() }
         .sheet(isPresented: $choosingExample) { ExamplesSheet(placer: restorer.placer).themed() }
         .fileImporter(isPresented: $importingModel, allowedContentTypes: ModelImport.pickerTypes, allowsMultipleSelection: true) { result in
@@ -2543,6 +2571,16 @@ struct ResetStage: View {
         }
     }
 
+    /// What + offers in simple touch mode.
+    private var addItems: [MoreSheet.Item] {
+        [
+            .init("3D model", "cube") { placeIfNeeded(); importingModel = true },
+            .init("Cut-out", "figure.stand") { placeIfNeeded(); makingCutout = true },
+            .init("Example", "figure.stand.dress") { placeIfNeeded(); choosingExample = true },
+            .init("Measure", "ruler") { restorer.measurer.active = true },
+        ]
+    }
+
     /// Editing works wherever you are: with no room found, the set is placed round where you stand first.
     private func placeIfNeeded() {
         guard restorer.status != .ready, !reference.photoOnly else { return }
@@ -2668,7 +2706,7 @@ struct ResetStage: View {
                             }
                         },
                         changed: { photoPose.save(reference.id) })
-                } else if !restorer.paused, section == .background, restorer.look == .ghost, !measuring {
+                } else if !restorer.paused, section == .background, restorer.look == .ghost, !measuring, !(simpleTouch && !reference.models.isEmpty) {
                     // Swipe left or right anywhere for the ghost strength (not while measuring: drags draw lines).
                     Color.clear
                         .modifier(HorizontalSwipe(value: Binding(get: { 1 - ghostOpacity }, set: { ghostOpacity = 1 - $0 })) { active in
@@ -2715,11 +2753,11 @@ struct ResetStage: View {
                         Banner(text: tip, fadesAfter: 8)
                             .transition(.opacity)
                     }
-                    if section == .background, !reference.photoOnly, !restorer.paused {
+                    if section == .background || simpleTouch, !reference.photoOnly, !restorer.paused {
                         BackgroundRow(restorer: restorer)
                     }
                     Spacer()
-                    if showSwipeHint, !restorer.paused, section == .background, restorer.look == .ghost, !measuring, ghostShown {
+                    if showSwipeHint, !restorer.paused, section == .background, restorer.look == .ghost, !measuring, ghostShown, !(simpleTouch && !reference.models.isEmpty) {
                         SwipeHint()
                             .transition(.opacity)
                     }
@@ -2732,7 +2770,7 @@ struct ResetStage: View {
                         TorchDial()
                         MeasureHint(measurer: restorer.measurer)
                         MeasureBar(measurer: restorer.measurer)
-                        if section == .edit { ModelOverlay(placer: restorer.placer) }
+                        if section == .edit || simpleTouch { ModelOverlay(placer: restorer.placer) }
                         if swipingStrength {
                             ScrubCursor(value: 1 - ghostOpacity, start: "THEN", end: "NOW")
                                 .transition(.opacity)
@@ -2742,7 +2780,13 @@ struct ResetStage: View {
                 .padding(8)
                 .clearOfControls()
                 .hiddenInScreenshots()
-                if section == .edit, !restorer.paused {
+                if simpleTouch, !restorer.paused {
+                    AddTool(placer: restorer.placer, measurer: restorer.measurer) { showingAdd = true }
+                        .padding(.horizontal, 10)
+                        .clearOfControls()
+                        .hiddenInScreenshots()
+                }
+                if section == .edit, !simpleTouch, !restorer.paused {
                     EditTools(
                         placer: restorer.placer, measurer: restorer.measurer,
                         model: { placeIfNeeded(); importingModel = true },
@@ -2777,6 +2821,7 @@ struct ResetStage: View {
                 ghostOpacity = 0.5
                 restorer.setGhostOpacity(ghostOpacity)
                 restorer.setGhostShown(ghostShown)
+                restorer.simpleTouch = simpleTouch
                 restorer.start()
                 showSwipeHint = true
                 Task {
@@ -2792,6 +2837,10 @@ struct ResetStage: View {
                 restorer.orientation = Screen.orientation
             }
             .onChange(of: ghostShown) { _, shown in restorer.setGhostShown(shown) }
+            .onChange(of: simpleTouch) { _, on in
+                restorer.simpleTouch = on
+                if on { section = .background }
+            }
             .onChange(of: section) { _, now in
                 restorer.editing = now == .edit
                 if now == .background {

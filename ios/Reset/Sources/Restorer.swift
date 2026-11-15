@@ -83,8 +83,9 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     lazy var placer: ModelPlacer = {
         let placer = ModelPlacer(session: session, root: modelsNode, folder: ReferenceStore.folder(for: reference.id))
         // One-finger drags draw measurements while measuring, instead of moving models.
-        placer.isSuspended = { [unowned self] in self.measurer.active || !self.editing }
-        placer.selectionAllowed = { [unowned self] in self.editing }
+        placer.isSuspended = { [unowned self] in self.measurer.active || (!self.editing && !self.simpleTouch) }
+        placer.selectionAllowed = { [unowned self] in self.editing || self.simpleTouch }
+        placer.strictTouch = { [unowned self] in self.simpleTouch }
         return placer
     }()
     /// Measurements and notes in the room, shown with the models once the room is found.
@@ -195,6 +196,10 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var look: Look = .ghost
     /// The EDIT section is showing: drags move objects, not the view.
     @Published var editing = false
+    /// Phil, 2026-11-15, "Simple touch mode" (Help): no sections; the touch decides: on a model it moves the model, on
+    /// empty space it moves the view. Pinch scales a picked model or zooms the view; two fingers slide the view.
+    var simpleTouch = false
+    private var viewTouchOn: Bool { simpleTouch || !editing }
     @Published private(set) var hasOffset = false
     weak var arView: ARSCNView?
     private var backdropCameras: [simd_float4x4] = []
@@ -278,7 +283,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     /// A finger drag in a backdrop look: sideways turns the view, up and down moves along where it faces.
     func dragView(dx: CGFloat, dy: CGFloat) {
-        guard look != .ghost, !editing, status == .ready, let frame = session.currentFrame else { return }
+        guard look != .ghost, viewTouchOn, status == .ready, let frame = session.currentFrame else { return }
         let camera = frame.camera.transform
         let c = camera.columns.3.xyz
         var ahead = -camera.columns.2.xyz
@@ -387,7 +392,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
 
     /// Taps in WALK: a ring moves you to that place.
     @objc private func handleLookTap(_ gesture: UITapGestureRecognizer) {
-        guard look == .walk, !editing, let view = gesture.view as? SCNView else { return }
+        guard look == .walk, viewTouchOn, let view = gesture.view as? SCNView else { return }
         let hits = view.hitTest(gesture.location(in: view), options: [
             .searchMode: SCNHitTestSearchMode.all.rawValue,
             .boundingBoxOnly: true,
@@ -398,8 +403,16 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
+    private var lookPanActive = false
+
     @objc private func handleLookPan(_ gesture: UIPanGestureRecognizer) {
-        guard look != .ghost, !editing, let view = gesture.view else { return }
+        guard look != .ghost, viewTouchOn, let view = gesture.view else { return }
+        if gesture.state == .began {
+            // In simple touch mode a drag that starts on a model belongs to the model.
+            let onModel = simpleTouch && (view as? SCNView).map { placer.modelAt(gesture.location(in: $0), in: $0) } == true
+            lookPanActive = !onModel
+        }
+        guard lookPanActive else { return }
         let move = gesture.translation(in: view)
         gesture.setTranslation(.zero, in: view)
         dragView(dx: move.x, dy: move.y)
@@ -411,7 +424,51 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleLookPan(_:)))
         pan.maximumNumberOfTouches = 1
         view.addGestureRecognizer(pan)
-        view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleLookTap(_:))))
+        // Simple touch mode: two fingers slide the view, a pinch zooms it, a double tap is Back to live.
+        let slide = UIPanGestureRecognizer(target: self, action: #selector(handleLookSlide(_:)))
+        slide.minimumNumberOfTouches = 2
+        slide.maximumNumberOfTouches = 2
+        view.addGestureRecognizer(slide)
+        view.addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(handleLookPinch(_:))))
+        let double = UITapGestureRecognizer(target: self, action: #selector(handleLookDouble(_:)))
+        double.numberOfTapsRequired = 2
+        view.addGestureRecognizer(double)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleLookTap(_:)))
+        tap.require(toFail: double)
+        view.addGestureRecognizer(tap)
+    }
+
+    private var horizontalAhead: SIMD3<Float>? {
+        guard let camera = session.currentFrame?.camera.transform else { return nil }
+        var ahead = -camera.columns.2.xyz
+        ahead.y = 0
+        if simd_length(ahead) < 0.2 { ahead = camera.columns.1.xyz; ahead.y = 0 }
+        return simd_length(ahead) > 0.01 ? simd_normalize(ahead) : nil
+    }
+
+    @objc private func handleLookSlide(_ gesture: UIPanGestureRecognizer) {
+        guard simpleTouch, look != .ghost, status == .ready, placer.selectedModel == nil, let view = gesture.view,
+            let frame = session.currentFrame, let ahead = horizontalAhead else { return }
+        let move = gesture.translation(in: view)
+        gesture.setTranslation(.zero, in: view)
+        let right = SIMD3<Float>(-ahead.z, 0, ahead.x)
+        let by = right * (Float(move.x) * 0.006) + SIMD3(0, -Float(move.y) * 0.006, 0)
+        shiftWorld(Self.viewMove(pivot: frame.camera.transform.columns.3.xyz, turn: 0, by: by))
+    }
+
+    @objc private func handleLookPinch(_ gesture: UIPinchGestureRecognizer) {
+        guard simpleTouch, look != .ghost, status == .ready, placer.selectedModel == nil,
+            let frame = session.currentFrame, let ahead = horizontalAhead else { return }
+        let scale = Float(gesture.scale)
+        gesture.scale = 1
+        // Pinching out moves forward, in moves back.
+        shiftWorld(Self.viewMove(pivot: frame.camera.transform.columns.3.xyz, turn: 0, by: ahead * ((scale - 1) * 3)))
+    }
+
+    @objc private func handleLookDouble(_ gesture: UIGestureRecognizer) {
+        guard simpleTouch, look != .ghost, hasOffset else { return }
+        Haptics.tap()
+        backToLive()
     }
 
     /// Whether the reference has LiDAR depth, which the 3D ghost is built from. Viewing it works on
