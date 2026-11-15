@@ -63,20 +63,62 @@ final class WalkScene: ObservableObject {
             node.isHidden = true
             pictures.addChildNode(node)
         }
-        var found: [(position: SIMD3<Float>, yaw: Float, members: [Int])] = []
-        for (index, piece) in pieces.enumerated() {
-            let position = piece.camera.columns.3.xyz
-            if let at = found.firstIndex(where: { simd_distance($0.position, position) < Self.samePlace }) {
-                found[at].members.append(index)
-            } else {
-                let ahead = -piece.camera.columns.2.xyz
-                found.append((position, atan2(-ahead.x, -ahead.z), [index]))
-            }
-        }
-        stops = found.map { Stop(position: $0.position, yaw: $0.yaw, members: $0.members) }
+        stops = Self.cluster(pieces.map(\.camera))
         pictureCount = pieces.count
         ready = true
         go(to: 0, animated: false)
+    }
+
+    /// Frames shot within `samePlace` of each other become one standing place, facing the way the first of them did.
+    static func cluster(_ cameras: [simd_float4x4]) -> [Stop] {
+        var found: [(position: SIMD3<Float>, yaw: Float, members: [Int])] = []
+        for (index, camera) in cameras.enumerated() {
+            let position = camera.columns.3.xyz
+            if let at = found.firstIndex(where: { simd_distance($0.position, position) < samePlace }) {
+                found[at].members.append(index)
+            } else {
+                let ahead = -camera.columns.2.xyz
+                found.append((position, atan2(-ahead.x, -ahead.z), [index]))
+            }
+        }
+        return found.map { Stop(position: $0.position, yaw: $0.yaw, members: $0.members) }
+    }
+
+    /// The mint rings on the floor leading to the nearest other places (named "stop-N" for taps).
+    static func ringNodes(stops: [Stop], current: Int) -> [SCNNode] {
+        guard stops.indices.contains(current) else { return [] }
+        let here = stops[current].position
+        let near = stops.indices
+            .filter { $0 != current }
+            .map { (index: $0, distance: simd_distance(stops[$0].position, here)) }
+            .filter { $0.distance < reach }
+            .sorted { $0.distance < $1.distance }
+            .prefix(6)
+        var out: [SCNNode] = []
+        for item in near {
+            var along = stops[item.index].position - here
+            along.y = 0
+            guard simd_length(along) > 0.05 else { continue }
+            let spot = here + simd_normalize(along) * min(simd_length(along), 2.2) - SIMD3(0, 1.35, 0)
+            let ring = SCNNode(geometry: SCNTorus(ringRadius: 0.3, pipeRadius: 0.035))
+            let disc = SCNNode(geometry: SCNCylinder(radius: 0.3, height: 0.004))
+            for node in [ring, disc] {
+                let material = SCNMaterial()
+                material.diffuse.contents = UIColor(red: 0.45, green: 0.95, blue: 0.75, alpha: node === ring ? 0.95 : 0.3)
+                material.lightingModel = .constant
+                material.readsFromDepthBuffer = false
+                material.writesToDepthBuffer = false
+                node.geometry?.materials = [material]
+                node.renderingOrder = 200
+            }
+            let holder = SCNNode()
+            holder.name = "stop-\(item.index)"
+            holder.addChildNode(ring)
+            holder.addChildNode(disc)
+            holder.position = SCNVector3(spot.x, spot.y, spot.z)
+            out.append(holder)
+        }
+        return out
     }
 
     /// Stands at a place: its frames fade in and the others out, and the rings to the places near it appear.
@@ -101,40 +143,11 @@ final class WalkScene: ObservableObject {
 
     private func showRings() {
         rings.childNodes.forEach { $0.removeFromParentNode() }
-        let here = stops[current].position
-        let near = stops.indices
-            .filter { $0 != current }
-            .map { (index: $0, distance: simd_distance(stops[$0].position, here)) }
-            .filter { $0.distance < Self.reach }
-            .sorted { $0.distance < $1.distance }
-            .prefix(6)
-        for item in near {
-            var along = stops[item.index].position - here
-            along.y = 0
-            guard simd_length(along) > 0.05 else { continue }
-            let spot = here + simd_normalize(along) * min(simd_length(along), 2.2) - SIMD3(0, 1.35, 0)
-            let ring = SCNNode(geometry: SCNTorus(ringRadius: 0.3, pipeRadius: 0.035))
-            let disc = SCNNode(geometry: SCNCylinder(radius: 0.3, height: 0.004))
-            for node in [ring, disc] {
-                let material = SCNMaterial()
-                material.diffuse.contents = UIColor(red: 0.45, green: 0.95, blue: 0.75, alpha: node === ring ? 0.95 : 0.3)
-                material.lightingModel = .constant
-                material.readsFromDepthBuffer = false
-                material.writesToDepthBuffer = false
-                node.geometry?.materials = [material]
-                node.renderingOrder = 200
-            }
-            let holder = SCNNode()
-            holder.name = "stop-\(item.index)"
-            holder.addChildNode(ring)
-            holder.addChildNode(disc)
-            holder.position = SCNVector3(spot.x, spot.y, spot.z)
-            rings.addChildNode(holder)
-        }
+        for node in Self.ringNodes(stops: stops, current: current) { rings.addChildNode(node) }
     }
 
     /// The place a tap landed on, if it was on a ring.
-    func place(at hits: [SCNHitTestResult]) -> Int? {
+    static func place(at hits: [SCNHitTestResult]) -> Int? {
         for hit in hits {
             var node: SCNNode? = hit.node
             while let current = node {
@@ -216,7 +229,7 @@ struct WalkSceneView: UIViewRepresentable {
                 .searchMode: SCNHitTestSearchMode.all.rawValue,
                 .boundingBoxOnly: true,
             ])
-            if let index = walk.place(at: hits) {
+            if let index = WalkScene.place(at: hits) {
                 Haptics.tap()
                 walk.go(to: index)
             }

@@ -19,7 +19,7 @@ struct BackdropPiece: @unchecked Sendable {
 /// where a frame was shot, you see the recorded place around you. Offline, no training.
 enum Backdrop {
     /// More frames than this are thinned evenly (memory: 1024 px × 40 frames crashed Reset on 1289 after a few openings; now 768 px × 24).
-    static let maxFrames = 24
+    static let maxFrames = 32
     static let maxPixels = 768
     static let fallbackDistance: Float = 3.5
 

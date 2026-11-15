@@ -1016,6 +1016,101 @@ struct Banner: View {
 
 /// One reference's first photo, square, with its slate on it.
 /// The last few references in a row over the camera: tap one and it is the overlay (Phil, 2026-11-09).
+/// The Reset screen's two sections (Phil, 2026-11-15): the place (ghost, backdrop, walk) and the things in it.
+enum ResetSection: String, CaseIterable, Hashable {
+    case background, edit
+    var label: String { self == .background ? "BACKGROUND" : "EDIT" }
+}
+
+/// One plain word in the BACKGROUND row.
+struct BackgroundWord: View {
+    let title: String
+    var on = false
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            TapGate.run("Background " + title, action)
+        } label: {
+            Text(title)
+                .font(Theme.footnote.weight(.semibold))
+                .lineLimit(1)
+                .foregroundStyle(on ? Theme.accent : Color.white)
+                .shadow(color: .black.opacity(0.8), radius: 2)
+                .frame(minHeight: 36)
+                .contentShape(Rectangle())
+                .fixedSize()
+        }
+        .caughtTap("Background " + title, perform: action)
+    }
+}
+
+/// GHOST, BACKDROP and WALK, and BACK TO LIVE once the view has been moved by hand.
+struct BackgroundRow: View {
+    @ObservedObject var restorer: Restorer
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 20) { looks; back }
+            VStack(spacing: 0) {
+                HStack(spacing: 20) { looks }
+                HStack(spacing: 20) { back }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder private var looks: some View {
+        BackgroundWord(title: "GHOST", on: restorer.look == .ghost) { restorer.setLook(.ghost) }
+        BackgroundWord(title: "BACKDROP", on: restorer.look == .backdrop) { restorer.setLook(.backdrop) }
+        BackgroundWord(title: "WALK", on: restorer.look == .walk) { restorer.setLook(.walk) }
+    }
+
+    @ViewBuilder private var back: some View {
+        if restorer.hasOffset {
+            BackgroundWord(title: "BACK TO LIVE", on: false) { restorer.backToLive() }
+        }
+    }
+}
+
+/// EDIT: what changes the set's content, as round buttons at the two screen edges. They step aside while a model is
+/// picked (its own tools stand there) and while measuring.
+struct EditTools: View {
+    @ObservedObject var placer: ModelPlacer
+    @ObservedObject var measurer: Measurer
+    let model: () -> Void
+    let cutout: () -> Void
+    let example: () -> Void
+
+    var body: some View {
+        if placer.selectedModel == nil {
+            HStack(alignment: .center) {
+                if !measurer.active {
+                    VStack(spacing: 20) {
+                        tool("3D model", "cube", model)
+                        tool("Cut-out", "figure.stand", cutout)
+                        tool("Example", "figure.stand.dress", example)
+                    }
+                }
+                Spacer(minLength: 0)
+                VStack(spacing: 20) {
+                    if measurer.active {
+                        tool("Done", "checkmark", tint: Theme.accent) { measurer.active = false }
+                    } else {
+                        tool("Measure", "ruler") { measurer.active = true }
+                    }
+                }
+            }
+            .shadow(color: .black.opacity(0.6), radius: 3)
+        }
+    }
+
+    private func tool(_ title: String, _ icon: String, tint: Color = .white, _ action: @escaping () -> Void) -> some View {
+        SideButton(title: title, systemImage: icon, tint: tint) { TapGate.run("Edit " + title, action) }
+            .caughtTap("Edit " + title, perform: action)
+    }
+}
+
 /// The word GUIDE: tap to switch the tiling guide (rings to fill by turning on the spot) on or off in Auto scan.
 struct GuideWord: View {
     let on: Bool
@@ -2217,6 +2312,8 @@ struct ResetStage: View {
     /// Compare by wiping across instead of fading.
     @AppStorage("compareStyleWipe") private var wipe = true
     @State private var ghostShown = true
+    /// Phil, 2026-11-15: background functions (ghost, backdrop, walk) apart from editing (models, cut-outs, measuring).
+    @State private var section: ResetSection = .background
     /// Where an imported photo sits over the camera (moved, scaled, turned, mirrored by hand).
     @State private var photoPose = PhotoPose()
     /// Phil, 2026-11-09: an imported photo can be masked by hand so only part of it (the props on the table)
@@ -2280,10 +2377,8 @@ struct ResetStage: View {
         } preview: {
             preview
         } modes: { vertical in
-            if restorer.can3D && Restorer.offers3D && !restorer.paused {
-                ModePicker(
-                    modes: [false, true], label: { $0 ? (restorer.cloudReady || restorer.cloudFailed ? "3D GHOST" : "3D (BUILDING)") : "PHOTO GHOST" },
-                    selection: $restorer.show3D, vertical: vertical)
+            if !restorer.paused {
+                ModePicker(modes: ResetSection.allCases, label: \.label, selection: $section, vertical: vertical)
             }
         } leading: {
             if leftHanded { pauseButton } else { logButton }
@@ -2433,8 +2528,6 @@ struct ResetStage: View {
             }
             if !restorer.paused {
                 TorchButton()
-                MeasureToggle(measurer: restorer.measurer)
-                    .disabled(restorer.status != .ready)
             }
             Button { TapGate.run("More") { showingMore = true } } label: {
                 Image(systemName: "ellipsis.circle").font(Theme.title3)
@@ -2448,6 +2541,13 @@ struct ResetStage: View {
         .sheet(isPresented: $showingMore) {
             MoreSheet(items: moreItems).themed()
         }
+    }
+
+    /// Editing works wherever you are: with no room found, the set is placed round where you stand first.
+    private func placeIfNeeded() {
+        guard restorer.status != .ready, !reference.photoOnly else { return }
+        restorer.placeHere()
+        showToast("Placed here: the set, models and notes now stand round you")
     }
 
     private func toggleGhost() {
@@ -2487,27 +2587,13 @@ struct ResetStage: View {
         }
         items.append(.init("References", "photo.on.rectangle") { open(.gallery) })
         if !others.isEmpty { items.append(.init("Add a layer", "square.3.layers.3d") { addingLayer = true }) }
-        if !reference.photoOnly {
-            // Phil, 2026-11-13: the recorded frames hung in the room, so the place can be looked around in.
-            // Not in the recorded room yet: it is hung around where you stand instead (Restorer.placeHere).
-            items.append(.init(restorer.backdropOn ? "Backdrop off" : "Backdrop", "photo.stack") {
-                let turningOn = !restorer.backdropOn
-                if turningOn, !ready { restorer.placeHere() }
-                restorer.setBackdrop(turningOn) { count in
-                    showToast(count == 0 ? "No frames to hang" : "Backdrop: \(count) frames hung round you")
-                }
-                if turningOn { showToast(ready ? "Building the backdrop… stand where you recorded and look around" : "Building the backdrop round where you stand…") }
+        if !reference.photoOnly, !ready, !restorer.placedHere {
+            // Not in the recorded room: work wherever this is (Restorer.placeHere). BACKDROP and WALK do it by themselves.
+            items.append(.init("Place here", "mappin.and.ellipse") {
+                restorer.placeHere()
+                showToast("Placed here: the set, models and notes now stand round you")
             })
-            if !ready, !restorer.placedHere {
-                items.append(.init("Place here", "mappin.and.ellipse") {
-                    restorer.placeHere()
-                    showToast("Placed here: the set, models and notes now stand round you")
-                })
-            }
         }
-        items.append(.init("Add 3D model", "cube", enabled: ready) { importingModel = true })
-        items.append(.init("Add cut-out", "figure.stand", enabled: ready) { makingCutout = true })
-        items.append(.init("Add example", "figure.stand.dress", enabled: ready) { choosingExample = true })
         if ExploreView.offered { items.append(.init("Explore in 3D", "view.3d") { open(.explore(reference.id)) }) }
         if !reference.photoOnly { items.append(.init("Walk through", "figure.walk") { open(.walk(reference.id)) }) }
         items.append(.init("Frames", "rectangle.stack") { open(.review(reference.id)) })
@@ -2535,6 +2621,7 @@ struct ResetStage: View {
                 CameraView(session: restorer.session, content: restorer.sceneContent) { view in
                     restorer.placer.attachGestures(to: view)
                     restorer.measurer.attachGestures(to: view)
+                    restorer.attachLookGestures(to: view)
                     holder.view = view
                 }
                 if ghostShown, !restorer.backdropOn {
@@ -2568,7 +2655,7 @@ struct ResetStage: View {
                 if ghostShown, !layers.isEmpty {
                     LayerPictures(layers: layers, pictures: layerPictures, size: geometry.size)
                 }
-                if !restorer.paused, reference.models.isEmpty, !measuring, reference.photoOnly {
+                if !restorer.paused, section == .background, !measuring, reference.photoOnly {
                     // An imported photo: one finger sideways for strength, two fingers to move, pinch, twist; double tap resets.
                     PhotoAdjustLayer(
                         pose: $photoPose,
@@ -2581,7 +2668,7 @@ struct ResetStage: View {
                             }
                         },
                         changed: { photoPose.save(reference.id) })
-                } else if !restorer.paused, reference.models.isEmpty, !measuring {
+                } else if !restorer.paused, section == .background, restorer.look == .ghost, !measuring {
                     // Swipe left or right anywhere for the ghost strength (not while measuring: drags draw lines).
                     Color.clear
                         .modifier(HorizontalSwipe(value: Binding(get: { 1 - ghostOpacity }, set: { ghostOpacity = 1 - $0 })) { active in
@@ -2628,12 +2715,15 @@ struct ResetStage: View {
                         Banner(text: tip, fadesAfter: 8)
                             .transition(.opacity)
                     }
+                    if section == .background, !reference.photoOnly, !restorer.paused {
+                        BackgroundRow(restorer: restorer)
+                    }
                     Spacer()
-                    if showSwipeHint, !restorer.paused, reference.models.isEmpty, !measuring, ghostShown {
+                    if showSwipeHint, !restorer.paused, section == .background, restorer.look == .ghost, !measuring, ghostShown {
                         SwipeHint()
                             .transition(.opacity)
                     }
-                    if !showSwipeHint, !swipingStrength, !restorer.paused, reference.models.isEmpty, !measuring, ghostShown {
+                    if !showSwipeHint, !swipingStrength, !restorer.paused, section == .background, restorer.look == .ghost, !measuring, ghostShown {
                         StrengthIndicator(value: 1 - ghostOpacity)
                     }
                     if restorer.paused {
@@ -2642,7 +2732,7 @@ struct ResetStage: View {
                         TorchDial()
                         MeasureHint(measurer: restorer.measurer)
                         MeasureBar(measurer: restorer.measurer)
-                        ModelOverlay(placer: restorer.placer)
+                        if section == .edit { ModelOverlay(placer: restorer.placer) }
                         if swipingStrength {
                             ScrubCursor(value: 1 - ghostOpacity, start: "THEN", end: "NOW")
                                 .transition(.opacity)
@@ -2652,6 +2742,16 @@ struct ResetStage: View {
                 .padding(8)
                 .clearOfControls()
                 .hiddenInScreenshots()
+                if section == .edit, !restorer.paused {
+                    EditTools(
+                        placer: restorer.placer, measurer: restorer.measurer,
+                        model: { placeIfNeeded(); importingModel = true },
+                        cutout: { placeIfNeeded(); makingCutout = true },
+                        example: { placeIfNeeded(); choosingExample = true })
+                        .padding(.horizontal, 10)
+                        .clearOfControls()
+                        .hiddenInScreenshots()
+                }
                 if !restorer.paused {
                     MeasureReticle(measurer: restorer.measurer).hiddenInScreenshots()
                 }
@@ -2692,6 +2792,13 @@ struct ResetStage: View {
                 restorer.orientation = Screen.orientation
             }
             .onChange(of: ghostShown) { _, shown in restorer.setGhostShown(shown) }
+            .onChange(of: section) { _, now in
+                restorer.editing = now == .edit
+                if now == .background {
+                    restorer.measurer.active = false
+                    restorer.placer.selectedModel = nil
+                }
+            }
             .onChange(of: ghostOpacity) { _, value in
                 restorer.setGhostOpacity(value)
                 if swipingStrength { showTags(1 - value) }

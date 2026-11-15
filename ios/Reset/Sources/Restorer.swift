@@ -83,7 +83,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
     lazy var placer: ModelPlacer = {
         let placer = ModelPlacer(session: session, root: modelsNode, folder: ReferenceStore.folder(for: reference.id))
         // One-finger drags draw measurements while measuring, instead of moving models.
-        placer.isSuspended = { [unowned self] in self.measurer.active }
+        placer.isSuspended = { [unowned self] in self.measurer.active || !self.editing }
+        placer.selectionAllowed = { [unowned self] in self.editing }
         return placer
     }()
     /// Measurements and notes in the room, shown with the models once the room is found.
@@ -185,11 +186,55 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         return atan2(ahead.x, ahead.z)
     }
 
-    /// Shows or hides the recorded frames as a backdrop in the room. Returns how many pictures it hangs, once built.
-    func setBackdrop(_ on: Bool, done: @escaping (Int) -> Void = { _ in }) {
-        backdropOn = on
-        backdropNode.isHidden = !(on && status == .ready)
-        guard on, !backdropBuilt, !backdropBuilding else { return }
+    // MARK: Looks: ghost, backdrop, walk (Phil, 2026-11-15)
+
+    /// What the background shows. GHOST: the photo over the live camera. BACKDROP: the recorded frames hung round you in AR,
+    /// which a finger drag moves on top of walking. WALK: street view in the same screen: only the frames of one standing
+    /// place, rings on the floor to the next places, the camera picture covered; walking and dragging still move you.
+    enum Look { case ghost, backdrop, walk }
+    @Published private(set) var look: Look = .ghost
+    /// The EDIT section is showing: drags move objects, not the view.
+    @Published var editing = false
+    @Published private(set) var hasOffset = false
+    weak var arView: ARSCNView?
+    private var backdropCameras: [simd_float4x4] = []
+    private var stops: [WalkScene.Stop] = []
+    private var walkStop = 0
+    private let ringsNode = SCNNode()
+    private let cover = SCNNode()
+    /// How far the world's origin has been moved from where it was (see `shiftWorld`).
+    private var offsetTotal = matrix_identity_float4x4
+
+    func setLook(_ new: Look) {
+        guard new != look, !reference.photoOnly else { return }
+        let was = look
+        if new == .ghost {
+            leaveWalk()
+            backToLive()
+            look = .ghost
+            backdropOn = false
+            backdropNode.isHidden = true
+            return
+        }
+        // Not in the recorded room: stand wherever this is instead (see placeHere).
+        if status != .ready { placeHere() }
+        look = new
+        backdropOn = true
+        if was == .walk { leaveWalk() }
+        ensureBackdrop { [weak self] in
+            guard let self, self.look == .walk else { return }
+            if self.status == .ready { self.enterWalk() } else { self.pendingWalk = true }
+        }
+    }
+
+    private var pendingWalk = false
+    private var backdropWaiters: [() -> Void] = []
+
+    /// Builds the hung pictures the first time one of the backdrop looks is picked.
+    private func ensureBackdrop(then done: @escaping () -> Void) {
+        if backdropBuilt { done(); return }
+        backdropWaiters.append(done)
+        guard !backdropBuilding else { return }
         backdropBuilding = true
         let saved = reference
         let points = mapPoints
@@ -197,11 +242,140 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             let pieces = await Task.detached(priority: .userInitiated) { Backdrop.pieces(reference: saved, mapPoints: points) }.value
             guard !stopped else { backdropBuilding = false; return }
             for node in Backdrop.nodes(from: pieces) { backdropNode.addChildNode(node) }
+            backdropCameras = pieces.map(\.camera)
+            stops = WalkScene.cluster(backdropCameras)
             backdropBuilt = true
             backdropBuilding = false
-            Diagnostics.log("Backdrop: \(pieces.count) pictures")
-            done(pieces.count)
+            Diagnostics.log("Backdrop: \(pieces.count) pictures, \(stops.count) places")
+            let waiting = backdropWaiters
+            backdropWaiters = []
+            waiting.forEach { $0() }
         }
+    }
+
+    /// Moves the viewpoint by `m` (in world coordinates) by moving ARKit's world origin the other way, so everything of the
+    /// reference (backdrop, models, marks) stays where it is in its own coordinates and edits are still saved right.
+    private func shiftWorld(_ m: simd_float4x4) {
+        let origin = m.inverse
+        session.setWorldOrigin(relativeTransform: origin)
+        offsetTotal = offsetTotal * origin
+        let moved = simd_distance(offsetTotal.columns.3.xyz, .zero) > 0.001 || abs(offsetTotal.columns.0.z) > 0.0005
+        if hasOffset != moved { hasOffset = moved }
+    }
+
+    /// Takes back every drag and jump of the viewpoint.
+    func backToLive() {
+        guard hasOffset else { return }
+        session.setWorldOrigin(relativeTransform: offsetTotal.inverse)
+        offsetTotal = matrix_identity_float4x4
+        hasOffset = false
+        Diagnostics.log("Back to live")
+    }
+
+    /// A finger drag in a backdrop look: sideways turns the view, up and down moves along where it faces.
+    func dragView(dx: CGFloat, dy: CGFloat) {
+        guard look != .ghost, !editing, status == .ready, let frame = session.currentFrame else { return }
+        let camera = frame.camera.transform
+        let c = camera.columns.3.xyz
+        var ahead = -camera.columns.2.xyz
+        ahead.y = 0
+        if simd_length(ahead) < 0.2 { ahead = camera.columns.1.xyz; ahead.y = 0 }
+        ahead = simd_length(ahead) > 0.01 ? simd_normalize(ahead) : SIMD3(0, 0, -1)
+        let turn = Float(dx) * 0.005
+        let step = ahead * (-Float(dy) * 0.012)
+        shiftWorld(Self.viewMove(pivot: c, turn: turn, by: step))
+    }
+
+    /// Turn by `turn` about the vertical through `pivot`, then slide by `by`.
+    private static func viewMove(pivot: SIMD3<Float>, turn: Float, by: SIMD3<Float>) -> simd_float4x4 {
+        var back = matrix_identity_float4x4
+        back.columns.3 = SIMD4(-pivot, 1)
+        var there = matrix_identity_float4x4
+        there.columns.3 = SIMD4(pivot + by, 1)
+        return there * simd_float4x4(simd_quatf(angle: turn, axis: SIMD3(0, 1, 0))) * back
+    }
+
+    private func enterWalk() {
+        guard backdropBuilt, !stops.isEmpty else {
+            look = .backdrop
+            return
+        }
+        if cover.geometry == nil {
+            let sphere = SCNSphere(radius: 90)
+            let material = SCNMaterial()
+            material.diffuse.contents = UIColor.black
+            material.lightingModel = .constant
+            material.cullMode = .front
+            material.readsFromDepthBuffer = false
+            material.writesToDepthBuffer = false
+            sphere.materials = [material]
+            cover.geometry = sphere
+            cover.renderingOrder = -100
+            sceneContent.addChildNode(cover)
+            sceneContent.addChildNode(ringsNode)
+        }
+        cover.isHidden = false
+        let here = session.currentFrame?.camera.transform.columns.3.xyz ?? stops[0].position
+        walkStop = stops.indices.min { simd_distance(stops[$0].position, here) < simd_distance(stops[$1].position, here) } ?? 0
+        showStop(walkStop)
+    }
+
+    /// Stands at a place: the world moves so the camera is there, facing the way the first frame there did.
+    private func goToStop(_ index: Int) {
+        guard stops.indices.contains(index), let frame = session.currentFrame else { return }
+        walkStop = index
+        let camera = frame.camera.transform
+        var ahead = -camera.columns.2.xyz
+        ahead.y = 0
+        if simd_length(ahead) < 0.2 { ahead = camera.columns.1.xyz; ahead.y = 0 }
+        let heading = atan2(-ahead.x, -ahead.z)
+        let c = camera.columns.3.xyz
+        shiftWorld(Self.viewMove(pivot: c, turn: stops[index].yaw - heading, by: stops[index].position - c))
+        showStop(index)
+    }
+
+    private func showStop(_ index: Int) {
+        let members = Set(stops[index].members)
+        for (i, node) in backdropNode.childNodes.enumerated() {
+            node.isHidden = !members.contains(i)
+        }
+        ringsNode.childNodes.forEach { $0.removeFromParentNode() }
+        for node in WalkScene.ringNodes(stops: stops, current: index) { ringsNode.addChildNode(node) }
+    }
+
+    private func leaveWalk() {
+        cover.isHidden = true
+        ringsNode.childNodes.forEach { $0.removeFromParentNode() }
+        for node in backdropNode.childNodes { node.isHidden = false }
+    }
+
+    /// Taps in WALK: a ring moves you to that place.
+    @objc private func handleLookTap(_ gesture: UITapGestureRecognizer) {
+        guard look == .walk, !editing, let view = gesture.view as? SCNView else { return }
+        let hits = view.hitTest(gesture.location(in: view), options: [
+            .searchMode: SCNHitTestSearchMode.all.rawValue,
+            .boundingBoxOnly: true,
+        ])
+        if let index = WalkScene.place(at: hits) {
+            Haptics.tap()
+            goToStop(index)
+        }
+    }
+
+    @objc private func handleLookPan(_ gesture: UIPanGestureRecognizer) {
+        guard look != .ghost, !editing, let view = gesture.view else { return }
+        let move = gesture.translation(in: view)
+        gesture.setTranslation(.zero, in: view)
+        dragView(dx: move.x, dy: move.y)
+    }
+
+    /// One finger drags the view and a tap on a ring moves in the backdrop looks; they step aside while editing.
+    func attachLookGestures(to view: ARSCNView) {
+        arView = view
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleLookPan(_:)))
+        pan.maximumNumberOfTouches = 1
+        view.addGestureRecognizer(pan)
+        view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleLookTap(_:))))
     }
 
     /// Whether the reference has LiDAR depth, which the 3D ghost is built from. Viewing it works on
@@ -333,6 +507,8 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             node.removeFromParentNode()
         }
         backdropBuilt = false
+        ringsNode.childNodes.forEach { $0.removeFromParentNode() }
+        cover.geometry = nil
         session.pause()
     }
 
@@ -416,9 +592,14 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             Diagnostics.log("Reset found the room after \(Int(seconds)) s")
             relocalizingSince = nil
             slowToFind = false
+            if pendingWalk, look == .walk, backdropBuilt {
+                pendingWalk = false
+                enterWalk()
+            }
         }
         modelsNode.isHidden = false
         backdropNode.isHidden = !backdropOn
+        if look == .walk { cover.simdPosition = frame.camera.transform.columns.3.xyz }
         applyPlane()
         // Read every frame: during a rotation the new orientation arrives after the size change.
         let screen = Screen.orientation

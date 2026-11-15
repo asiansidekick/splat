@@ -73,6 +73,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private var depthCache: (time: TimeInterval, depth: Measurer.Depth)?
     /// True while something else (measuring) uses one-finger drags on the camera view.
     var isSuspended: () -> Bool = { false }
+    /// Whether a tap may pick a model (the Reset screen's EDIT section only).
+    var selectionAllowed: () -> Bool = { true }
     let session: ARSession
     /// Models are added under this node, in the session's world coordinates.
     let root: SCNNode
@@ -401,7 +403,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
-        guard let view = gesture.view as? SCNView else { return }
+        guard selectionAllowed(), let view = gesture.view as? SCNView else { return }
         let hits = view.hitTest(gesture.location(in: view), options: ReviewPick.options)
         selectedModel = hits.lazy.compactMap { self.modelID(of: $0.node) }.first
     }
