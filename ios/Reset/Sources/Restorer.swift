@@ -320,15 +320,18 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             if let place, !place.contains(index) { continue }
             let frame = backdropCameras[index]
             let angle = acos(min(1, max(-1, simd_dot(ahead, -frame.columns.2.xyz))))
-            let score = angle + 0.35 * simd_distance(at, frame.columns.3.xyz)
+            // A picture already showing gets a head start, so two near-equal frames do not trade places and flutter.
+            let held: Float = pieceTarget[index] == 1 ? 0.12 : 0
+            let score = angle + 0.35 * simd_distance(at, frame.columns.3.xyz) - held
             if score < 1.1 { scored.append((index, score)) }
         }
         scored.sort { $0.score < $1.score }
         var rank: [Int: Int] = [:]
-        for (r, item) in scored.prefix(3).enumerated() { rank[item.index] = r }
+        // The best frame alone; a second only while the two are nearly equal (the blend between neighbours).
+        for (r, item) in scored.prefix(2).enumerated() where r == 0 || item.score - scored[0].score < 0.12 { rank[item.index] = r }
         for index in nodes.indices {
             let target: CGFloat = rank[index] != nil ? 1 : 0
-            if let r = rank[index] { nodes[index].renderingOrder = 10 + (2 - r) }
+            if let r = rank[index] { nodes[index].renderingOrder = 10 + (1 - r) }
             if pieceTarget[index] != target {
                 pieceTarget[index] = target
                 nodes[index].runAction(.fadeOpacity(to: target, duration: 0.25), forKey: "fade")
