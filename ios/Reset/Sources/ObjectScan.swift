@@ -95,7 +95,10 @@ final class ScanModel: ObservableObject {
 
     static var supported: Bool { ObjectCaptureSession.isSupported }
 
-    func start() {
+    func start(retry: Bool = false) {
+        if !retry { retried = false }
+        startedAt = Date()
+        lastPolled = ""
         guard ObjectCaptureSession.isSupported else {
             phase = .unsupported("This device can't run Apple's Object Capture (it needs LiDAR and iOS 17).")
             ScanLog.add("Object Capture not supported on this device")
@@ -116,6 +119,7 @@ final class ScanModel: ObservableObject {
             let session = ObjectCaptureSession()
             session.start(imagesDirectory: folder.images, configuration: config)
             self.session = session
+            lastState = ""
             shots = 0
             passes = 1
             phase = .starting
@@ -144,8 +148,38 @@ final class ScanModel: ObservableObject {
         }
     }
 
+    private var lastPolled = ""
+    private var startedAt = Date()
+    private var retried = false
+
     private func tick() {
         guard let session else { return }
+        // The state is read here as well as listened for: on Phil's phone (build 1306) no state ever arrived and the
+        // camera stayed black.
+        let polled = "\(session.state)"
+        if polled != lastPolled {
+            lastPolled = polled
+            ScanLog.add("Polled state: \(polled)")
+            stateChanged(session.state)
+        }
+        if phase == .starting, Date().timeIntervalSince(startedAt) > 6 {
+            if retried {
+                ScanLog.add("Camera never started (state \(polled)), giving up")
+                session.cancel()
+                stopSession()
+                phase = .failed("The scanning camera didn't start. Close other camera apps, then tap Start again.")
+            } else {
+                ScanLog.add("Camera not started after 6 s (state \(polled)), trying once more")
+                retried = true
+                session.cancel()
+                stopSession()
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    self?.start(retry: true)
+                }
+            }
+            return
+        }
         shots = session.numberOfShotsTaken
         maxShots = session.maximumNumberOfInputImages
         if phase == .capturing && Self.usesBox && session.userCompletedScanPass {
@@ -154,7 +188,13 @@ final class ScanModel: ObservableObject {
         }
     }
 
+    private var lastState = ""
+
     private func stateChanged(_ state: ObjectCaptureSession.CaptureState) {
+        // Heard and polled: act once on each.
+        let name = "\(state)"
+        guard name != lastState else { return }
+        lastState = name
         ScanLog.add("State: \(state)")
         switch state {
         case .initializing: phase = .starting

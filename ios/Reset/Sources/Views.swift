@@ -2196,6 +2196,8 @@ struct CaptureStage: View {
                 try? await Task.sleep(for: .seconds(0.4))
             }
             recorder.session.pause()
+            // The room camera is let go of before the scanner asks for it.
+            try? await Task.sleep(for: .seconds(0.7))
             scanningObject = true
         }
     }
