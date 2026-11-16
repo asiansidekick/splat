@@ -702,6 +702,13 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         for child in scene.rootNode.childNodes {
             node.addChildNode(child)
         }
+        // A scan's colours are photographs, with the light of the day already in them: shown as they are, not lit a
+        // second time (Phil's first scan, 2026-11-17: a white bin came out grey beside the real one).
+        if model.name.hasPrefix("Scan ") {
+            node.enumerateHierarchy { child, _ in
+                child.geometry?.materials.forEach { $0.lightingModel = .constant }
+            }
+        }
         let (low, high) = node.boundingBox
         var geometries = 0
         node.enumerateHierarchy { child, _ in if child.geometry != nil { geometries += 1 } }
