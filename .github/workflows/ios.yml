@@ -56,6 +56,23 @@ jobs:
           sed -nE 's/^FAIL  (.*)$/::error::\1/p' sync-results.txt
           [ $status -eq 0 ] || tail -5 sync-results.txt | sed -E 's#^#::error::sync tests ended: #'
           exit $status
+      - name: Crop tests
+        working-directory: ios/Reset
+        run: |
+          # Object scan: auto-crop maths (floor and object finding) on synthetic scans.
+          if ! swiftc -O Sources/CropMath.swift Tests/CropTests/main.swift -o crop-tests > crop-compile.log 2>&1; then
+            grep -E ": error: " crop-compile.log | sort -u | head -10 \
+              | sed -E 's#^(.*/)?((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Reset/\2,line=\4,col=\5::\6#'
+            tail -40 crop-compile.log
+            exit 1
+          fi
+          set +e
+          ./crop-tests > crop-results.txt 2>&1
+          status=$?
+          set -e
+          cat crop-results.txt
+          sed -nE 's/^FAIL  (.*)$/::error::\1/p' crop-results.txt
+          exit $status
       - name: Publish test pictures
         if: always()
         # Only for reading the pictures; a failed upload must not hold back the app build.

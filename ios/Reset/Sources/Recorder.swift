@@ -60,6 +60,10 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
     @Published var pointCount = 0
     /// Whether a reference is being captured (the shutter was tapped and it is not saved yet).
     @Published var capturing = false
+    /// The phone is moving too fast for sharp views while an Auto scan records (Phil, 2026-11-16: better scanning).
+    @Published private(set) var tooFastNow = false
+    /// The scan has all the views it can hold.
+    var full: Bool { keyframeCount >= maxKeyframes }
     /// Dots on everything the scan has covered, laid over the screen and building up as you
     /// walk round: dense from the LiDAR when it is on, from ARKit's tracked points otherwise.
     @Published private(set) var scanDots: UIImage?
@@ -243,6 +247,9 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         reference = Reference(id: id, scene: scene, setup: setup, name: name, created: Date(), keyframes: [])
         reference?.shot = shot
         lastSaved = nil
+        lastPose = nil
+        blurredKept = 0
+        tooFastNow = false
         keyframeCount = 0
         capturing = true
         error = nil
@@ -330,7 +337,8 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
             capturing = false
             keyframeCount = 0
             clearTiles()
-            Diagnostics.log("Record saved: \(reference.keyframes.count) keyframes")
+            tooFastNow = false
+            Diagnostics.log("Record saved: \(reference.keyframes.count) keyframes, \(blurredKept) kept while still moving fast")
             return reference
         } catch {
             self.error = "Could not save the room map: \(error.localizedDescription). Move the phone slowly and tap the shutter again."
@@ -446,6 +454,27 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         if abs(next - scanProgress) > 0.01 { scanProgress = next }
     }
 
+    private var lastPose: (position: SIMD3<Float>, forward: SIMD3<Float>, time: TimeInterval)?
+    /// Views kept while the phone was still swinging (it never slowed down in time): for the log.
+    private var blurredKept = 0
+    private var fastSince: Date?
+    private var slowSince = Date.distantPast
+
+    /// "Slower" shows after a third of a second of going too fast and stays for a second and a half, so it never flickers.
+    private func noteSpeed(tooFast: Bool) {
+        let now = Date()
+        if tooFast {
+            if fastSince == nil { fastSince = now }
+            if let since = fastSince, now.timeIntervalSince(since) > 0.35 {
+                slowSince = now
+                if !tooFastNow { tooFastNow = true }
+            }
+        } else {
+            fastSince = nil
+            if tooFastNow, now.timeIntervalSince(slowSince) > 1.5 { tooFastNow = false }
+        }
+    }
+
     /// Something else (a free scan) that wants every camera frame.
     var frameTap: ((ARFrame) -> Void)?
 
@@ -464,6 +493,22 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         let transform = frame.camera.transform
         let position = transform.columns.3.xyz
         let forward = -transform.columns.2.xyz
+        // How fast the phone is moving and turning now, from the frame before: a view kept mid-swing is blurred.
+        var turning: Float = 0
+        var moving: Float = 0
+        if let before = lastPose {
+            let dt = Float(frame.timestamp - before.time)
+            if dt > 0.001, dt < 0.5 {
+                turning = acos(min(1, max(-1, simd_dot(forward, before.forward)))) / dt
+                moving = simd_distance(position, before.position) / dt
+            }
+        }
+        lastPose = (position, forward, frame.timestamp)
+        // A long exposure (dim light) blurs at a slower swing: the limit comes down with it.
+        let exposure = Float(min(max(frame.camera.exposureDuration, 1.0 / 120), 1.0 / 15))
+        let turnLimit = min(0.5, 0.012 / exposure)
+        let steady = turning < turnLimit && moving < 0.35
+        if autoCapture { noteSpeed(tooFast: turning > turnLimit * 2.2 || moving > 0.9) }
         if captureNext {
             captureNext = false
         } else {
@@ -472,6 +517,19 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
                 let moved = simd_distance(position, last.position)
                 let turned = acos(min(1, max(-1, simd_dot(forward, last.forward))))
                 if moved < minMove && turned < minTurn { return }
+                // Due: wait for a steady moment, but not past half as far again, so no part of the sweep is missed.
+                if !steady && moved < minMove * 1.6 && turned < minTurn * 1.6 { return }
+                if !steady { blurredKept += 1 }
+            }
+            // Somewhere already kept (sweeping back over the same part): nothing new, and the views are limited.
+            let seen = reference.keyframes.contains { kept in
+                let pose = matrix4(kept.transform)
+                return simd_distance(pose.columns.3.xyz, position) < minMove * 0.75
+                    && simd_dot(-pose.columns.2.xyz, forward) > cos(minTurn * 0.75)
+            }
+            if seen {
+                lastSaved = (position, forward)
+                return
             }
         }
         lastSaved = (position, forward)

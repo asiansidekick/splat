@@ -1881,6 +1881,9 @@ struct CaptureStage: View {
     @Environment(\.verticalSizeClass) private var verticalSize
     @State private var holder = CameraViewHolder()
     @State private var importingModels = false
+    @State private var scanningObject = false
+    /// The model a scan made, to stand in the room once the camera is back.
+    @State private var scannedModel: URL?
     @State private var choosingModel = false
     @State private var makingCutout = false
     @State private var choosingExample = false
@@ -2094,6 +2097,12 @@ struct CaptureStage: View {
             Button("3D model (USDZ, OBJ, STL or FBX)") { importingModels = true }
             Button("Cut-out from photos") { makingCutout = true }
             Button("Examples: people, set pieces") { choosingExample = true }
+            if ObjectScanView.supported, !recorder.capturing, !recorder.pendingSave, !recorder.saving {
+                Button("Scan an object in 3D") { startObjectScan() }
+            }
+        }
+        .fullScreenCover(isPresented: $scanningObject, onDismiss: endObjectScan) {
+            ObjectScanView { scannedModel = $0 }
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: recorder.placer).themed() }
         .sheet(isPresented: $choosingExample) { ExamplesSheet(placer: recorder.placer).themed() }
@@ -2175,7 +2184,38 @@ struct CaptureStage: View {
         shutterTapped()
     }
 
-    /// Shows the view through the picked lens. The room tracking only runs on 1×: it waits while another lens
+    /// The object scanner has its own camera: the room tracking waits for it (as for the Surface test).
+    private func startObjectScan() {
+        Diagnostics.log("Object scan opened")
+        scannedModel = nil
+        recorder.measurer.active = false
+        Task {
+            // Another lens's own camera is closed first, then the room tracking waits.
+            if lens != 1 {
+                lens = 1
+                try? await Task.sleep(for: .seconds(0.4))
+            }
+            recorder.session.pause()
+            scanningObject = true
+        }
+    }
+
+    /// Back from the scanner: the camera starts again (models and marks kept) and the new model stands where it points.
+    private func endObjectScan() {
+        recorder.prepare(useLiDAR: useLiDAR, keepModels: true)
+        guard let url = scannedModel else { return }
+        scannedModel = nil
+        Task {
+            // The new session needs a moment before it has a frame to place things with.
+            for _ in 0..<20 where recorder.session.currentFrame == nil || !recorder.trackingNormal {
+                try? await Task.sleep(for: .seconds(0.25))
+            }
+            recorder.placer.add(from: [url])
+            showToast("Scan placed. Drag it where it belongs.")
+        }
+    }
+
+: it waits while another lens
     /// is live, and carries on (models and marks kept) back at 1×. Scanning, saving and Auto scan stay on 1×.
     private func syncLens() {
         let free = mode == .snapshot && !recorder.capturing && !recorder.pendingSave && !recorder.saving
@@ -2303,6 +2343,9 @@ struct CaptureStage: View {
             return "Mapping the room. Move the phone gently side to side and it saves by itself. Tap again to save now."
         }
         if recorder.capturing {
+            if recorder.full { return "This scan is full. Tap stop to save." }
+            if recorder.tooFastNow { return "Slower: the pictures are blurring" }
+            if !recorder.trackingNormal { return "Lost its place. Point back at somewhere already scanned." }
             return recorder.tilesTotal > 0
                 ? "Recording \(slate). Walk round, or turn on the spot to fill the rings (\(recorder.tilesFilled) of \(recorder.tilesTotal)). Tap stop to save."
                 : "Recording \(slate). Walk slowly round the props, then tap stop."
