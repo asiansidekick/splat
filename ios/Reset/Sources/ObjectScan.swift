@@ -189,7 +189,11 @@ final class ScanModel: ObservableObject {
         // When a second goes by with no picture, one is asked for here, so a scan always fills.
         if phase == .capturing, Date().timeIntervalSince(lastShotAt) > 1.0 {
             if session.canRequestImageCapture {
-                if ownShots == 0 { ScanLog.add("No automatic pictures: taking one a second (auto capture \(session.isAutoCaptureEnabled))") }
+                if ownShots == 0 {
+                    var auto = "unknown"
+                    if #available(iOS 18.0, *) { auto = "\(session.isAutoCaptureEnabled)" }
+                    ScanLog.add("No automatic pictures: taking one a second (auto capture \(auto))")
+                }
                 ownShots += 1
                 lastShotAt = Date()
                 session.requestImageCapture()
