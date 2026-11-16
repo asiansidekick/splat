@@ -37,6 +37,8 @@ struct ScanScreen: View {
                 captureView(session)
                     .ignoresSafeArea()
                     .id(ObjectIdentifier(session))
+            } else if model.ownCamera {
+                CameraView(session: model.own.session).ignoresSafeArea()
             }
             overlay
         }
@@ -109,6 +111,8 @@ struct ScanScreen: View {
     private var stepText: String {
         switch model.phase {
         case .starting: return "Starting camera…"
+        case .ready where model.ownCamera: return "Tap to record, then walk slowly round the object"
+        case .capturing where model.ownCamera: return "Walk slowly round it, high and low. Tap to stop"
         case .ready: return ScanModel.usesBox ? "Aim at the object, then tap" : "Tap to record, then walk slowly round the object"
         case .detecting: return "Fit the box round the object, then tap to start"
         case .capturing: return "Walk slowly round it, high and low. Tap to stop"
@@ -217,7 +221,7 @@ enum FirstPicture {
     static func load(_ folder: ScanFolder) -> UIImage? {
         if let hit = cache[folder.url] { return hit }
         let files = (try? FileManager.default.contentsOfDirectory(at: folder.images, includingPropertiesForKeys: nil)) ?? []
-        guard let first = files.filter({ $0.pathExtension.lowercased() == "heic" }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).first,
+        guard let first = files.filter({ ["heic", "jpg"].contains($0.pathExtension.lowercased()) }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).first,
               let image = UIImage(contentsOfFile: first.path)?.preparingThumbnail(of: CGSize(width: 160, height: 160)) else { return nil }
         cache[folder.url] = image
         return image
@@ -314,7 +318,7 @@ struct LibraryView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if folder.hasFull {
+                        if folder.hasFull, folder.cameras == nil {
                             Button { dismiss(); model.openCrop(folder) } label: { Image(systemName: "crop") }
                                 .buttonStyle(.bordered)
                         }

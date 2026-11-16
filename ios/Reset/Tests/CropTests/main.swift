@@ -117,5 +117,25 @@ do {
     check(abs(s.scale - 0.01) < 0.0001, "mapping: centimetres to metres scale (\(s.scale))")
 }
 
+// ScanAlign: a model in made-up space lined up with the room from where the pictures were taken.
+do {
+    var rng = Rng(s: 99)
+    var from: [SIMD3<Float>] = []
+    for _ in 0..<40 { from.append(SIMD3(rng.range(-1, 1), rng.range(0, 0.6), rng.range(-1, 1))) }
+    let turn = simd_quatf(angle: 1.1, axis: simd_normalize(SIMD3<Float>(0.3, 1, -0.5)))
+    let to = from.map { 2.7 * turn.act($0) + SIMD3<Float>(0.4, -1.2, 3) }
+    if let fit = ScanAlign.fit(from: from, to: to) {
+        check(abs(fit.scale - 2.7) < 0.01, "align: size found (\(fit.scale))")
+        check(fit.error < 0.01, "align: places land on each other (\(fit.error) m)")
+        let back = fit.scale * fit.quaternion.act(from[7]) + SIMD3<Float>(fit.translation[0], fit.translation[1], fit.translation[2])
+        check(simd_length(back - to[7]) < 0.01, "align: a point carried over")
+    } else {
+        check(false, "align: fit found")
+    }
+    check(ScanAlign.fit(from: Array(from.prefix(3)), to: Array(to.prefix(3))) == nil, "align: too few pictures refused")
+    let still = from.map { _ in SIMD3<Float>(1, 1, 1) }
+    check(ScanAlign.fit(from: from, to: still) == nil, "align: a camera that never moved refused")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

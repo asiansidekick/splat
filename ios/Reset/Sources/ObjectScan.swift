@@ -27,7 +27,7 @@ struct ScanFolder: Identifiable, Hashable {
         (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
     }
     var imageCount: Int {
-        (try? FileManager.default.contentsOfDirectory(atPath: images.path).filter { $0.lowercased().hasSuffix(".heic") }.count) ?? 0
+        (try? FileManager.default.contentsOfDirectory(atPath: images.path).filter { $0.lowercased().hasSuffix(".heic") || $0.lowercased().hasSuffix(".jpg") }.count) ?? 0
     }
 
     static var root: URL {
@@ -82,6 +82,14 @@ final class ScanModel: ObservableObject {
     @Published var library: [ScanFolder] = ScanFolder.all()
 
     @Published private(set) var session: ObjectCaptureSession?
+    /// Reset's own camera is taking the pictures (Apple's capture took none on this phone).
+    @Published private(set) var ownCamera = false
+    let own = OwnCapture()
+    /// Remembered once Apple's capture has stalled on this phone, so later scans start with Reset's camera.
+    private static var prefersOwn: Bool {
+        get { UserDefaults.standard.bool(forKey: "scanOwnCamera") }
+        set { UserDefaults.standard.set(newValue, forKey: "scanOwnCamera") }
+    }
     private var folder: ScanFolder?
     private var tasks: [Task<Void, Never>] = []
     private var poll: Timer?
@@ -113,6 +121,10 @@ final class ScanModel: ObservableObject {
         do {
             let folder = try ScanFolder.new()
             self.folder = folder
+            if Self.prefersOwn {
+                startOwn(folder, recording: false)
+                return
+            }
             var config = ObjectCaptureSession.Configuration()
             config.checkpointDirectory = folder.checkpoint
             config.isOverCaptureEnabled = false
@@ -129,6 +141,38 @@ final class ScanModel: ObservableObject {
         } catch {
             phase = .failed("Couldn't make the scan folder: \(error.localizedDescription)")
             ScanLog.add("Folder error: \(error)")
+        }
+    }
+
+    /// Reset's own camera takes over: for a new scan, or in the middle of one where Apple's capture took nothing.
+    private func startOwn(_ folder: ScanFolder, recording: Bool) {
+        ownCamera = true
+        shots = 0
+        maxShots = OwnCapture.maxShots
+        passes = 1
+        hint = ""
+        own.begin(folder)
+        own.recording = recording
+        phase = recording ? .capturing : .ready
+        ScanLog.add("Own camera start: \(folder.name), recording \(recording)")
+        poll?.invalidate()
+        poll = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+    }
+
+    private func switchToOwn() {
+        guard let session, let folder else { return }
+        ScanLog.add("Apple's capture is taking no pictures: switching to Reset's own camera")
+        Self.prefersOwn = true
+        session.cancel()
+        stopSession()
+        phase = .starting
+        hint = ""
+        Task { [weak self] in
+            // Apple's session lets go of the camera first.
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            self?.startOwn(folder, recording: true)
         }
     }
 
@@ -154,6 +198,13 @@ final class ScanModel: ObservableObject {
     private var retried = false
 
     private func tick() {
+        if ownCamera {
+            shots = own.shots
+            let text = !own.tracking ? "Move slowly" : own.tooFast ? "Slow down" : ""
+            if hint != text { hint = text }
+            if phase == .capturing, shots >= OwnCapture.maxShots { finish() }
+            return
+        }
         guard let session else { return }
         // The state is read here as well as listened for: on Phil's phone (build 1306) no state ever arrived and the
         // camera stayed black.
@@ -200,6 +251,8 @@ final class ScanModel: ObservableObject {
             } else if !loggedCannot, Date().timeIntervalSince(lastShotAt) > 5 {
                 loggedCannot = true
                 ScanLog.add("Pictures can't be asked for either (tracking \(session.cameraTracking), feedback \(hint))")
+                switchToOwn()
+                return
             }
         }
         if phase == .capturing && Self.usesBox && session.userCompletedScanPass {
@@ -246,6 +299,18 @@ final class ScanModel: ObservableObject {
 
     /// One button does the next step, like a camera shutter.
     func shutter() {
+        if ownCamera {
+            switch phase {
+            case .ready:
+                own.recording = true
+                phase = .capturing
+                ScanLog.add("Own camera: record start")
+            case .capturing:
+                finish()
+            default: break
+            }
+            return
+        }
         guard let session else { return }
         switch phase {
         case .ready:
@@ -275,6 +340,25 @@ final class ScanModel: ObservableObject {
     }
 
     func finish() {
+        if ownCamera {
+            guard let folder, phase == .capturing else { return }
+            phase = .finishing
+            let count = own.shots
+            ScanLog.add("Own camera: finish with \(count) pictures")
+            Task { [weak self] in
+                guard let self else { return }
+                await self.own.end()
+                self.stopSession()
+                if count < 10 {
+                    try? FileManager.default.removeItem(at: folder.url)
+                    self.folder = nil
+                    self.phase = .failed("Only \(count) pictures were taken, too few for a model. Walk slowly all the way round the object before stopping.")
+                } else {
+                    self.build(folder)
+                }
+            }
+            return
+        }
         guard let session else { return }
         ScanLog.add("Finish with \(session.numberOfShotsTaken) pictures, \(ownShots) asked for here")
         if session.numberOfShotsTaken < 10 {
@@ -292,6 +376,10 @@ final class ScanModel: ObservableObject {
     }
 
     func cancel() {
+        if ownCamera {
+            own.recording = false
+            own.session.pause()
+        }
         session?.cancel()
         stopSession()
         if let folder { try? FileManager.default.removeItem(at: folder.url) }
@@ -307,6 +395,16 @@ final class ScanModel: ObservableObject {
     /// Leaving the scanner: the camera is given back, and a scan with no pictures leaves nothing behind. A build
     /// that is running carries on.
     func close() {
+        if ownCamera {
+            own.recording = false
+            own.session.pause()
+            stopSession()
+            if let folder, !folder.hasModel, !folder.hasFull, phase == .ready || phase == .capturing || phase == .starting {
+                try? FileManager.default.removeItem(at: folder.url)
+            }
+            ScanLog.add("Closed (own camera)")
+            return
+        }
         guard session != nil else { return }
         session?.cancel()
         stopSession()
@@ -320,6 +418,7 @@ final class ScanModel: ObservableObject {
         poll?.invalidate()
         poll = nil
         session = nil
+        ownCamera = false
     }
 
     // MARK: Building the model
@@ -366,7 +465,10 @@ final class ScanModel: ObservableObject {
                     try session.process(requests: [.modelFile(url: out, detail: .reduced, geometry: geometry)])
                 } else {
                     // Bounds come back in the session's own space, which the crop box must be in.
-                    try session.process(requests: [.modelFile(url: out), .bounds])
+                    // Pictures from Reset's own camera carry no size or which way is up: the builder's idea of where
+                    // each was taken is asked for too, to line the model up with the room afterwards.
+                    let ownCameras = folder.cameras
+                    try session.process(requests: ownCameras == nil ? [.modelFile(url: out), .bounds] : [.modelFile(url: out), .bounds, .poses])
                 }
                 for try await output in session.outputs {
                     switch output {
@@ -376,6 +478,8 @@ final class ScanModel: ObservableObject {
                         if case .bounds(let b) = result {
                             ScanLog.add("Session bounds: \(b.min) to \(b.max)")
                             folder.saveSessionBounds(CropBox(min: b.min, max: b.max))
+                        } else if case .poses(let poses) = result {
+                            Self.saveFit(poses, folder: folder)
                         } else {
                             ScanLog.add("Model saved: \(out.lastPathComponent)")
                         }
@@ -402,6 +506,16 @@ final class ScanModel: ObservableObject {
 
     private func built(_ folder: ScanFolder, cropped: Bool) {
         library = ScanFolder.all()
+        if !cropped, folder.hasFull, folder.cameras != nil {
+            // Reset's own pictures: no crop step yet (the builder's space is not upright), the model is made real
+            // size and upright and that is it.
+            let fit = folder.fit
+            let ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
+            ScanLog.add("Own camera model: fit \(fit.map { String(format: "scale %.3f, error %.3f m", $0.scale, $0.error) } ?? "none"), written \(ok)")
+            library = ScanFolder.all()
+            phase = ok ? .done(folder) : .failed("The model couldn't be saved.")
+            return
+        }
         if cropped {
             phase = folder.hasModel ? .done(folder) : .failed("The cropped model wasn't written. Try Crop again from the library.")
         } else if folder.hasFull {
@@ -409,6 +523,27 @@ final class ScanModel: ObservableObject {
         } else {
             phase = .failed("The model file wasn't written. The pictures are kept; try Build again from the library.")
         }
+    }
+
+    /// Where the builder thinks each picture was taken, against where ARKit knows it was: the model's real size and
+    /// which way is up come from fitting one to the other.
+    private static func saveFit(_ poses: PhotogrammetrySession.Poses, folder: ScanFolder) {
+        guard let cameras = folder.cameras else { return }
+        var from: [SIMD3<Float>] = []
+        var to: [SIMD3<Float>] = []
+        for (sample, pose) in poses.posesBySample {
+            guard let name = poses.urlsBySample[sample]?.lastPathComponent, let place = cameras[name], place.count == 3 else { continue }
+            from.append(pose.translation)
+            to.append(SIMD3(place[0], place[1], place[2]))
+        }
+        guard let fit = ScanAlign.fit(from: from, to: to) else {
+            ScanLog.add("Poses: \(poses.posesBySample.count) from the builder, \(from.count) matched, no fit")
+            return
+        }
+        ScanLog.add(String(format: "Poses: %d matched of %d pictures, scale %.3f, error %.3f m", from.count, cameras.count, fit.scale, fit.error))
+        // A fit that leaves the cameras more than a hand's width out is not to be trusted.
+        guard fit.error < 0.15, let data = try? JSONEncoder().encode(fit) else { return }
+        try? data.write(to: folder.fitFile)
     }
 
     /// Crop screen: keep the whole area as it is.
