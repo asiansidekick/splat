@@ -2215,7 +2215,7 @@ struct CaptureStage: View {
         }
     }
 
-: it waits while another lens
+    /// Shows the view through the picked lens. The room tracking only runs on 1×: it waits while another lens
     /// is live, and carries on (models and marks kept) back at 1×. Scanning, saving and Auto scan stay on 1×.
     private func syncLens() {
         let free = mode == .snapshot && !recorder.capturing && !recorder.pendingSave && !recorder.saving
