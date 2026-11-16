@@ -1799,7 +1799,12 @@ final class Thumbnails: ObservableObject {
     func load(_ reference: Reference) async {
         let stamp = Self.stamp(reference)
         guard images[reference.id] == nil || stamps[reference.id] != stamp, let first = reference.keyframes.first else { return }
-        stamps[reference.id] = stamp
+        // A model or cut-out was just moved: wait until the editing pauses (each change cancels this task and starts it
+        // again), because drawing the thumbnail loads every model and held the screen up (Phil, 2026-11-16).
+        if images[reference.id] != nil {
+            try? await Task.sleep(for: .seconds(2.5))
+            if Task.isCancelled { return }
+        }
         let url = ReferenceStore.folder(for: reference.id).appendingPathComponent(first.imageFile)
         let orientation = first.uprightOrientation
         let image = await Task.detached(priority: .utility) { () -> UIImage? in
@@ -1808,7 +1813,8 @@ final class Thumbnails: ObservableObject {
             guard let cg = full.preparingThumbnail(of: size)?.cgImage else { return nil }
             return UIImage(cgImage: cg, scale: 1, orientation: orientation)
         }.value
-        guard let image else { return }
+        guard let image, !Task.isCancelled else { return }
+        stamps[reference.id] = stamp
         if !reference.models.isEmpty, let drawn = withModels(image, reference: reference, frame: first) {
             images[reference.id] = drawn
         } else {
