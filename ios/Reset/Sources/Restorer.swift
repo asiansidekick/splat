@@ -327,11 +327,20 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         }
         scored.sort { $0.score < $1.score }
         var rank: [Int: Int] = [:]
-        // The best frame alone; a second only while the two are nearly equal (the blend between neighbours).
-        for (r, item) in scored.prefix(2).enumerated() where r == 0 || item.score - scored[0].score < 0.12 { rank[item.index] = r }
+        // The best frame, then only frames that look somewhere else (30° or more from every one chosen): they sit beside
+        // each other and fill the view, instead of lying on top of each other and fluttering (Phil, 2026-11-16).
+        var chosen: [Int] = []
+        for item in scored where chosen.count < 4 {
+            let way = -backdropCameras[item.index].columns.2.xyz
+            let apart = chosen.allSatisfy { simd_dot(way, -backdropCameras[$0].columns.2.xyz) < 0.866 }
+            if apart {
+                rank[item.index] = chosen.count
+                chosen.append(item.index)
+            }
+        }
         for index in nodes.indices {
             let target: CGFloat = rank[index] != nil ? 1 : 0
-            if let r = rank[index] { nodes[index].renderingOrder = 10 + (1 - r) }
+            if let r = rank[index] { nodes[index].renderingOrder = 10 + (3 - r) }
             if pieceTarget[index] != target {
                 pieceTarget[index] = target
                 nodes[index].runAction(.fadeOpacity(to: target, duration: 0.25), forKey: "fade")
