@@ -1045,31 +1045,35 @@ struct BackgroundWord: View {
     }
 }
 
-/// GHOST, BACKDROP and WALK, and BACK TO LIVE once the view has been moved by hand.
+/// One word names the view (GHOST, BACKDROP or WALK); tap it for the next. BACK TO LIVE appears once the view has been
+/// moved by hand (Phil, 2026-11-16: a quieter screen).
 struct BackgroundRow: View {
     @ObservedObject var restorer: Restorer
 
+    private var next: Restorer.Look {
+        switch restorer.look {
+        case .ghost: return .backdrop
+        case .backdrop: return .walk
+        case .walk: return .ghost
+        }
+    }
+
+    private var name: String {
+        switch restorer.look {
+        case .ghost: return "GHOST"
+        case .backdrop: return "BACKDROP"
+        case .walk: return "WALK"
+        }
+    }
+
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 20) { looks; back }
-            VStack(spacing: 0) {
-                HStack(spacing: 20) { looks }
-                HStack(spacing: 20) { back }
+        HStack(spacing: 20) {
+            BackgroundWord(title: name + " ›", on: true) { restorer.setLook(next) }
+            if restorer.hasOffset {
+                BackgroundWord(title: "BACK TO LIVE", on: false) { restorer.backToLive() }
             }
         }
         .frame(maxWidth: .infinity)
-    }
-
-    @ViewBuilder private var looks: some View {
-        BackgroundWord(title: "GHOST", on: restorer.look == .ghost) { restorer.setLook(.ghost) }
-        BackgroundWord(title: "BACKDROP", on: restorer.look == .backdrop) { restorer.setLook(.backdrop) }
-        BackgroundWord(title: "WALK", on: restorer.look == .walk) { restorer.setLook(.walk) }
-    }
-
-    @ViewBuilder private var back: some View {
-        if restorer.hasOffset {
-            BackgroundWord(title: "BACK TO LIVE", on: false) { restorer.backToLive() }
-        }
     }
 }
 
@@ -2536,26 +2540,22 @@ struct ResetStage: View {
                 .accessibilityLabel(wipe ? "Wiping. Switch to fade" : "Fading. Switch to wipe")
                 .caughtTap("Fade or wipe") { toggleWipe() }
             } else {
-                if restorer.usesDepth {
-                    Button { TapGate.run("Changes") { restorer.showDifferences.toggle() } } label: {
-                        Image(systemName: "square.2.layers.3d").font(Theme.title3)
-                            .foregroundStyle(restorer.showDifferences ? Theme.accent : Color.white)
+                // Changes, Hold view and Torch live in the ••• menu; each shows here only while it is on.
+                if restorer.usesDepth, restorer.showDifferences {
+                    Button { TapGate.run("Changes") { restorer.showDifferences = false } } label: {
+                        Image(systemName: "square.2.layers.3d").font(Theme.title3).foregroundStyle(Theme.accent)
                     }
-                    .accessibilityLabel(restorer.showDifferences ? "Hide LiDAR changes" : "Show LiDAR changes")
-                    .caughtTap("Changes") { restorer.showDifferences.toggle() }
+                    .accessibilityLabel("Hide LiDAR changes")
+                    .caughtTap("Changes") { restorer.showDifferences = false }
                 }
-                if !reference.photoOnly {
+                if !reference.photoOnly, restorer.lockedKeyframe != nil {
                     Button { TapGate.run("Hold view") { restorer.toggleLock() } } label: {
-                        Image(systemName: restorer.lockedKeyframe == nil ? "lock.open" : "lock.fill")
-                            .font(Theme.title3)
-                            .foregroundStyle(restorer.lockedKeyframe == nil ? Color.white : Theme.accent)
+                        Image(systemName: "lock.fill").font(Theme.title3).foregroundStyle(Theme.accent)
                     }
-                    .accessibilityLabel(restorer.lockedKeyframe == nil ? "Hold this view" : "Follow the camera")
+                    .accessibilityLabel("Follow the camera")
                     .caughtTap("Hold view") { restorer.toggleLock() }
                 }
-            }
-            if !restorer.paused {
-                TorchButton()
+                TorchButton(onlyWhenOn: true)
             }
             Button { TapGate.run("More") { showingMore = true } } label: {
                 Image(systemName: "ellipsis.circle").font(Theme.title3)
@@ -2622,6 +2622,15 @@ struct ResetStage: View {
                     ghostMask = nil
                 })
             }
+        }
+        if !restorer.paused, Torch.shared.available {
+            items.append(.init(Torch.shared.on ? "Torch off" : "Torch", "flashlight.on.fill") { Torch.shared.toggle() })
+        }
+        if !reference.photoOnly {
+            items.append(.init(restorer.lockedKeyframe == nil ? "Hold view" : "Follow the camera", "lock") { restorer.toggleLock() })
+        }
+        if restorer.usesDepth, !restorer.paused {
+            items.append(.init(restorer.showDifferences ? "Hide changes" : "Show changes", "square.2.layers.3d") { restorer.showDifferences.toggle() })
         }
         items.append(.init("References", "photo.on.rectangle") { open(.gallery) })
         if !others.isEmpty { items.append(.init("Add a layer", "square.3.layers.3d") { addingLayer = true }) }

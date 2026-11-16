@@ -97,9 +97,11 @@ final class Torch: ObservableObject {
 /// The top-bar torch: tap for on and off; press and hold for the brightness dial.
 struct TorchButton: View {
     @ObservedObject var torch = Torch.shared
+    /// Shown only while the torch is lit (Reset keeps the switch itself in the ••• menu).
+    var onlyWhenOn = false
 
     var body: some View {
-        if torch.available {
+        if torch.available, torch.on || !onlyWhenOn {
             Image(systemName: torch.on ? "flashlight.on.fill" : "flashlight.off.fill")
                 .font(Theme.title3)
                 .foregroundStyle(torch.on ? Theme.accent : Color.white)
