@@ -48,6 +48,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private var cutoutTimer: Timer?
     /// The colour cut-outs are multiplied by to sit in the room's light, eased from frame to frame.
     private var lightTint = SIMD3<Float>(1, 1, 1)
+    private var tintApplied = false
     /// Phil, 2026-11-09: cut-outs take on the room's brightness and warmth (Help, Cut-outs). On unless turned off.
     static var matchesLight: Bool { UserDefaults.standard.object(forKey: "cutoutMatchLight") as? Bool ?? true }
     /// Each model's box in its own coordinates, measured on loading, before any arrows are hung
@@ -58,6 +59,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// While dragging: from where the finger's ray meets the model's floor height to the model,
     /// so the model keeps its place under the finger instead of jumping to it.
     private var dragTarget: SIMD3<Float>?
+    private var lastDimensionRefresh = Date.distantPast
     /// One-finger drags move the selected model up and down instead of across (Phil, 2026-10-31).
     @Published var lifting = false
     /// Phil, 2026-11-09: cut-outs are handled one job at a time, each with one finger, and carried by holding Carry.
@@ -483,7 +485,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 target += away / distance * (wanted - distance)
             }
             dragTarget = target
-            node.simdWorldPosition = simd_mix(node.simdWorldPosition, target, SIMD3(repeating: 0.45))
+            node.simdWorldPosition = simd_mix(node.simdWorldPosition, target, SIMD3(repeating: 0.75))
         case .ended, .cancelled:
             if let target = dragTarget { node.simdWorldPosition = target }
             dragTarget = nil
@@ -559,7 +561,11 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             let next = node.simdScale * factor
             if next.x > 0.05, next.x < 20 { node.simdScale = next }
             updateSize()
-            refreshDimensions(id)
+            // The arrows are rebuilt from text each time: at most about 8 times a second while sizing (Phil, 2026-11-16: laggy).
+            if Date().timeIntervalSince(lastDimensionRefresh) > 0.12 || gesture.state == .ended {
+                lastDimensionRefresh = Date()
+                refreshDimensions(id)
+            }
         case .tilt:
             guard var package = cutoutPackages[id], let plane = cutouts[id]?.plane, let model = models.first(where: { $0.id == id }) else { return }
             package.tilt = min(max(package.tilt - Float(moved.y) * 0.3, -80), 80)
@@ -841,9 +847,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         if dim != dimLight { dimLight = dim }
         let wanted = Self.matchesLight ? Self.tint(intensity: Float(estimate?.ambientIntensity ?? 1000),
                                                     kelvin: Float(estimate?.ambientColorTemperature ?? 6500)) : SIMD3<Float>(1, 1, 1)
+        let before = lightTint
         lightTint += (wanted - lightTint) * 0.15
-        let colour = UIColor(red: CGFloat(lightTint.x), green: CGFloat(lightTint.y), blue: CGFloat(lightTint.z), alpha: 1)
-        for state in cutouts.values { state.plane.geometry?.firstMaterial?.multiply.contents = colour }
+        // Setting a material's colour makes SceneKit redo it: only when the tint has really moved.
+        if simd_length(lightTint - before) > 0.002 || !tintApplied {
+            tintApplied = true
+            let colour = UIColor(red: CGFloat(lightTint.x), green: CGFloat(lightTint.y), blue: CGFloat(lightTint.z), alpha: 1)
+            for state in cutouts.values { state.plane.geometry?.firstMaterial?.multiply.contents = colour }
+        }
         for (id, state) in cutouts {
             guard let node = modelNodes[id] else { continue }
             let transform = node.simdWorldTransform
