@@ -805,7 +805,7 @@ struct ModePicker<Mode: Hashable>: View {
                         .font(Theme.footnote.weight(.semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
-                        .foregroundStyle(selection == mode ? Theme.accent : Color.white)
+                        .foregroundStyle(selection == mode ? Theme.active : Color.white)
                 }
                 .caughtTap("Mode " + label(mode), enabled: enabled) { choose(mode) }
             }
@@ -967,7 +967,7 @@ struct TopPill: View {
             .font(Theme.footnote.bold())
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(highlighted ? Theme.accent : Color.white.opacity(0.15), in: Capsule())
+            .background(highlighted ? Theme.active : Color.white.opacity(0.15), in: Capsule())
             .foregroundStyle(highlighted ? Color.black : Color.white)
         }
     }
@@ -1035,7 +1035,7 @@ struct BackgroundWord: View {
             Text(title)
                 .font(Theme.footnote.weight(.semibold))
                 .lineLimit(1)
-                .foregroundStyle(on ? Theme.accent : Color.white)
+                .foregroundStyle(on ? Theme.active : Color.white)
                 .shadow(color: .black.opacity(0.8), radius: 2)
                 .frame(minHeight: 36)
                 .contentShape(Rectangle())
@@ -1151,7 +1151,7 @@ struct GuideWord: View {
             Text("GUIDE")
                 .font(Theme.footnote.weight(.semibold))
                 .lineLimit(1)
-                .foregroundStyle(on ? Theme.accent : Color.white)
+                .foregroundStyle(on ? Theme.active : Color.white)
                 .shadow(color: .black.opacity(0.8), radius: 2)
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
@@ -1175,7 +1175,7 @@ struct RecentWord: View {
             Text("RECENT")
                 .font(Theme.footnote.weight(.semibold))
                 .lineLimit(1)
-                .foregroundStyle(on ? Theme.accent : Color.white)
+                .foregroundStyle(on ? Theme.active : Color.white)
                 .frame(minHeight: 22)
                 .contentShape(Rectangle())
                 .fixedSize()

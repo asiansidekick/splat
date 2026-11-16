@@ -10,6 +10,9 @@ enum Theme {
     /// Mint, the one accent colour (#5EEAD4), and the dark text that sits on it.
     static let accent = Color(red: 0.369, green: 0.918, blue: 0.831)
     static let onAccent = Color(red: 0.016, green: 0.125, blue: 0.11)
+    /// What is switched on now (active pills, the chosen mode or lens): the Camera app's yellow, which stands out from
+    /// white words and from mint over any picture (Phil, 2026-11-16: more contrast).
+    static let active = Color(red: 1.0, green: 0.84, blue: 0.04)
     static let accentUI = UIColor(red: 0.369, green: 0.918, blue: 0.831, alpha: 1)
 
     private static func name(_ weight: Font.Weight) -> String {

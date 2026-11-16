@@ -208,7 +208,7 @@ struct LensChooser: View {
                         Text(lens.label)
                             .font(Theme.font(size: 12, weight: .bold))
                             .frame(minWidth: 34, minHeight: 30)
-                            .background(zoom == lens.zoom ? Theme.accent : Color.black.opacity(0.45), in: Capsule())
+                            .background(zoom == lens.zoom ? Theme.active : Color.black.opacity(0.45), in: Capsule())
                             .foregroundStyle(zoom == lens.zoom ? Theme.onAccent : Color.white)
                             .fixedSize()
                     }
