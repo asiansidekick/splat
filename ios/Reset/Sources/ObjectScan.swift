@@ -141,6 +141,7 @@ final class ScanModel: ObservableObject {
         tasks.append(Task { [weak self] in
             for await feedback in session.feedbackUpdates {
                 self?.hint = Self.text(for: feedback)
+                ScanLog.add("Feedback: \(feedback.map { "\($0)" }.sorted().joined(separator: ", "))")
             }
         })
         poll = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -180,8 +181,23 @@ final class ScanModel: ObservableObject {
             }
             return
         }
-        shots = session.numberOfShotsTaken
+        let taken = session.numberOfShotsTaken
+        if taken != shots { lastShotAt = Date() }
+        shots = taken
         maxShots = session.maximumNumberOfInputImages
+        // Apple takes pictures by itself as the phone moves, but on Phil's phone (build 1307) it took none in 44 s.
+        // When a second goes by with no picture, one is asked for here, so a scan always fills.
+        if phase == .capturing, Date().timeIntervalSince(lastShotAt) > 1.0 {
+            if session.canRequestImageCapture {
+                if ownShots == 0 { ScanLog.add("No automatic pictures: taking one a second (auto capture \(session.isAutoCaptureEnabled))") }
+                ownShots += 1
+                lastShotAt = Date()
+                session.requestImageCapture()
+            } else if !loggedCannot, Date().timeIntervalSince(lastShotAt) > 5 {
+                loggedCannot = true
+                ScanLog.add("Pictures can't be asked for either (tracking \(session.cameraTracking), feedback \(hint))")
+            }
+        }
         if phase == .capturing && Self.usesBox && session.userCompletedScanPass {
             phase = .passDone
             ScanLog.add("Pass \(passes) done, \(shots) pictures")
@@ -189,6 +205,9 @@ final class ScanModel: ObservableObject {
     }
 
     private var lastState = ""
+    private var lastShotAt = Date()
+    private var ownShots = 0
+    private var loggedCannot = false
 
     private func stateChanged(_ state: ObjectCaptureSession.CaptureState) {
         // Heard and polled: act once on each.
@@ -200,7 +219,15 @@ final class ScanModel: ObservableObject {
         case .initializing: phase = .starting
         case .ready: phase = .ready
         case .detecting: phase = .detecting
-        case .capturing: if phase != .passDone { phase = .capturing }
+        case .capturing:
+            if phase != .passDone {
+                if phase != .capturing {
+                    lastShotAt = Date()
+                    ownShots = 0
+                    loggedCannot = false
+                }
+                phase = .capturing
+            }
         case .finishing: phase = .finishing
         case .completed: build()
         case .failed(let error):
@@ -245,7 +272,17 @@ final class ScanModel: ObservableObject {
 
     func finish() {
         guard let session else { return }
-        ScanLog.add("Finish with \(session.numberOfShotsTaken) pictures")
+        ScanLog.add("Finish with \(session.numberOfShotsTaken) pictures, \(ownShots) asked for here")
+        if session.numberOfShotsTaken < 10 {
+            // Too few to build anything: say so instead of a failed build.
+            let count = session.numberOfShotsTaken
+            session.cancel()
+            stopSession()
+            if let folder { try? FileManager.default.removeItem(at: folder.url) }
+            folder = nil
+            phase = .failed("Only \(count) pictures were taken, too few for a model. Walk slowly all the way round the object before stopping.")
+            return
+        }
         session.finish()
         phase = .finishing
     }
