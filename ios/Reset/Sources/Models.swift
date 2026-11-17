@@ -445,6 +445,9 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     /// While a hold is lifting: the model, and where the finger last was.
     private var holdLift: (id: UUID, last: CGPoint)?
+    /// The height the finger has asked for; the model eases to it.
+    private var holdTarget: Float = 0
+    private var holdHint: UIView?
 
     @objc private func handleHold(_ gesture: UILongPressGestureRecognizer) {
         guard let view = gesture.view as? SCNView else { return }
@@ -452,25 +455,80 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         switch gesture.state {
         case .began:
             guard selectionAllowed(), !isSuspended(), !carrying,
-                  let touched = view.hitTest(finger, options: ReviewPick.options).lazy.compactMap({ self.modelID(of: $0.node) }).first
+                  let touched = view.hitTest(finger, options: ReviewPick.options).lazy.compactMap({ self.modelID(of: $0.node) }).first,
+                  let node = modelNodes[touched]
             else { return }
             selectedModel = touched
             cancelPin()
             pinned.remove(touched)
             holdLift = (touched, finger)
+            holdTarget = node.simdWorldPosition.y
+            showHoldHint(in: view, at: finger)
             Haptics.firm()
         case .changed:
             guard let lift = holdLift, let node = modelNodes[lift.id] else { return }
-            let camera = eye?.columns.3.xyz ?? node.simdWorldPosition
-            // The same step as the Lift job: about a millimetre and a half per point for each metre away.
-            node.simdWorldPosition.y -= Float(finger.y - lift.last.y) * 0.0016 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
+            // Up the screen is up in the room, one for one: how far a point on the screen is at the model's depth.
+            let at = node.worldPosition
+            let shown = view.projectPoint(at)
+            var metresPerPoint: Float
+            if shown.z > 0, shown.z < 1 {
+                let a = SIMD3<Float>(view.unprojectPoint(SCNVector3(shown.x, shown.y, shown.z)))
+                let b = SIMD3<Float>(view.unprojectPoint(SCNVector3(shown.x, shown.y + 1, shown.z)))
+                metresPerPoint = simd_distance(a, b)
+            } else {
+                let camera = eye?.columns.3.xyz ?? node.simdWorldPosition
+                metresPerPoint = 0.0016 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
+            }
+            holdTarget -= Float(finger.y - lift.last.y) * metresPerPoint
+            node.simdWorldPosition.y += (holdTarget - node.simdWorldPosition.y) * 0.8
             holdLift = (lift.id, finger)
+            holdHint?.center = hintCenter(for: finger, in: view)
         case .ended, .cancelled, .failed:
-            if let lift = holdLift { commit(lift.id) }
+            if let lift = holdLift {
+                modelNodes[lift.id]?.simdWorldPosition.y = holdTarget
+                commit(lift.id)
+            }
             holdLift = nil
+            hideHoldHint()
         default:
             break
         }
+    }
+
+    /// Up and down for the finger, drawn beside it (not under it) while a hold is lifting.
+    private func showHoldHint(in view: UIView, at point: CGPoint) {
+        holdHint?.removeFromSuperview()
+        func icon(_ name: String, _ size: CGFloat) -> UIImageView {
+            let picture = UIImageView(image: UIImage(systemName: name, withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: .heavy)))
+            picture.tintColor = UIColor(red: 1, green: 0.84, blue: 0.04, alpha: 1)
+            return picture
+        }
+        let stack = UIStackView(arrangedSubviews: [icon("hand.thumbsup.fill", 26), icon("arrow.up.and.down", 22), icon("hand.thumbsdown.fill", 26)])
+        stack.axis = .vertical
+        stack.alignment = .center
+        stack.spacing = 10
+        stack.layer.shadowColor = UIColor.black.cgColor
+        stack.layer.shadowOpacity = 0.85
+        stack.layer.shadowRadius = 3
+        stack.layer.shadowOffset = CGSize(width: 0, height: 1)
+        stack.isUserInteractionEnabled = false
+        stack.frame.size = stack.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+        stack.center = hintCenter(for: point, in: view)
+        stack.alpha = 0
+        view.addSubview(stack)
+        UIView.animate(withDuration: 0.15) { stack.alpha = 1 }
+        holdHint = stack
+    }
+
+    private func hintCenter(for finger: CGPoint, in view: UIView) -> CGPoint {
+        // Left of the finger, or right of it near the left edge.
+        CGPoint(x: finger.x < 80 ? finger.x + 56 : finger.x - 56, y: finger.y)
+    }
+
+    private func hideHoldHint() {
+        guard let hint = holdHint else { return }
+        holdHint = nil
+        UIView.animate(withDuration: 0.2, animations: { hint.alpha = 0 }, completion: { _ in hint.removeFromSuperview() })
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
