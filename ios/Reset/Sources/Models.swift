@@ -510,7 +510,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             away.y = 0
             let distance = simd_length(away)
             if distance > 0.05 {
-                let wanted = min(max(distance * exp(-Float(delta.y) * 0.0022), 0.3), 15)
+                let wanted = min(max(distance * exp(-Float(delta.y) * 0.0022), 0.3), 500)
                 target += away / distance * (wanted - distance)
             }
             dragTarget = target
@@ -587,7 +587,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             guard simd_distance(near, far) > 0.001,
                   let found = PinMath.along(origin: line.origin, direction: line.direction, from: near, toward: simd_normalize(far - near))
             else { return }
-            let t = min(max(found, 0.2), 20)
+            let t = min(max(found, 0.2), 500)
             let target = line.origin + line.direction * t
             node.simdWorldPosition = simd_mix(node.simdWorldPosition, target, SIMD3(repeating: 0.75))
             if line.scales { node.simdScale = line.scale * (simd_distance(node.simdWorldPosition, line.origin) / line.distance) }
@@ -676,7 +676,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         case .size:
             let factor = exp(-Float(moved.y) * 0.004)
             let next = node.simdScale * factor
-            if next.x > 0.05, next.x < 20 { node.simdScale = next }
+            if next.x > 0.005, next.x < 2000 { node.simdScale = next }
             updateSize()
             // The arrows are rebuilt from text each time: at most about 8 times a second while sizing (Phil, 2026-11-16: laggy).
             if Date().timeIntervalSince(lastDimensionRefresh) > 0.12 || gesture.state == .ended {
@@ -711,7 +711,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         guard !carrying, let id = selectedModel, let node = modelNodes[id], let camera = session.currentFrame?.camera.transform else { return }
         var away = node.simdWorldPosition - camera.columns.3.xyz
         away.y = 0
-        carryDistance = min(max(simd_length(away), 0.5), 8)
+        carryDistance = min(max(simd_length(away), 0.5), 500)
         carrying = true
         carried = id
         cancelPin()
