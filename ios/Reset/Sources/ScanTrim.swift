@@ -62,7 +62,23 @@ final class ScanTrimmer: ObservableObject {
                     sources.append(SCNGeometrySource(normals: mesh.normals.map { SCNVector3($0.x, $0.y, $0.z) }))
                 }
                 if mesh.uvs.count == mesh.positions.count {
-                    sources.append(SCNGeometrySource(textureCoordinates: mesh.uvs.map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) }))
+                    // ModelIO gives the file's picture coordinates (up is 1); SceneKit's own reading of the same file
+                    // may have them the other way up. Build 1318 showed the photo in the wrong places, the signature of
+                    // that flip, so the way up is taken from SceneKit's own numbers when they can be compared.
+                    var flip = true
+                    if let own = Self.pictureHeights(of: geometry), own.count == mesh.uvs.count {
+                        let mine = mesh.uvs.map(\.y).sorted(), theirs = own.sorted()
+                        var plain: Float = 0, flipped: Float = 0
+                        for i in mine.indices {
+                            plain += abs(mine[i] - theirs[i])
+                            flipped += abs((1 - mine[mine.count - 1 - i]) - theirs[i])
+                        }
+                        flip = flipped < plain
+                        Diagnostics.log(String(format: "Trim picture: flip %@ (plain %.1f, flipped %.1f)", flip ? "yes" : "no", plain, flipped))
+                    } else {
+                        Diagnostics.log("Trim picture: no SceneKit numbers to compare, flip yes")
+                    }
+                    sources.append(SCNGeometrySource(textureCoordinates: mesh.uvs.map { CGPoint(x: CGFloat($0.x), y: CGFloat(flip ? 1 - $0.y : $0.y)) }))
                 }
                 positions = mesh.positions
                 elements = mesh.elements
@@ -95,6 +111,22 @@ final class ScanTrimmer: ObservableObject {
         placeCamera()
         ready = true
         Diagnostics.log("Trim opened: \(url.lastPathComponent), \(found.count) pieces, \(triangles) triangles")
+    }
+
+    /// The up-and-down picture coordinate of every point, as SceneKit read them.
+    private static func pictureHeights(of geometry: SCNGeometry) -> [Float]? {
+        guard let source = geometry.sources(for: .texcoord).first, source.usesFloatComponents,
+            source.bytesPerComponent == 4, source.componentsPerVector >= 2
+        else { return nil }
+        let stride = source.dataStride, offset = source.dataOffset, count = source.vectorCount
+        let data = source.data
+        guard stride > 0, count > 0, data.count >= offset + (count - 1) * stride + 8 else { return nil }
+        var out: [Float] = []
+        out.reserveCapacity(count)
+        data.withUnsafeBytes { raw in
+            for i in 0..<count { out.append(raw.loadUnaligned(fromByteOffset: offset + i * stride + 4, as: Float.self)) }
+        }
+        return out
     }
 
     /// One mesh as ModelIO reads it: points, normals and picture coordinates all numbered the same way.
