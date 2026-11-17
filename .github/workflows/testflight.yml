@@ -116,10 +116,22 @@ jobs:
           </dict>
           </plist>
           PLIST
-          if ! xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Reset.xcarchive" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
-            -allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH" \
-            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" > export.log 2>&1; then
+          # Apple's service sometimes fails this step for a while ("Error Downloading App Information"),
+          # so try again a few times before giving up.
+          done_upload=0
+          for attempt in 1 2 3 4 5; do
+            if xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Reset.xcarchive" \
+              -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export" \
+              -allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY_PATH" \
+              -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" > export.log 2>&1; then
+              done_upload=1
+              break
+            fi
+            echo "Upload try $attempt of 5 failed; waiting to try again."
+            grep -iE "error" export.log | sort -u | head -5
+            sleep $((60 * attempt))
+          done
+          if [ "$done_upload" != 1 ]; then
             grep -iE "error" export.log | sort -u | head -10 | sed -E 's/^/::error::/'
             tail -60 export.log
             exit 1
