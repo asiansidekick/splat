@@ -14,11 +14,29 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             updateSize()
             if selectedModel != oldValue {
                 stopCarrying()
+                cancelPin()
                 cutoutJob = .move
             }
         }
     }
     @Published var modelError: String?
+    /// Pinning the selected model's distance from two views (PinMath): step aside, then drag it back onto its spot.
+    enum PinStep: Equatable { case stepAside, dragBack, done }
+    @Published private(set) var pinStep: PinStep?
+    /// Models whose distance has been pinned since they were last moved.
+    @Published private(set) var pinned: Set<UUID> = []
+    private struct PinLine {
+        let id: UUID
+        let origin: SIMD3<Float>
+        let direction: SIMD3<Float>
+        let distance: Float
+        let scale: SIMD3<Float>
+        let scales: Bool
+    }
+    private var pinLine: PinLine?
+    private var pinTimer: Timer?
+    /// From the finger to the model's place on the screen, kept through a drag so the model doesn't jump.
+    private var pinGrip = CGPoint.zero
     /// While copying an actor's pose (PoseCopy.swift).
     @Published var poseCopier: PoseCopier?
     /// The selected model's real size, for example "62 × 40 × 75 cm · 100%".
@@ -255,6 +273,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             return
         }
         node.simdWorldPosition = spot
+        cancelPin()
+        pinned.remove(id)
         selectedModel = id
         Haptics.success()
         commit(id)
@@ -437,6 +457,10 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         }
         if ignoringPan { return }
         guard let id = selectedModel, let node = modelNodes[id] else { return }
+        if pinStep != nil {
+            pinDrag(gesture, in: view, node: node)
+            return
+        }
         // Phil, 2026-11-10: USDZ and other models use the cut-out way too: one job at a time for one finger.
         if cutoutJob != .move, !carrying {
             doCutoutJob(gesture, id: id, node: node)
@@ -489,7 +513,95 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         case .ended, .cancelled:
             if let target = dragTarget { node.simdWorldPosition = target }
             dragTarget = nil
+            pinned.remove(id)
             commit(id)
+        default:
+            break
+        }
+    }
+
+    /// Starts pinning the selected model: remembers the line of sight to it, then waits for a step to the side.
+    func startPin() {
+        if pinStep != nil {
+            cancelPin()
+            return
+        }
+        guard let id = selectedModel, let node = modelNodes[id], let eye = self.eye?.columns.3.xyz else { return }
+        let away = node.simdWorldPosition - eye
+        let distance = simd_length(away)
+        guard distance > 0.1 else { return }
+        stopCarrying()
+        cutoutJob = .move
+        pinLine = PinLine(id: id, origin: eye, direction: away / distance, distance: distance, scale: node.simdScale, scales: cutoutPackages[id] != nil)
+        pinStep = .stepAside
+        Haptics.tap()
+        pinTimer?.invalidate()
+        pinTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pinWatch() }
+        }
+    }
+
+    func cancelPin() {
+        pinTimer?.invalidate()
+        pinTimer = nil
+        guard pinStep != nil else { return }
+        // Given up before the drag back was finished: the model goes back to where it stood.
+        if pinStep != .done, let line = pinLine, let node = modelNodes[line.id] {
+            node.simdWorldPosition = line.origin + line.direction * line.distance
+            node.simdScale = line.scale
+            commit(line.id)
+        }
+        pinStep = nil
+        pinLine = nil
+    }
+
+    /// Far enough to the side for the two lines of sight to tell the distance.
+    private func pinWatch() {
+        guard pinStep == .stepAside, let line = pinLine, let eye = self.eye?.columns.3.xyz else { return }
+        if PinMath.aside(origin: line.origin, direction: line.direction, camera: eye) >= PinMath.stepNeeded(distance: line.distance) {
+            pinStep = .dragBack
+            Haptics.tap()
+            pinTimer?.invalidate()
+            pinTimer = nil
+        }
+    }
+
+    /// The drag back: the model slides along the first line of sight to where the finger's line meets it. A cut-out
+    /// (sized by eye) grows or shrinks with its distance, so it still looks the same from where it was first set.
+    private func pinDrag(_ gesture: UIPanGestureRecognizer, in view: SCNView, node: SCNNode) {
+        guard pinStep == .dragBack, let line = pinLine, line.id == selectedModel else { return }
+        let finger = gesture.location(in: view)
+        switch gesture.state {
+        case .began:
+            let shown = view.projectPoint(node.worldPosition)
+            pinGrip = CGPoint(x: CGFloat(shown.x) - finger.x, y: CGFloat(shown.y) - finger.y)
+        case .changed:
+            let x = Float(finger.x + pinGrip.x), y = Float(finger.y + pinGrip.y)
+            let near = SIMD3<Float>(view.unprojectPoint(SCNVector3(x, y, 0)))
+            let far = SIMD3<Float>(view.unprojectPoint(SCNVector3(x, y, 1)))
+            guard simd_distance(near, far) > 0.001,
+                  let found = PinMath.along(origin: line.origin, direction: line.direction, from: near, toward: simd_normalize(far - near))
+            else { return }
+            let t = min(max(found, 0.2), 20)
+            let target = line.origin + line.direction * t
+            node.simdWorldPosition = simd_mix(node.simdWorldPosition, target, SIMD3(repeating: 0.75))
+            if line.scales { node.simdScale = line.scale * (simd_distance(node.simdWorldPosition, line.origin) / line.distance) }
+        case .ended, .cancelled:
+            let now = simd_distance(node.simdWorldPosition, line.origin)
+            commit(line.id)
+            updateSize()
+            refreshDimensions(line.id)
+            pinned.insert(line.id)
+            pinStep = .done
+            Haptics.success()
+            Diagnostics.log(String(format: "Pin: distance %.2f m became %.2f m", line.distance, now))
+            // "Pinned" shows for a moment, then the tools are as before.
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1.5))
+                guard let self, self.pinStep == .done else { return }
+                self.pinStep = nil
+                self.pinLine = nil
+            }
         default:
             break
         }
@@ -592,6 +704,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         carryDistance = min(max(simd_length(away), 0.5), 8)
         carrying = true
         carried = id
+        cancelPin()
+        pinned.remove(id)
         Haptics.tap()
         Diagnostics.log(String(format: "Carry started at %.1f m", carryDistance))
         carryTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
@@ -1024,8 +1138,8 @@ struct ModelOverlay: View {
                     .fixedSize(horizontal: true, vertical: false)
                     .layoutPriority(1)
                     Spacer(minLength: 0)
-                    if showsCutoutHelp || placer.carrying {
-                        MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText)
+                    if showsCutoutHelp || placer.carrying || placer.pinStep != nil {
+                        MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText, pin: placer.pinStep)
                             .transition(.opacity)
                     }
                     Spacer(minLength: 0)
@@ -1034,6 +1148,11 @@ struct ModelOverlay: View {
                             CutoutTool(word: "Add", symbol: "plus", tint: Theme.accent, action: onAdd)
                         }
                         CutoutTool(word: "Place here", symbol: "scope") { placer.bringToView() }
+                        // Sets its true distance from two views, so it stays put as the camera moves. Live camera only.
+                        if showsFloor {
+                            let isPinned = placer.selectedModel.map { placer.pinned.contains($0) } ?? false
+                            CutoutTool(word: isPinned ? "Pinned" : "Pin", symbol: "pin", tint: isPinned ? .white : Theme.accent, on: placer.pinStep != nil) { placer.startPin() }
+                        }
                         if cutout {
                             CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }
                         } else {
@@ -1073,8 +1192,15 @@ private struct MoveHint: View {
     let job: ModelPlacer.CutoutJob
     let carrying: Bool
     let size: String?
+    var pin: ModelPlacer.PinStep?
 
     private var parts: (arrow: String, words: String) {
+        switch pin {
+        case .stepAside: return ("arrow.left.and.right", "step to the side")
+        case .dragBack: return ("arrow.left.and.right", "drag it back onto its spot")
+        case .done: return ("checkmark", "pinned")
+        case nil: break
+        }
         if carrying { return ("figure.walk", "walk, let go to drop") }
         switch job {
         case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further")
@@ -1088,12 +1214,12 @@ private struct MoveHint: View {
     var body: some View {
         VStack(spacing: 2) {
             HStack(spacing: 4) {
-                Image(systemName: carrying ? "iphone.gen3" : "hand.point.up.left.fill")
+                Image(systemName: pin == .stepAside ? "figure.walk" : pin == .done ? "pin.fill" : carrying ? "iphone.gen3" : "hand.point.up.left.fill")
                 Image(systemName: parts.arrow).font(.system(size: 16, weight: .bold))
             }
             .font(.system(size: 22, weight: .semibold))
             Text(parts.words).font(.system(size: 12, weight: .semibold))
-            if let size, !size.isEmpty { Text(size).font(.system(size: 11, weight: .semibold).monospacedDigit()) }
+            if pin == nil, let size, !size.isEmpty { Text(size).font(.system(size: 11, weight: .semibold).monospacedDigit()) }
         }
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.85), radius: 2, y: 1)

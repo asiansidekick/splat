@@ -152,5 +152,22 @@ do {
     check(TrimMath.trim(triangles, screen: screen, loop: [SIMD2(0, 0), SIMD2(1, 1)], keep: false) == triangles, "trim: a loop too short changes nothing")
 }
 
+// PinMath: two lines of sight find how far away an object really is.
+do {
+    let spot = SIMD3<Float>(0.3, 0.8, -2.0)
+    let first = SIMD3<Float>(0, 1.5, 0)
+    let direction = simd_normalize(spot - first)
+    let second = SIMD3<Float>(0.4, 1.5, 0.1)
+    if let t = PinMath.along(origin: first, direction: direction, from: second, toward: simd_normalize(spot - second)) {
+        check(abs(t - simd_length(spot - first)) < 0.001, "pin: true distance found (\(t))")
+    } else {
+        check(false, "pin: lines that cross give a distance")
+    }
+    check(PinMath.along(origin: first, direction: direction, from: second, toward: direction) == nil, "pin: lines side by side refused")
+    check(PinMath.along(origin: first, direction: direction, from: second, toward: simd_normalize(SIMD3<Float>(1, 0, 0.2))) == nil, "pin: a meeting behind the camera refused")
+    check(abs(PinMath.aside(origin: first, direction: SIMD3(0, 0, -1), camera: SIMD3(0.25, 1.5, -0.4)) - 0.25) < 0.001, "pin: step to the side measured")
+    check(PinMath.stepNeeded(distance: 0.5) == 0.12 && PinMath.stepNeeded(distance: 10) == 0.5, "pin: step needed stays between 12 and 50 cm")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)
