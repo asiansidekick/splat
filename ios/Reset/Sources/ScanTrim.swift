@@ -39,13 +39,8 @@ final class ScanTrimmer: ObservableObject {
         }
         for child in loaded.rootNode.childNodes { scene.rootNode.addChildNode(child) }
         scene.background.contents = UIColor(white: 0.12, alpha: 1)
-        // The scan's colours are photographs: even light from everywhere shows them as they are.
-        let light = SCNNode()
-        light.light = SCNLight()
-        light.light?.type = .ambient
-        light.light?.intensity = 1000
-        light.name = "trim-light"
-        scene.rootNode.addChildNode(light)
+        // No light is added: the scan's colours are photographs and are shown unlit, exactly as they are. (A light on
+        // top of that doubled them to plain white, build 1313.)
         var found: [Piece] = []
         var unreadable = false
         scene.rootNode.enumerateHierarchy { node, _ in
@@ -55,12 +50,16 @@ final class ScanTrimmer: ObservableObject {
                 return
             }
             var sources = [SCNGeometrySource(vertices: positions.map { SCNVector3($0.x, $0.y, $0.z) })]
-            if let normals = Self.vectors(of: geometry, .normal, parts: 3), normals.count == positions.count * 3 {
-                sources.append(SCNGeometrySource(normals: (0..<positions.count).map { SCNVector3(normals[$0 * 3], normals[$0 * 3 + 1], normals[$0 * 3 + 2]) }))
+            // Normals and picture coordinates are copied byte for byte, whatever form the scan keeps them in.
+            var copied: [String] = []
+            for semantic in [SCNGeometrySource.Semantic.normal, .texcoord, .color] {
+                for source in geometry.sources(for: semantic) where source.vectorCount == positions.count {
+                    sources.append(Self.copy(of: source, semantic))
+                    copied.append("\(semantic.rawValue) \(source.componentsPerVector)x\(source.bytesPerComponent)\(source.usesFloatComponents ? "f" : "i")")
+                }
             }
-            if let coordinates = Self.vectors(of: geometry, .texcoord, parts: 2), coordinates.count == positions.count * 2 {
-                sources.append(SCNGeometrySource(textureCoordinates: (0..<positions.count).map { CGPoint(x: CGFloat(coordinates[$0 * 2]), y: CGFloat(coordinates[$0 * 2 + 1])) }))
-            }
+            let picture = geometry.materials.first.map { String(describing: type(of: $0.diffuse.contents ?? "none")) } ?? "no material"
+            Diagnostics.log("Trim piece: \(positions.count) points, \(copied.joined(separator: ", ")), \(geometry.materials.count) materials, picture \(picture)")
             for material in geometry.materials {
                 lighting.append((material, material.lightingModel))
                 material.lightingModel = .constant
@@ -111,22 +110,12 @@ final class ScanTrimmer: ObservableObject {
         view?.defaultCameraController.target = SCNVector3(middle.x, middle.y, middle.z)
     }
 
-    /// Any float list of a geometry (normals, picture coordinates), flattened.
-    private static func vectors(of geometry: SCNGeometry, _ semantic: SCNGeometrySource.Semantic, parts: Int) -> [Float]? {
-        guard let source = geometry.sources(for: semantic).first, source.usesFloatComponents,
-            source.bytesPerComponent == 4, source.componentsPerVector >= parts
-        else { return nil }
-        let stride = source.dataStride, offset = source.dataOffset, count = source.vectorCount
-        let data = source.data
-        guard stride > 0, count > 0, data.count >= offset + (count - 1) * stride + parts * 4 else { return nil }
-        var out: [Float] = []
-        out.reserveCapacity(count * parts)
-        data.withUnsafeBytes { raw in
-            for i in 0..<count {
-                for part in 0..<parts { out.append(raw.loadUnaligned(fromByteOffset: offset + i * stride + part * 4, as: Float.self)) }
-            }
-        }
-        return out
+    /// A new source holding the same bytes, laid out the same way.
+    private static func copy(of source: SCNGeometrySource, _ semantic: SCNGeometrySource.Semantic) -> SCNGeometrySource {
+        SCNGeometrySource(
+            data: Data(source.data), semantic: semantic, vectorCount: source.vectorCount,
+            usesFloatComponents: source.usesFloatComponents, componentsPerVector: source.componentsPerVector,
+            bytesPerComponent: source.bytesPerComponent, dataOffset: source.dataOffset, dataStride: source.dataStride)
     }
 
     private func count() {
