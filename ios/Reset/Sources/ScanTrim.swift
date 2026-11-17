@@ -10,8 +10,7 @@ final class ScanTrimmer: ObservableObject {
     /// One piece of the model: its points, and for each of its materials the triangles still there.
     private struct Piece {
         let node: SCNNode
-        /// Made afresh from the scan's numbers (points, normals, picture coordinates): the loaded model's own sources,
-        /// used again in a new geometry, left the screen black on Phil's phone (build 1312).
+        /// The scan's own sources, used again in each new geometry (the black screen of build 1312 was the camera, not these).
         let sources: [SCNGeometrySource]
         let materials: [SCNMaterial]
         let positions: [SIMD3<Float>]
@@ -49,17 +48,12 @@ final class ScanTrimmer: ObservableObject {
                 unreadable = true
                 return
             }
-            var sources = [SCNGeometrySource(vertices: positions.map { SCNVector3($0.x, $0.y, $0.z) })]
-            // Normals and picture coordinates are copied byte for byte, whatever form the scan keeps them in.
-            var copied: [String] = []
-            for semantic in [SCNGeometrySource.Semantic.normal, .texcoord, .color] {
-                for source in geometry.sources(for: semantic) where source.vectorCount == positions.count {
-                    sources.append(Self.copy(of: source, semantic))
-                    copied.append("\(semantic.rawValue) \(source.componentsPerVector)x\(source.bytesPerComponent)\(source.usesFloatComponents ? "f" : "i")")
-                }
-            }
+            // The scan's own sources, all of them as loaded (points, normals, picture coordinates, whatever it has):
+            // only the triangle lists change. Build 1314's log showed a rebuilt set with no picture coordinates.
+            let sources = geometry.sources
+            let described = sources.map { "\($0.semantic.rawValue.replacingOccurrences(of: "kGeometrySourceSemantic", with: "")) \($0.vectorCount)x\($0.componentsPerVector)x\($0.bytesPerComponent)" }
             let picture = geometry.materials.first.map { String(describing: type(of: $0.diffuse.contents ?? "none")) } ?? "no material"
-            Diagnostics.log("Trim piece: \(positions.count) points, \(copied.joined(separator: ", ")), \(geometry.materials.count) materials, picture \(picture)")
+            Diagnostics.log("Trim piece: \(described.joined(separator: ", ")); \(geometry.materials.count) materials, picture \(picture), mapping \(geometry.materials.first?.diffuse.mappingChannel ?? -1)")
             for material in geometry.materials {
                 lighting.append((material, material.lightingModel))
                 material.lightingModel = .constant
@@ -108,14 +102,6 @@ final class ScanTrimmer: ObservableObject {
         if cameraNode.parent == nil { scene.rootNode.addChildNode(cameraNode) }
         view?.pointOfView = cameraNode
         view?.defaultCameraController.target = SCNVector3(middle.x, middle.y, middle.z)
-    }
-
-    /// A new source holding the same bytes, laid out the same way.
-    private static func copy(of source: SCNGeometrySource, _ semantic: SCNGeometrySource.Semantic) -> SCNGeometrySource {
-        SCNGeometrySource(
-            data: Data(source.data), semantic: semantic, vectorCount: source.vectorCount,
-            usesFloatComponents: source.usesFloatComponents, componentsPerVector: source.componentsPerVector,
-            bytesPerComponent: source.bytesPerComponent, dataOffset: source.dataOffset, dataStride: source.dataStride)
     }
 
     private func count() {
