@@ -10,6 +10,8 @@ final class ScanTrimmer: ObservableObject {
     /// One piece of the model: its points, and for each of its materials the triangles still there.
     private struct Piece {
         let node: SCNNode
+        /// Made afresh from the scan's numbers (points, normals, picture coordinates): the loaded model's own sources,
+        /// used again in a new geometry, left the screen black on Phil's phone (build 1312).
         let sources: [SCNGeometrySource]
         let materials: [SCNMaterial]
         let positions: [SIMD3<Float>]
@@ -21,6 +23,9 @@ final class ScanTrimmer: ObservableObject {
     private var pieces: [Piece] = []
     private var history: [[[[UInt32]]]] = []
     private var original: [[[UInt32]]] = []
+    /// How each material was lit as scanned: shown unlit here, put back for saving.
+    private var lighting: [(material: SCNMaterial, model: SCNMaterial.LightingModel)] = []
+    private let cameraNode = SCNNode()
     @Published private(set) var canUndo = false
     @Published private(set) var changed = false
     @Published private(set) var triangles = 0
@@ -49,7 +54,20 @@ final class ScanTrimmer: ObservableObject {
                 unreadable = true
                 return
             }
-            found.append(Piece(node: node, sources: geometry.sources, materials: geometry.materials, positions: positions, elements: elements))
+            var sources = [SCNGeometrySource(vertices: positions.map { SCNVector3($0.x, $0.y, $0.z) })]
+            if let normals = Self.vectors(of: geometry, .normal, parts: 3), normals.count == positions.count * 3 {
+                sources.append(SCNGeometrySource(normals: (0..<positions.count).map { SCNVector3(normals[$0 * 3], normals[$0 * 3 + 1], normals[$0 * 3 + 2]) }))
+            }
+            if let coordinates = Self.vectors(of: geometry, .texcoord, parts: 2), coordinates.count == positions.count * 2 {
+                sources.append(SCNGeometrySource(textureCoordinates: (0..<positions.count).map { CGPoint(x: CGFloat(coordinates[$0 * 2]), y: CGFloat(coordinates[$0 * 2 + 1])) }))
+            }
+            for material in geometry.materials {
+                lighting.append((material, material.lightingModel))
+                material.lightingModel = .constant
+                material.isDoubleSided = true
+            }
+            let piece = Piece(node: node, sources: sources, materials: geometry.materials, positions: positions, elements: elements)
+            found.append(piece)
         }
         guard !found.isEmpty, !unreadable else {
             failed = "This scan is in a form that can't be trimmed here."
@@ -59,8 +77,56 @@ final class ScanTrimmer: ObservableObject {
         pieces = found
         original = found.map(\.elements)
         count()
+        // The same numbers shown from the start, so the first loop changes nothing but the triangles.
+        rebuild()
+        placeCamera()
         ready = true
         Diagnostics.log("Trim opened: \(url.lastPathComponent), \(found.count) pieces, \(triangles) triangles")
+    }
+
+    /// Reset's own camera, looking at the whole model from the front and a little above.
+    private func placeCamera() {
+        var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude), high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+        for piece in pieces {
+            let matrix = piece.node.simdWorldTransform
+            // Every 20th point is plenty for a box round the model.
+            for index in stride(from: 0, to: piece.positions.count, by: 20) {
+                let p = (matrix * SIMD4(piece.positions[index], 1)).xyz
+                low = simd_min(low, p)
+                high = simd_max(high, p)
+            }
+        }
+        guard low.x <= high.x else { return }
+        let middle = (low + high) / 2
+        let reach = max(simd_length(high - low), 0.1)
+        let camera = SCNCamera()
+        camera.zNear = Double(reach) * 0.01
+        camera.zFar = Double(reach) * 20
+        camera.fieldOfView = 50
+        cameraNode.camera = camera
+        cameraNode.simdPosition = middle + SIMD3(0, reach * 0.35, reach * 1.3)
+        cameraNode.simdLook(at: middle)
+        if cameraNode.parent == nil { scene.rootNode.addChildNode(cameraNode) }
+        view?.pointOfView = cameraNode
+        view?.defaultCameraController.target = SCNVector3(middle.x, middle.y, middle.z)
+    }
+
+    /// Any float list of a geometry (normals, picture coordinates), flattened.
+    private static func vectors(of geometry: SCNGeometry, _ semantic: SCNGeometrySource.Semantic, parts: Int) -> [Float]? {
+        guard let source = geometry.sources(for: semantic).first, source.usesFloatComponents,
+            source.bytesPerComponent == 4, source.componentsPerVector >= parts
+        else { return nil }
+        let stride = source.dataStride, offset = source.dataOffset, count = source.vectorCount
+        let data = source.data
+        guard stride > 0, count > 0, data.count >= offset + (count - 1) * stride + parts * 4 else { return nil }
+        var out: [Float] = []
+        out.reserveCapacity(count * parts)
+        data.withUnsafeBytes { raw in
+            for i in 0..<count {
+                for part in 0..<parts { out.append(raw.loadUnaligned(fromByteOffset: offset + i * stride + part * 4, as: Float.self)) }
+            }
+        }
+        return out
     }
 
     private func count() {
@@ -148,6 +214,11 @@ final class ScanTrimmer: ObservableObject {
         Diagnostics.log("Trim: \(keep ? "kept" : "erased") a loop, \(removed) triangles gone, \(triangles) left")
     }
 
+    /// The view exists (it can come after the model is loaded): it looks through Reset's camera.
+    func viewReady() {
+        if cameraNode.camera != nil { view?.pointOfView = cameraNode }
+    }
+
     func undo() {
         guard let last = history.popLast() else { return }
         for index in pieces.indices { pieces[index].elements = last[index] }
@@ -180,6 +251,7 @@ final class ScanTrimmer: ObservableObject {
         count()
         canUndo = !history.isEmpty
         changed = pieces.map(\.elements) != original
+        if view?.pointOfView !== cameraNode, cameraNode.camera != nil { view?.pointOfView = cameraNode }
     }
 
     /// Writes the trimmed model over the scan's file, standing on its own middle again. The first, untrimmed model is
@@ -202,11 +274,22 @@ final class ScanTrimmer: ObservableObject {
         let shift = SIMD3((low.x + high.x) / 2, low.y, (low.z + high.z) / 2)
         let lightNode = scene.rootNode.childNode(withName: "trim-light", recursively: false)
         lightNode?.removeFromParentNode()
+        cameraNode.removeFromParentNode()
+        for item in lighting {
+            item.material.lightingModel = item.model
+            item.material.isDoubleSided = false
+        }
         let tops = scene.rootNode.childNodes
         for node in tops { node.simdPosition -= shift }
         defer {
             for node in tops { node.simdPosition += shift }
             if let lightNode { scene.rootNode.addChildNode(lightNode) }
+            scene.rootNode.addChildNode(cameraNode)
+            view?.pointOfView = cameraNode
+            for item in lighting {
+                item.material.lightingModel = .constant
+                item.material.isDoubleSided = true
+            }
         }
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("trim-\(UUID().uuidString).usdz")
         guard scene.write(to: temporary, options: nil, delegate: nil, progressHandler: nil) else {
@@ -239,6 +322,7 @@ struct TrimSceneView: UIViewRepresentable {
         view.autoenablesDefaultLighting = false
         view.antialiasingMode = .multisampling2X
         trimmer.view = view
+        trimmer.viewReady()
         return view
     }
 

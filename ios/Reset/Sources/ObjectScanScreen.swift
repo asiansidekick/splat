@@ -229,7 +229,9 @@ enum FirstPicture {
         if let hit = cache[folder.url] { return hit }
         let files = (try? FileManager.default.contentsOfDirectory(at: folder.images, includingPropertiesForKeys: nil)) ?? []
         guard let first = files.filter({ ["heic", "jpg"].contains($0.pathExtension.lowercased()) }).sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).first,
-              let image = UIImage(contentsOfFile: first.path)?.preparingThumbnail(of: CGSize(width: 160, height: 160)) else { return nil }
+              var image = UIImage(contentsOfFile: first.path)?.preparingThumbnail(of: CGSize(width: 160, height: 160)) else { return nil }
+        // Reset's own pictures are saved as the camera sees them, on their side: stood up here.
+        if first.pathExtension.lowercased() == "jpg", let cg = image.cgImage { image = UIImage(cgImage: cg, scale: 1, orientation: .right) }
         cache[folder.url] = image
         return image
     }
@@ -320,27 +322,33 @@ struct LibraryView: View {
         NavigationStack {
             List {
                 ForEach(model.library) { folder in
-                    HStack(spacing: 12) {
-                        LibraryThumb(folder: folder)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(folder.name).font(.subheadline.weight(.semibold))
-                            Text(folder.hasModel ? "Model ready · \(folder.imageCount) pictures" : folder.hasFull ? "Built, not cropped yet" : "\(folder.imageCount) pictures, no model yet")
-                                .font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 12) {
+                            LibraryThumb(folder: folder)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(folder.name).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
+                                Text(folder.hasModel ? "Model ready · \(folder.imageCount) pictures" : folder.hasFull ? "Built, not cropped yet" : "\(folder.imageCount) pictures, no model yet")
+                                    .font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
+                            }
+                            Spacer(minLength: 0)
                         }
-                        Spacer()
-                        if folder.hasFull, folder.cameras == nil {
-                            Button { dismiss(); model.openCrop(folder) } label: { Image(systemName: "crop") }
-                                .buttonStyle(.bordered)
+                        // The buttons have a row to themselves, so no word is ever squeezed (Phil, 2026-11-17).
+                        HStack(spacing: 8) {
+                            if folder.hasModel {
+                                Button("Place") { dismiss(); place(folder.model) }
+                                Button("Trim") { dismiss(); trim(folder) }
+                                Button("View") { dismiss(); preview = folder.model }
+                                ShareLink(item: folder.model) { Image(systemName: "square.and.arrow.up") }
+                            } else if !folder.hasFull && folder.imageCount >= 10 {
+                                Button("Build") { dismiss(); model.build(folder) }
+                            }
+                            if folder.hasFull, folder.cameras == nil {
+                                Button("Crop") { dismiss(); model.openCrop(folder) }
+                            }
                         }
-                        if folder.hasModel {
-                            Button("Place") { dismiss(); place(folder.model) }.buttonStyle(.bordered)
-                            Button { dismiss(); trim(folder) } label: { Image(systemName: "scissors") }.buttonStyle(.bordered)
-                            Button { dismiss(); preview = folder.model } label: { Image(systemName: "eye") }.buttonStyle(.bordered)
-                            ShareLink(item: folder.model) { Image(systemName: "square.and.arrow.up") }
-                                .buttonStyle(.bordered)
-                        } else if !folder.hasFull && folder.imageCount >= 10 {
-                            Button("Build") { dismiss(); model.build(folder) }.buttonStyle(.bordered)
-                        }
+                        .buttonStyle(.bordered)
+                        .lineLimit(1)
+                        .fixedSize()
                     }
                     .swipeActions {
                         Button("Delete", role: .destructive) { model.delete(folder) }
