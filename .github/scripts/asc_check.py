@@ -29,21 +29,36 @@ def token():
 
 
 def call(method, path, body=None):
-    request = urllib.request.Request(
-        API + path,
-        method=method,
-        data=None if body is None else json.dumps(body).encode(),
-        headers={"Authorization": "Bearer " + token(), "Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode(errors="replace")
-        print(f"::error::App Store Connect said {error.code} for {method} {path}: {detail}")
-        if error.code == 401:
-            print("::error::Check the ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 secrets.")
-        sys.exit(1)
+    # Apple's service sometimes answers 5xx for a while (17:00-19:00 UTC on 2026-11-17 it did for hours). Reading is safe
+    # to repeat, so a GET waits and tries again; a POST (which creates something) is tried once.
+    attempts = 6 if method == "GET" else 1
+    for attempt in range(1, attempts + 1):
+        request = urllib.request.Request(
+            API + path,
+            method=method,
+            data=None if body is None else json.dumps(body).encode(),
+            headers={"Authorization": "Bearer " + token(), "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")
+            if error.code >= 500 and attempt < attempts:
+                print(f"App Store Connect said {error.code} for {method} {path} (try {attempt} of {attempts}); waiting to try again.")
+                time.sleep(20 * attempt)
+                continue
+            print(f"::error::App Store Connect said {error.code} for {method} {path}: {detail}")
+            if error.code == 401:
+                print("::error::Check the ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_P8 secrets.")
+            sys.exit(1)
+        except (urllib.error.URLError, TimeoutError) as error:
+            if attempt < attempts:
+                print(f"No answer from App Store Connect for {method} {path} ({error}); waiting to try again.")
+                time.sleep(20 * attempt)
+                continue
+            print(f"::error::No answer from App Store Connect for {method} {path}: {error}")
+            sys.exit(1)
 
 
 def main():
