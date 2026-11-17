@@ -12,6 +12,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     @Published var selectedModel: UUID? {
         didSet {
             updateSize()
+            updateTilted()
             if selectedModel != oldValue {
                 stopCarrying()
                 cancelPin()
@@ -84,6 +85,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     enum CutoutJob: String, CaseIterable { case move = "Move", turn = "Turn", size = "Size", tilt = "Tilt", lift = "Lift" }
     @Published var cutoutJob: CutoutJob = .move
     @Published private(set) var carrying = false
+    /// The selected 3D model has been tipped or leant (not just turned), so Upright is offered.
+    @Published private(set) var selectedTilted = false
     private var carryTimer: Timer?
     private var carryDistance: Float = 1.5
     private var carried: UUID?
@@ -681,6 +684,11 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 refreshDimensions(id)
             }
         case .tilt:
+            // A 3D model (not a flat cut-out) is tipped and leant as a whole, about its middle.
+            if cutoutPackages[id] == nil {
+                tipModel(node, id: id, by: moved)
+                break
+            }
             guard var package = cutoutPackages[id], let plane = cutouts[id]?.plane, let model = models.first(where: { $0.id == id }) else { return }
             package.tilt = min(max(package.tilt - Float(moved.y) * 0.3, -80), 80)
             package.skew = min(max(package.skew + Float(moved.x) * 0.2, -60), 60)
@@ -775,6 +783,50 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         guard let node = modelNodes[id], let index = models.firstIndex(where: { $0.id == id }) else { return }
         models[index].transform = flatten(node.simdTransform)
         models[index].moved = Date()
+        if id == selectedModel { updateTilted() }
+    }
+
+    /// Drag down tips the top toward you, drag sideways leans it that way: turns about the model's own middle, on
+    /// the horizontal lines across and along your view (Phil, 2026-11-17: rotate any object).
+    private func tipModel(_ node: SCNNode, id: UUID, by moved: CGPoint) {
+        guard let eye = self.eye else { return }
+        var right = eye.columns.0.xyz
+        right.y = 0
+        var along = -eye.columns.2.xyz
+        along.y = 0
+        guard simd_length(right) > 0.05, simd_length(along) > 0.05 else { return }
+        right = simd_normalize(right)
+        along = simd_normalize(along)
+        let turn = simd_quatf(angle: Float(moved.y) * 0.008, axis: right) * simd_quatf(angle: Float(moved.x) * 0.008, axis: along)
+        let box = boxes[id]
+        let middle = ((box?.low ?? .zero) + (box?.high ?? .zero)) / 2
+        let before = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
+        node.simdWorldOrientation = simd_normalize(turn * node.simdWorldOrientation)
+        let after = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
+        node.simdWorldPosition += before - after
+        updateTilted()
+    }
+
+    /// Stands the selected model upright again, keeping the way it faces.
+    func makeUpright() {
+        guard let id = selectedModel, let node = modelNodes[id], cutoutPackages[id] == nil else { return }
+        let box = boxes[id]
+        let middle = ((box?.low ?? .zero) + (box?.high ?? .zero)) / 2
+        let before = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
+        let side = node.simdWorldOrientation.act(SIMD3<Float>(1, 0, 0))
+        node.simdWorldOrientation = simd_quatf(angle: atan2(-side.z, side.x), axis: SIMD3<Float>(0, 1, 0))
+        let after = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
+        node.simdWorldPosition += before - after
+        Haptics.success()
+        commit(id)
+    }
+
+    private func updateTilted() {
+        var tilted = false
+        if let id = selectedModel, cutoutPackages[id] == nil, let node = modelNodes[id] {
+            tilted = node.simdWorldOrientation.act(SIMD3<Float>(0, 1, 0)).y < 0.9995
+        }
+        if selectedTilted != tilted { selectedTilted = tilted }
     }
 
     /// Width × depth × height of the selected model as it stands, and its scale.
@@ -1120,8 +1172,8 @@ struct ModelOverlay: View {
                 let cutout = placer.selectedIsCutout
                 HStack(alignment: .bottom, spacing: 0) {
                     VStack(spacing: 0) {
-                        // Phil, 2026-11-11: Lift for cut-outs too (only a flat cut-out tips, so Tilt stays theirs alone).
-                        ForEach(ModelPlacer.CutoutJob.allCases.filter { cutout || $0 != .tilt }, id: \.self) { job in
+                        // Phil, 2026-11-11: Lift for cut-outs too. 2026-11-17: Tilt for every model ("rotate any object"): tip and lean.
+                        ForEach(ModelPlacer.CutoutJob.allCases, id: \.self) { job in
                             CutoutTool(word: job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
                         }
                         // Carry walks it along with the live camera, so not over a saved frame (Review).
@@ -1160,6 +1212,7 @@ struct ModelOverlay: View {
                         } else {
                             if showsFloor { CutoutTool(word: "Floor", symbol: "arrow.down.to.line") { placer.dropToFloor() } }
                             CutoutTool(word: "True size", symbol: "1.square") { placer.resetSelectedModelSize() }
+                            if placer.selectedTilted { CutoutTool(word: "Upright", symbol: "arrow.up.to.line", tint: Theme.accent) { placer.makeUpright() } }
                         }
                         CutoutTool(word: placer.showDimensions ? "Hide sizes" : "Sizes", symbol: "ruler") { placer.showDimensions.toggle() }
                         CutoutTool(word: "Delete", symbol: "trash", tint: .red) { placer.deleteSelectedModel() }
@@ -1208,7 +1261,7 @@ private struct MoveHint: View {
         case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further")
         case .turn: return ("arrow.left.and.right", "turn")
         case .size: return ("arrow.up.and.down", "↑ bigger")
-        case .tilt: return ("arrow.up.and.down.and.arrow.left.and.right", "↕ tip  ↔ slant")
+        case .tilt: return ("arrow.up.and.down.and.arrow.left.and.right", "↕ tip  ↔ lean")
         case .lift: return ("arrow.up.and.down", "↑ higher")
         }
     }
