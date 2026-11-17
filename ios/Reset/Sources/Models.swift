@@ -447,6 +447,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     // really redraws, so the log says whether the phone's main thread is the bottleneck.
     private var meter: CADisplayLink?
     private var meterLast: CFTimeInterval = 0
+    /// Counts drags and holds on objects, so a hint can tell whether the person has tried anything yet.
+    @Published var touches = 0
     private var meterGaps: [Double] = []
 
     private func startMeter() {
@@ -483,6 +485,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let finger = gesture.location(in: view)
         switch gesture.state {
         case .began:
+            touches += 1
+            HintStore.learned("objectFirst"); HintStore.learned("objectIdle")
             guard selectionAllowed(), !isSuspended(), !carrying,
                   let touched = view.hitTest(finger, options: ReviewPick.options).lazy.compactMap({ self.modelID(of: $0.node) }).first,
                   let node = modelNodes[touched]
@@ -618,6 +622,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         // distance (about double or half for a third of the screen), eased so it glides instead of twitching.
         switch gesture.state {
         case .began:
+            touches += 1
             gesture.setTranslation(.zero, in: view)
             dragTarget = node.simdWorldPosition
             startMeter()
@@ -1371,6 +1376,7 @@ struct ModelOverlay: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
+                .overlay(alignment: .center) { ObjectNudge(placer: placer).offset(y: -110) }
                 .task(id: "\(placer.selectedModel?.uuidString ?? "")-\(placer.cutoutJob.rawValue)") {
                     withAnimation { showsCutoutHelp = true }
                     try? await Task.sleep(for: .seconds(4))

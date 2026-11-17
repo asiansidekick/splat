@@ -96,3 +96,38 @@ extension View {
         modifier(HoldHint(id: id, label: label, above: above, delay: delay))
     }
 }
+
+/// Teaches picking up an object (Phil, 2026-11-18): the first time an object is selected a finger shows
+/// "hold, then drag", and later, if an object stays selected for a few seconds with no drag or hold,
+/// the same finger shows again. Three showings at most each, and never again once a hold is used.
+struct ObjectNudge: View {
+    @ObservedObject var placer: ModelPlacer
+    @State private var label: String?
+
+    var body: some View {
+        ZStack {
+            if let label {
+                HoldHintBubble(label: label)
+                    .fixedSize()
+                    .transition(.opacity)
+            }
+        }
+        .allowsHitTesting(false)
+        .task(id: placer.selectedModel) {
+            label = nil
+            guard placer.selectedModel != nil else { return }
+            let first = HintStore.shouldShow("objectFirst")
+            guard first || HintStore.shouldShow("objectIdle") else { return }
+            let before = placer.touches
+            try? await Task.sleep(for: .seconds(first ? 1.5 : 6))
+            guard !Task.isCancelled, placer.selectedModel != nil, placer.touches == before else { return }
+            HintStore.shown(first ? "objectFirst" : "objectIdle")
+            withAnimation { label = "Hold, then drag to lift" }
+            try? await Task.sleep(for: .seconds(5))
+            withAnimation { label = nil }
+        }
+        .onChange(of: placer.touches) { _ in
+            if label != nil { withAnimation { label = nil } }
+        }
+    }
+}
