@@ -403,7 +403,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         pan.maximumNumberOfTouches = 1
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         let rotate = UIRotationGestureRecognizer(target: self, action: #selector(handleRotate(_:)))
-        // Hold a finger on an object and it comes with you as you walk; let go and it stays (Phil, 2026-11-18).
+        // Hold a finger on an object, then drag up or down to raise or lower it (Phil, 2026-11-18: "hold to lift").
         let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleHold(_:)))
         hold.minimumPressDuration = 0.45
         hold.allowableMovement = 14
@@ -443,17 +443,31 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         if gesture.state == .ended { savePose(package, id: id, file: model.file, plane: plane) }
     }
 
+    /// While a hold is lifting: the model, and where the finger last was.
+    private var holdLift: (id: UUID, last: CGPoint)?
+
     @objc private func handleHold(_ gesture: UILongPressGestureRecognizer) {
+        guard let view = gesture.view as? SCNView else { return }
+        let finger = gesture.location(in: view)
         switch gesture.state {
         case .began:
-            guard selectionAllowed(), !isSuspended(), let view = gesture.view as? SCNView,
-                  let touched = view.hitTest(gesture.location(in: view), options: ReviewPick.options).lazy.compactMap({ self.modelID(of: $0.node) }).first
+            guard selectionAllowed(), !isSuspended(), !carrying,
+                  let touched = view.hitTest(finger, options: ReviewPick.options).lazy.compactMap({ self.modelID(of: $0.node) }).first
             else { return }
             selectedModel = touched
-            startCarrying()
-            if carrying { Haptics.firm() }
+            cancelPin()
+            pinned.remove(touched)
+            holdLift = (touched, finger)
+            Haptics.firm()
+        case .changed:
+            guard let lift = holdLift, let node = modelNodes[lift.id] else { return }
+            let camera = eye?.columns.3.xyz ?? node.simdWorldPosition
+            // The same step as the Lift job: about a millimetre and a half per point for each metre away.
+            node.simdWorldPosition.y -= Float(finger.y - lift.last.y) * 0.0016 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
+            holdLift = (lift.id, finger)
         case .ended, .cancelled, .failed:
-            stopCarrying()
+            if let lift = holdLift { commit(lift.id) }
+            holdLift = nil
         default:
             break
         }
@@ -470,7 +484,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// Picks up the model under the finger (or the only one) when none is selected.
 
     @objc private func handlePan(_ gesture: UIPanGestureRecognizer) {
-        guard !isSuspended(), let view = gesture.view as? SCNView else { return }
+        guard !isSuspended(), holdLift == nil, let view = gesture.view as? SCNView else { return }
         let location = gesture.location(in: view)
         if gesture.state == .began {
             let touched = view.hitTest(location, options: ReviewPick.options).lazy.compactMap { self.modelID(of: $0.node) }.first
@@ -738,6 +752,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         carried = id
         cancelPin()
         pinned.remove(id)
+        Haptics.tap()
         Diagnostics.log(String(format: "Carry started at %.1f m", carryDistance))
         carryTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.carryStep() }
@@ -1224,6 +1239,13 @@ struct ModelOverlay: View {
                         ForEach(ModelPlacer.CutoutJob.allCases, id: \.self) { job in
                             CutoutTool(word: job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
                         }
+                        // Carry walks it along with the live camera, so not over a saved frame (Review).
+                        if showsFloor {
+                            CutoutTool(word: placer.carrying ? "Carrying" : "Carry", symbol: "figure.walk", on: placer.carrying) {}
+                                .simultaneousGesture(DragGesture(minimumDistance: 0)
+                                    .onChanged { _ in placer.startCarrying() }
+                                    .onEnded { _ in placer.stopCarrying() })
+                        }
                         if placer.selectedPoseSpec != nil {
                             CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
                         }
@@ -1294,7 +1316,7 @@ private struct MoveHint: View {
         }
         if carrying { return ("figure.walk", "walk, let go to drop") }
         switch job {
-        case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further · hold to carry")
+        case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further · hold: lift")
         case .turn: return ("arrow.left.and.right", "turn")
         case .size: return ("arrow.up.and.down", "↑ bigger")
         case .tilt: return ("arrow.up.and.down.and.arrow.left.and.right", "↕ tip  ↔ lean")
