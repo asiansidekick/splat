@@ -1082,6 +1082,7 @@ struct BackgroundRow: View {
 struct EditTools: View {
     @ObservedObject var placer: ModelPlacer
     @ObservedObject var measurer: Measurer
+    let gallery: () -> Void
     let model: () -> Void
     let cutout: () -> Void
     let example: () -> Void
@@ -1091,6 +1092,7 @@ struct EditTools: View {
             HStack(alignment: .center) {
                 if !measurer.active {
                     VStack(spacing: 20) {
+                        tool("Gallery", "square.grid.2x2", gallery)
                         tool("3D model", "cube", model)
                         tool("Cut-out", "figure.stand", cutout)
                         tool("Example", "figure.stand.dress", example)
@@ -1887,6 +1889,7 @@ struct CaptureStage: View {
     @State private var choosingModel = false
     @State private var makingCutout = false
     @State private var choosingExample = false
+    @State private var choosingAsset = false
     @State private var justSaved = false
     /// The "get its bearings" hint shows for a few seconds, then gives way to the usual line.
     @State private var bearingsHintDone = false
@@ -2094,6 +2097,7 @@ struct CaptureStage: View {
         // Without the controls, a volume button takes a snapshot too.
         .modifier(CaptureButtonAction(action: volumeShutter))
         .confirmationDialog("Add to the room", isPresented: $choosingModel) {
+            Button("Gallery: scans, models, cut-outs") { choosingAsset = true }
             Button("3D model (USDZ, OBJ, STL or FBX)") { importingModels = true }
             Button("Cut-out from photos") { makingCutout = true }
             Button("Examples: people, set pieces") { choosingExample = true }
@@ -2106,8 +2110,9 @@ struct CaptureStage: View {
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: recorder.placer).themed() }
         .sheet(isPresented: $choosingExample) { ExamplesSheet(placer: recorder.placer).themed() }
+        .sheet(isPresented: $choosingAsset) { AssetGallery(placer: recorder.placer).themed() }
         .fileImporter(isPresented: $importingModels, allowedContentTypes: ModelImport.pickerTypes, allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { recorder.placer.add(from: urls) }
+            if case .success(let urls) = result { recorder.placer.add(from: urls, keep: true) }
         }
         .overlay { FreeScanOverlay(scanner: freeScanner) { recorder.placer.add(from: [$0]) } }
         .onAppear {
@@ -2426,6 +2431,7 @@ struct ResetStage: View {
     @State private var importingModel = false
     @State private var makingCutout = false
     @State private var choosingExample = false
+    @State private var choosingAsset = false
     @State private var notingTake: Take?
     @State private var holder = CameraViewHolder()
     @State private var tapCatcher = WindowTapCatcher()
@@ -2489,8 +2495,9 @@ struct ResetStage: View {
         .sheet(isPresented: $showingAdd) { MoreSheet(items: addItems).themed() }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: restorer.placer).themed() }
         .sheet(isPresented: $choosingExample) { ExamplesSheet(placer: restorer.placer).themed() }
+        .sheet(isPresented: $choosingAsset) { AssetGallery(placer: restorer.placer).themed() }
         .fileImporter(isPresented: $importingModel, allowedContentTypes: ModelImport.pickerTypes, allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { restorer.placer.add(from: urls) }
+            if case .success(let urls) = result { restorer.placer.add(from: urls, keep: true) }
         }
         .onAppear {
             tapCatcher.install()
@@ -2625,6 +2632,7 @@ struct ResetStage: View {
     /// What + offers in simple touch mode.
     private var addItems: [MoreSheet.Item] {
         [
+            .init("Gallery", "square.grid.2x2") { placeIfNeeded(); choosingAsset = true },
             .init("3D model", "cube") { placeIfNeeded(); importingModel = true },
             .init("Cut-out", "figure.stand") { placeIfNeeded(); makingCutout = true },
             .init("Example", "figure.stand.dress") { placeIfNeeded(); choosingExample = true },
@@ -2849,6 +2857,7 @@ struct ResetStage: View {
                 if section == .edit, !simpleTouch, !restorer.paused {
                     EditTools(
                         placer: restorer.placer, measurer: restorer.measurer,
+                        gallery: { placeIfNeeded(); choosingAsset = true },
                         model: { placeIfNeeded(); importingModel = true },
                         cutout: { placeIfNeeded(); makingCutout = true },
                         example: { placeIfNeeded(); choosingExample = true })

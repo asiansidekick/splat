@@ -116,7 +116,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     /// Copies the USDZ files in and places them side by side where the camera is pointing.
-    func add(from sources: [URL]) {
+    func add(from sources: [URL], keep: Bool = false) {
         guard let frame = session.currentFrame else {
             modelError = "Point the camera at the set first, then add the models."
             return
@@ -124,7 +124,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         var right = frame.camera.transform.columns.0.xyz
         right.y = 0
         right = simd_length(right) > 0.01 ? simd_normalize(right) : SIMD3(1, 0, 0)
-        add(from: sources, at: placementTransform(frame), right: right)
+        add(from: sources, at: placementTransform(frame), right: right, keep: keep)
     }
 
     /// Adds models facing the camera (the examples): at `base` when given (Review), else where the camera points.
@@ -145,7 +145,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     /// Places the models side by side from `base`, spread along `right` (also used with a saved frame, with no live camera).
-    func add(from sources: [URL], at base: simd_float4x4, right: SIMD3<Float>) {
+    /// `keep` is for files the crew picked themselves: a copy goes into the gallery (ModelLibrary).
+    func add(from sources: [URL], at base: simd_float4x4, right: SIMD3<Float>, keep: Bool = false) {
         var added: UUID?
         var failed: [String] = []
         let sources = ModelImport.gather(sources)
@@ -158,14 +159,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             let offset = (Float(index) - Float(sources.count - 1) / 2) * 0.4
             var transform = base
             transform.columns.3 += SIMD4(right * offset, 0)
-            if let id = add(source, at: transform) { added = id } else { failed.append(source.lastPathComponent) }
+            if let id = add(source, at: transform, keep: keep) { added = id } else { failed.append(source.lastPathComponent) }
         }
         if !failed.isEmpty { modelError = "Could not open \(failed.joined(separator: ", ")) as a 3D model." }
         if let added { selectedModel = added }
         Diagnostics.log("Models added: \(sources.count - failed.count), failed \(failed.count)")
     }
 
-    private func add(_ source: URL, at transform: simd_float4x4) -> UUID? {
+    private func add(_ source: URL, at transform: simd_float4x4, keep: Bool) -> UUID? {
         let scoped = source.startAccessingSecurityScopedResource()
         defer { if scoped { source.stopAccessingSecurityScopedResource() } }
         let id = UUID()
@@ -191,6 +192,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             try? FileManager.default.removeItem(at: FBXImport.texturesFolder(for: destination))
             return nil
         }
+        if keep, !fbx { ModelLibrary.keep(destination, name: model.name) }
         models.append(model)
         return id
     }
