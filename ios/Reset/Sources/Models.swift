@@ -1139,6 +1139,33 @@ struct ModelOverlay: View {
         }
     }
 
+    /// The tools for the model itself: bring it here, pin its distance, stand it, size it.
+    @ViewBuilder private func modelTools(cutout: Bool) -> some View {
+        CutoutTool(word: "Place here", symbol: "scope") { placer.bringToView() }
+        // Sets its true distance from two views, so it stays put as the camera moves. Live camera only.
+        if showsFloor {
+            let isPinned = placer.selectedModel.map { placer.pinned.contains($0) } ?? false
+            CutoutTool(word: isPinned ? "Pinned" : "Pin", symbol: "pin", tint: isPinned ? .white : Theme.accent, on: placer.pinStep != nil) { placer.startPin() }
+        }
+        if cutout {
+            CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }
+        } else {
+            if showsFloor { CutoutTool(word: "Floor", symbol: "arrow.down.to.line") { placer.dropToFloor() } }
+            CutoutTool(word: "True size", symbol: "1.square") { placer.resetSelectedModelSize() }
+            if placer.selectedTilted { CutoutTool(word: "Upright", symbol: "arrow.up.to.line", tint: Theme.accent) { placer.makeUpright() } }
+        }
+    }
+
+    /// The tools for the list of models: add another, show sizes, delete, finish.
+    @ViewBuilder private func listTools(onAdd: (() -> Void)?) -> some View {
+        if let onAdd {
+            CutoutTool(word: "Add", symbol: "plus", tint: Theme.accent, action: onAdd)
+        }
+        CutoutTool(word: placer.showDimensions ? "Hide sizes" : "Sizes", symbol: "ruler") { placer.showDimensions.toggle() }
+        CutoutTool(word: "Delete", symbol: "trash", tint: .red) { placer.deleteSelectedModel() }
+        CutoutTool(word: "Done", symbol: "checkmark") { placer.selectedModel = nil }
+    }
+
     var body: some View {
         VStack(spacing: 6) {
             if let copier = placer.poseCopier {
@@ -1197,29 +1224,24 @@ struct ModelOverlay: View {
                             .transition(.opacity)
                     }
                     Spacer(minLength: 0)
-                    VStack(spacing: 0) {
-                        if let onAdd, verticalSize == .compact {
-                            CutoutTool(word: "Add", symbol: "plus", tint: Theme.accent, action: onAdd)
+                    // Phil, 2026-11-17: eight tools in one column ran up into the top row. On its side they stand in two
+                    // short columns instead (the first column's tools about the model, the second's about the list).
+                    if verticalSize == .compact {
+                        HStack(alignment: .bottom, spacing: 0) {
+                            VStack(spacing: 0) { modelTools(cutout: cutout) }
+                                .fixedSize(horizontal: true, vertical: false)
+                            VStack(spacing: 0) { listTools(onAdd: onAdd) }
+                                .fixedSize(horizontal: true, vertical: false)
                         }
-                        CutoutTool(word: "Place here", symbol: "scope") { placer.bringToView() }
-                        // Sets its true distance from two views, so it stays put as the camera moves. Live camera only.
-                        if showsFloor {
-                            let isPinned = placer.selectedModel.map { placer.pinned.contains($0) } ?? false
-                            CutoutTool(word: isPinned ? "Pinned" : "Pin", symbol: "pin", tint: isPinned ? .white : Theme.accent, on: placer.pinStep != nil) { placer.startPin() }
+                        .layoutPriority(1)
+                    } else {
+                        VStack(spacing: 0) {
+                            modelTools(cutout: cutout)
+                            listTools(onAdd: nil)
                         }
-                        if cutout {
-                            CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }
-                        } else {
-                            if showsFloor { CutoutTool(word: "Floor", symbol: "arrow.down.to.line") { placer.dropToFloor() } }
-                            CutoutTool(word: "True size", symbol: "1.square") { placer.resetSelectedModelSize() }
-                            if placer.selectedTilted { CutoutTool(word: "Upright", symbol: "arrow.up.to.line", tint: Theme.accent) { placer.makeUpright() } }
-                        }
-                        CutoutTool(word: placer.showDimensions ? "Hide sizes" : "Sizes", symbol: "ruler") { placer.showDimensions.toggle() }
-                        CutoutTool(word: "Delete", symbol: "trash", tint: .red) { placer.deleteSelectedModel() }
-                        CutoutTool(word: "Done", symbol: "checkmark") { placer.selectedModel = nil }
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(1)
                     }
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(1)
                 }
                 .frame(maxWidth: .infinity)
                 .task(id: "\(placer.selectedModel?.uuidString ?? "")-\(placer.cutoutJob.rawValue)") {

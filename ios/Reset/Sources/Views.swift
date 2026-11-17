@@ -1919,6 +1919,10 @@ struct CaptureStage: View {
             // A bump when the take number moves on, so the change is noticed.
             .scaleEffect(justSaved ? 1.15 : 1, anchor: .leading)
             .animation(.spring(duration: 0.35, bounce: 0.5), value: justSaved)
+            // Phil, 2026-11-17: on its side GUIDE was hidden behind the model tools beside the shutter; it stands up here.
+            if verticalSize == .compact, mode == .walk, !recorder.capturing {
+                GuideWord(on: tileGuide) { toggleGuide() }
+            }
             Spacer()
             if Recorder.lidarAvailable {
                 TopPill(text: lidarWord ? "LiDAR" : "", systemImage: "dot.circle.viewfinder", highlighted: useLiDAR) {
@@ -2068,8 +2072,9 @@ struct CaptureStage: View {
                     }
                 } else if mode == .walk, !recorder.capturing {
                     // Phil, 2026-11-14: the tiling guide's switch on the camera screen, where the lenses stand in Manual scan.
-                    GuideWord(on: tileGuide) { toggleGuide() }
-                        .offset(x: verticalSize == .compact ? (leftHanded ? 64 : -64) : 0, y: verticalSize == .compact ? 0 : -66)
+                    if verticalSize != .compact {
+                        GuideWord(on: tileGuide) { toggleGuide() }.offset(y: -66)
+                    }
                 }
             }
             .disabled(recorder.saving || lensBusy)
