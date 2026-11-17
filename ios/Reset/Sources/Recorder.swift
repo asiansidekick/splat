@@ -338,11 +338,17 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
             keyframeCount = 0
             clearTiles()
             tooFastNow = false
-            Diagnostics.log("Record saved: \(reference.keyframes.count) keyframes, \(blurredKept) kept while still moving fast")
+            Diagnostics.log("Record saved: \(reference.keyframes.count) keyframes, \(blurredKept) kept while still moving fast, \(Diagnostics.memory())")
             return reference
         } catch {
-            self.error = "Could not save the room map: \(error.localizedDescription). Move the phone slowly and tap the shutter again."
-            Diagnostics.log("Record save failed: \(error)")
+            // Short, and gone after a few seconds (Phil, 2026-11-18: a long warning stayed on the screen).
+            let message = "Not enough detail yet. Move slowly, then tap the shutter again."
+            self.error = message
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(6))
+                if self.error == message { self.error = nil }
+            }
+            Diagnostics.log("Record save failed: \(error), \(Diagnostics.memory())")
             return nil
         }
     }

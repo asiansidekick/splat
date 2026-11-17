@@ -12,7 +12,7 @@ struct ResetApp: App {
         Theme.installAppearance()
         NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main
-        ) { _ in Diagnostics.log("Memory warning") }
+        ) { _ in Diagnostics.log("Memory warning: \(Diagnostics.memory())") }
     }
 
     var body: some Scene {

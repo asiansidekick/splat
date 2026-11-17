@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import os
 
 /// A small on-device log of what the app did (sessions, tracking, saves, errors), so a test day's
 /// problems can be sent back from the app without a computer. Nothing leaves the device unless
@@ -32,6 +33,18 @@ enum Diagnostics {
             }
             trimIfNeeded()
         }
+    }
+
+    /// How much memory the app holds and how much iOS will still give it, for example "1450 MB held, 780 MB left". A run
+    /// that ends with no warning (iOS closing the app for memory) shows its last figure in the lines before the next Launch.
+    static func memory() -> String {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        let held = result == KERN_SUCCESS ? Int(info.phys_footprint / 1_000_000) : -1
+        return "\(held) MB held, \(os_proc_available_memory() / 1_000_000) MB left"
     }
 
     /// Keeps the newest half once the log passes the size limit.
