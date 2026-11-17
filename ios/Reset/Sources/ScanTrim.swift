@@ -1,3 +1,4 @@
+import ModelIO
 import SceneKit
 import SwiftUI
 import simd
@@ -42,16 +43,35 @@ final class ScanTrimmer: ObservableObject {
         // top of that doubled them to plain white, build 1313.)
         var found: [Piece] = []
         var unreadable = false
+        // Build 1317's log: the scan's picture coordinates (2176) outnumber its points (1872), a layout SceneKit shows
+        // but cannot rebuild from (the picture scrambled). ModelIO reads the file with one numbering for all three.
+        let unified = Self.unifiedMeshes(of: url)
+        var meshNumber = 0
         scene.rootNode.enumerateHierarchy { node, _ in
             guard let geometry = node.geometry else { return }
-            guard let positions = Self.positions(of: geometry), let elements = Self.triangles(of: geometry) else {
+            guard let ownPositions = Self.positions(of: geometry), let ownElements = Self.triangles(of: geometry) else {
                 unreadable = true
                 return
             }
-            // The scan's own sources, all of them as loaded (points, normals, picture coordinates, whatever it has):
-            // only the triangle lists change. Build 1314's log showed a rebuilt set with no picture coordinates.
-            let sources = geometry.sources
-            let described = sources.map { "\($0.semantic.rawValue.replacingOccurrences(of: "kGeometrySourceSemantic", with: "")) \($0.vectorCount)x\($0.componentsPerVector)x\($0.bytesPerComponent)" }
+            var sources = geometry.sources
+            var positions = ownPositions, elements = ownElements
+            if let unified, meshNumber < unified.count, unified[meshNumber].triangles == elements.reduce(0, { $0 + $1.count / 3 }) {
+                let mesh = unified[meshNumber]
+                sources = [SCNGeometrySource(vertices: mesh.positions.map { SCNVector3($0.x, $0.y, $0.z) })]
+                if mesh.normals.count == mesh.positions.count {
+                    sources.append(SCNGeometrySource(normals: mesh.normals.map { SCNVector3($0.x, $0.y, $0.z) }))
+                }
+                if mesh.uvs.count == mesh.positions.count {
+                    sources.append(SCNGeometrySource(textureCoordinates: mesh.uvs.map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) }))
+                }
+                positions = mesh.positions
+                elements = mesh.elements
+                Diagnostics.log("Trim piece (ModelIO): \(mesh.positions.count) points, \(mesh.normals.count) normals, \(mesh.uvs.count) picture coordinates, \(mesh.triangles) triangles")
+            } else {
+                Diagnostics.log("Trim piece: ModelIO gave \(unified.map { "\($0.count) meshes" } ?? "nothing"), mesh \(meshNumber); using the scan's own sources")
+            }
+            meshNumber += 1
+            let described = geometry.sources.map { "\($0.semantic.rawValue.replacingOccurrences(of: "kGeometrySourceSemantic", with: "")) \($0.vectorCount)x\($0.componentsPerVector)x\($0.bytesPerComponent)" }
             let picture = geometry.materials.first.map { String(describing: type(of: $0.diffuse.contents ?? "none")) } ?? "no material"
             Diagnostics.log("Trim piece: \(described.joined(separator: ", ")); \(geometry.materials.count) materials, picture \(picture), mapping \(geometry.materials.first?.diffuse.mappingChannel ?? -1)")
             for material in geometry.materials {
@@ -75,6 +95,59 @@ final class ScanTrimmer: ObservableObject {
         placeCamera()
         ready = true
         Diagnostics.log("Trim opened: \(url.lastPathComponent), \(found.count) pieces, \(triangles) triangles")
+    }
+
+    /// One mesh as ModelIO reads it: points, normals and picture coordinates all numbered the same way.
+    private struct UnifiedMesh {
+        var positions: [SIMD3<Float>]
+        var normals: [SIMD3<Float>]
+        var uvs: [SIMD2<Float>]
+        var elements: [[UInt32]]
+        var triangles: Int { elements.reduce(0) { $0 + $1.count / 3 } }
+    }
+
+    private static func unifiedMeshes(of url: URL) -> [UnifiedMesh]? {
+        let asset = MDLAsset(url: url)
+        let meshes = asset.childObjects(of: MDLMesh.self).compactMap { $0 as? MDLMesh }
+        guard !meshes.isEmpty else { return nil }
+        var out: [UnifiedMesh] = []
+        for mesh in meshes {
+            let count = mesh.vertexCount
+            guard count > 0, let position = mesh.vertexAttributeData(forAttributeNamed: MDLVertexAttributePosition, as: .float3) else { return nil }
+            func floats(_ data: MDLVertexAttributeData, _ parts: Int) -> [Float] {
+                var list: [Float] = []
+                list.reserveCapacity(count * parts)
+                for i in 0..<count {
+                    let base = data.dataStart + i * data.stride
+                    for part in 0..<parts { list.append(base.loadUnaligned(fromByteOffset: part * 4, as: Float.self)) }
+                }
+                return list
+            }
+            let p = floats(position, 3)
+            var normals: [SIMD3<Float>] = []
+            if let data = mesh.vertexAttributeData(forAttributeNamed: MDLVertexAttributeNormal, as: .float3) {
+                let n = floats(data, 3)
+                normals = (0..<count).map { SIMD3(n[$0 * 3], n[$0 * 3 + 1], n[$0 * 3 + 2]) }
+            }
+            var uvs: [SIMD2<Float>] = []
+            if let data = mesh.vertexAttributeData(forAttributeNamed: MDLVertexAttributeTextureCoordinate, as: .float2) {
+                let t = floats(data, 2)
+                uvs = (0..<count).map { SIMD2(t[$0 * 2], t[$0 * 2 + 1]) }
+            }
+            var elements: [[UInt32]] = []
+            for submesh in (mesh.submeshes as? [MDLSubmesh]) ?? [] {
+                guard submesh.geometryType == .triangles else { return nil }
+                let buffer = submesh.indexBuffer(asIndexType: .uInt32)
+                let map = buffer.map()
+                var list: [UInt32] = []
+                list.reserveCapacity(submesh.indexCount)
+                for i in 0..<submesh.indexCount { list.append(map.bytes.loadUnaligned(fromByteOffset: i * 4, as: UInt32.self)) }
+                guard !list.contains(where: { Int($0) >= count }) else { return nil }
+                elements.append(list)
+            }
+            out.append(UnifiedMesh(positions: (0..<count).map { SIMD3(p[$0 * 3], p[$0 * 3 + 1], p[$0 * 3 + 2]) }, normals: normals, uvs: uvs, elements: elements))
+        }
+        return out
     }
 
     /// Reset's own camera, looking at the whole model from the front and a little above.
