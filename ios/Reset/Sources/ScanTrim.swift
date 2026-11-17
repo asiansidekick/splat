@@ -313,6 +313,13 @@ final class ScanTrimmer: ObservableObject {
     }
 
     private func rebuild() {
+        // The view stays exactly where it was turned to: a cut changes the triangles, never the angle.
+        let eye = view?.pointOfView
+        let eyePlace = eye?.simdWorldTransform
+        defer {
+            if let eye, let eyePlace { eye.simdWorldTransform = eyePlace }
+            if view?.pointOfView == nil, cameraNode.camera != nil { view?.pointOfView = cameraNode }
+        }
         for piece in pieces {
             var elements: [SCNGeometryElement] = []
             var materials: [SCNMaterial] = []
@@ -331,7 +338,6 @@ final class ScanTrimmer: ObservableObject {
         count()
         canUndo = !history.isEmpty
         changed = pieces.map(\.elements) != original
-        if view?.pointOfView !== cameraNode, cameraNode.camera != nil { view?.pointOfView = cameraNode }
     }
 
     /// Writes the trimmed model over the scan's file, standing on its own middle again. The first, untrimmed model is
