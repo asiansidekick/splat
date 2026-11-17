@@ -443,6 +443,35 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         if gesture.state == .ended { savePose(package, id: id, file: model.file, plane: plane) }
     }
 
+    // MARK: Frame meter (Phil, 2026-11-18: "moving objects is a bit laggy"). While an object is dragged, how often the screen
+    // really redraws, so the log says whether the phone's main thread is the bottleneck.
+    private var meter: CADisplayLink?
+    private var meterLast: CFTimeInterval = 0
+    private var meterGaps: [Double] = []
+
+    private func startMeter() {
+        guard meter == nil else { return }
+        meterGaps = []
+        meterLast = 0
+        let link = CADisplayLink(target: self, selector: #selector(meterTick(_:)))
+        link.add(to: .main, forMode: .common)
+        meter = link
+    }
+
+    @objc private func meterTick(_ link: CADisplayLink) {
+        if meterLast > 0 { meterGaps.append((link.timestamp - meterLast) * 1000) }
+        meterLast = link.timestamp
+    }
+
+    private func stopMeter(_ what: String) {
+        meter?.invalidate()
+        meter = nil
+        guard meterGaps.count > 5 else { return }
+        let average = meterGaps.reduce(0, +) / Double(meterGaps.count)
+        let slow = meterGaps.filter { $0 > 25 }.count
+        Diagnostics.log(String(format: "Frames while %@: %d, average %.1f ms, worst %.0f ms, %d slower than 25 ms", what, meterGaps.count, average, meterGaps.max() ?? 0, slow))
+    }
+
     /// While a hold is lifting: the model, and where the finger last was.
     private var holdLift: (id: UUID, last: CGPoint)?
     /// The height the finger has asked for; the model eases to it.
@@ -464,6 +493,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             holdLift = (touched, finger)
             holdTarget = node.simdWorldPosition.y
             showHoldHint(in: view, at: finger)
+            startMeter()
             Haptics.firm()
         case .changed:
             guard let lift = holdLift, let node = modelNodes[lift.id] else { return }
@@ -490,6 +520,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             }
             holdLift = nil
             hideHoldHint()
+            stopMeter("lift")
         default:
             break
         }
@@ -589,6 +620,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         case .began:
             gesture.setTranslation(.zero, in: view)
             dragTarget = node.simdWorldPosition
+            startMeter()
         case .changed:
             let delta = gesture.translation(in: view)
             gesture.setTranslation(.zero, in: view)
@@ -612,6 +644,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         case .ended, .cancelled:
             if let target = dragTarget { node.simdWorldPosition = target }
             dragTarget = nil
+            stopMeter("drag")
             pinned.remove(id)
             commit(id)
         default:
