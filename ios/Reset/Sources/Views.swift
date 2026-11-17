@@ -977,6 +977,9 @@ enum Haptics {
     @MainActor static func tap() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
     @MainActor static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
     @MainActor static func warning() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+    /// A felt bump when an object is picked (Phil, 2026-11-18), and a firmer one when a hold takes it up.
+    @MainActor static func bump() { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+    @MainActor static func firm() { UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 1) }
 }
 
 /// A status line over the camera.

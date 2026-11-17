@@ -13,6 +13,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         didSet {
             updateSize()
             updateTilted()
+            if selectedModel != oldValue, selectedModel != nil { Haptics.bump() }
             if selectedModel != oldValue {
                 stopCarrying()
                 cancelPin()
@@ -81,7 +82,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private var lastDimensionRefresh = Date.distantPast
     /// One-finger drags move the selected model up and down instead of across (Phil, 2026-10-31).
     @Published var lifting = false
-    /// Phil, 2026-11-09: cut-outs are handled one job at a time, each with one finger, and carried by holding Carry.
+    /// Phil, 2026-11-09: cut-outs are handled one job at a time, each with one finger, and carried by holding a finger on the object (2026-11-18).
     enum CutoutJob: String, CaseIterable { case move = "Move", turn = "Turn", size = "Size", tilt = "Tilt", lift = "Lift" }
     @Published var cutoutJob: CutoutJob = .move
     @Published private(set) var carrying = false
@@ -402,6 +403,11 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         pan.maximumNumberOfTouches = 1
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         let rotate = UIRotationGestureRecognizer(target: self, action: #selector(handleRotate(_:)))
+        // Hold a finger on an object and it comes with you as you walk; let go and it stays (Phil, 2026-11-18).
+        let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleHold(_:)))
+        hold.minimumPressDuration = 0.45
+        hold.allowableMovement = 14
+        hold.name = "hold"
         // Two fingers dragging tips and slants a cut-out: up and down tilts it, sideways slants it.
         let pose = UIPanGestureRecognizer(target: self, action: #selector(handlePose(_:)))
         pose.minimumNumberOfTouches = 2
@@ -409,7 +415,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         pose.name = "pose"
         pinch.name = "pinch"
         rotate.name = "rotate"
-        for gesture in [tap, pan, pinch, rotate, pose] as [UIGestureRecognizer] {
+        for gesture in [tap, pan, pinch, rotate, pose, hold] as [UIGestureRecognizer] {
             gesture.delegate = self
             view.addGestureRecognizer(gesture)
         }
@@ -435,6 +441,22 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         cutoutPackages[id] = package
         plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: cutoutTurn[id] ?? 0)
         if gesture.state == .ended { savePose(package, id: id, file: model.file, plane: plane) }
+    }
+
+    @objc private func handleHold(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            guard selectionAllowed(), !isSuspended(), let view = gesture.view as? SCNView,
+                  let touched = view.hitTest(gesture.location(in: view), options: ReviewPick.options).lazy.compactMap({ self.modelID(of: $0.node) }).first
+            else { return }
+            selectedModel = touched
+            startCarrying()
+            if carrying { Haptics.firm() }
+        case .ended, .cancelled, .failed:
+            stopCarrying()
+        default:
+            break
+        }
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -716,7 +738,6 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         carried = id
         cancelPin()
         pinned.remove(id)
-        Haptics.tap()
         Diagnostics.log(String(format: "Carry started at %.1f m", carryDistance))
         carryTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.carryStep() }
@@ -1191,7 +1212,7 @@ struct ModelOverlay: View {
                 // Phil, 2026-11-08: the cut-out controls covered too much of the middle of the picture. One slim row
                 // along the bottom, a small picture with its word under it (the words stay whole), no panel; the
                 // help line shows for a few seconds when a model is picked, then goes.
-                // Phil, 2026-11-09: gestures were not intuitive. Pick one job and one finger does only that; hold Carry
+                // Phil, 2026-11-09: gestures were not intuitive. Pick one job and one finger does only that; hold the object
                 // and walk to take it along. Phil, 2026-11-10: the same for USDZ and every other model, with Lift
                 // in place of Tilt (only a flat cut-out tips).
                 // Phil, 2026-11-10: tools pushed to the screen's edges, jobs down the left and actions down the right,
@@ -1202,13 +1223,6 @@ struct ModelOverlay: View {
                         // Phil, 2026-11-11: Lift for cut-outs too. 2026-11-17: Tilt for every model ("rotate any object"): tip and lean.
                         ForEach(ModelPlacer.CutoutJob.allCases, id: \.self) { job in
                             CutoutTool(word: job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
-                        }
-                        // Carry walks it along with the live camera, so not over a saved frame (Review).
-                        if showsFloor {
-                            CutoutTool(word: placer.carrying ? "Carrying" : "Carry", symbol: "figure.walk", on: placer.carrying) {}
-                                .simultaneousGesture(DragGesture(minimumDistance: 0)
-                                    .onChanged { _ in placer.startCarrying() }
-                                    .onEnded { _ in placer.stopCarrying() })
                         }
                         if placer.selectedPoseSpec != nil {
                             CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
@@ -1280,7 +1294,7 @@ private struct MoveHint: View {
         }
         if carrying { return ("figure.walk", "walk, let go to drop") }
         switch job {
-        case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further")
+        case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further · hold to carry")
         case .turn: return ("arrow.left.and.right", "turn")
         case .size: return ("arrow.up.and.down", "↑ bigger")
         case .tilt: return ("arrow.up.and.down.and.arrow.left.and.right", "↕ tip  ↔ lean")
