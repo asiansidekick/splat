@@ -137,5 +137,20 @@ do {
     check(ScanAlign.fit(from: from, to: still) == nil, "align: a camera that never moved refused")
 }
 
+// TrimMath: a loop on the screen takes triangles away, or keeps only them.
+do {
+    let square: [SIMD2<Float>] = [SIMD2(0, 0), SIMD2(10, 0), SIMD2(10, 10), SIMD2(0, 10)]
+    check(TrimMath.inside(SIMD2(5, 5), loop: square), "trim: middle of a loop is inside")
+    check(!TrimMath.inside(SIMD2(15, 5), loop: square), "trim: beside a loop is outside")
+    // Two triangles: one inside the square, one far away; a third with a corner behind the camera.
+    let screen: [SIMD2<Float>?] = [SIMD2(2, 2), SIMD2(8, 2), SIMD2(5, 8), SIMD2(50, 50), SIMD2(60, 50), SIMD2(55, 60), nil]
+    let triangles: [UInt32] = [0, 1, 2, 3, 4, 5, 3, 4, 6]
+    let erased = TrimMath.trim(triangles, screen: screen, loop: square, keep: false)
+    check(erased == [3, 4, 5, 3, 4, 6], "trim: erase takes the looped triangle only (\(erased))")
+    let kept = TrimMath.trim(triangles, screen: screen, loop: square, keep: true)
+    check(kept == [0, 1, 2], "trim: keep leaves the looped triangle only (\(kept))")
+    check(TrimMath.trim(triangles, screen: screen, loop: [SIMD2(0, 0), SIMD2(1, 1)], keep: false) == triangles, "trim: a loop too short changes nothing")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

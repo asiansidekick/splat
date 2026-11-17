@@ -29,6 +29,7 @@ struct ScanScreen: View {
     let place: (URL) -> Void
     @State private var showLibrary = false
     @State private var preview: URL?
+    @State private var trimming: ScanFolder?
 
     var body: some View {
         ZStack {
@@ -43,7 +44,13 @@ struct ScanScreen: View {
             overlay
         }
         .sheet(isPresented: $showLibrary) {
-            LibraryView(preview: $preview, place: place).environmentObject(model)
+            LibraryView(preview: $preview, place: place, trim: { folder in
+                // The list closes first; then the trim screen opens.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { trimming = folder }
+            }).environmentObject(model)
+        }
+        .fullScreenCover(item: $trimming) { folder in
+            ScanTrimScreen(folder: folder) { _ in trimming = nil }
         }
         .quickLookPreview($preview)
         .statusBarHidden()
@@ -65,7 +72,7 @@ struct ScanScreen: View {
         case .cropping(let folder):
             CropScreen(folder: folder)
         case .done(let folder):
-            DoneView(folder: folder, preview: $preview, place: place, close: close)
+            DoneView(folder: folder, preview: $preview, place: place, close: close, trim: { trimming = folder })
         case .unsupported(let text), .failed(let text):
             MessageView(text: text, close: close) { model.start() }
         default:
@@ -259,6 +266,7 @@ struct DoneView: View {
     @Binding var preview: URL?
     let place: (URL) -> Void
     let close: () -> Void
+    let trim: () -> Void
 
     var body: some View {
         VStack(spacing: 16) {
@@ -270,8 +278,9 @@ struct DoneView: View {
             Button("Place in the room") { place(folder.model) }
                 .buttonStyle(.borderedProminent).tint(Theme.accent).foregroundStyle(.black)
             HStack(spacing: 12) {
+                Button("Trim", action: trim).buttonStyle(.bordered)
                 Button("View") { preview = folder.model }.buttonStyle(.bordered)
-                ShareLink(item: folder.model) { Label("Share", systemImage: "square.and.arrow.up") }
+                ShareLink(item: folder.model) { Image(systemName: "square.and.arrow.up") }
                     .buttonStyle(.bordered)
                 Button("New scan") { model.start() }.buttonStyle(.bordered)
             }
@@ -305,6 +314,7 @@ struct LibraryView: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var preview: URL?
     let place: (URL) -> Void
+    let trim: (ScanFolder) -> Void
 
     var body: some View {
         NavigationStack {
@@ -324,7 +334,8 @@ struct LibraryView: View {
                         }
                         if folder.hasModel {
                             Button("Place") { dismiss(); place(folder.model) }.buttonStyle(.bordered)
-                            Button("View") { dismiss(); preview = folder.model }.buttonStyle(.bordered)
+                            Button { dismiss(); trim(folder) } label: { Image(systemName: "scissors") }.buttonStyle(.bordered)
+                            Button { dismiss(); preview = folder.model } label: { Image(systemName: "eye") }.buttonStyle(.bordered)
                             ShareLink(item: folder.model) { Image(systemName: "square.and.arrow.up") }
                                 .buttonStyle(.bordered)
                         } else if !folder.hasFull && folder.imageCount >= 10 {
