@@ -15,6 +15,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             updateSize()
             updateTilted()
             refreshGizmo()
+            refreshPoseDots()
             if selectedModel != oldValue, selectedModel != nil { Haptics.bump() }
             if selectedModel != oldValue {
                 stopCarrying()
@@ -191,8 +192,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// One-finger drags move the selected model up and down instead of across (Phil, 2026-10-31).
     @Published var lifting = false
     /// Phil, 2026-11-09: cut-outs are handled one job at a time, each with one finger, and carried by holding a finger on the object (2026-11-18).
-    enum CutoutJob: String, CaseIterable { case move = "Move", turn = "Turn", size = "Size", tilt = "Tilt", lift = "Lift" }
-    @Published var cutoutJob: CutoutJob = .move { didSet { if cutoutJob != oldValue { refreshGizmo() } } }
+    enum CutoutJob: String, CaseIterable { case move = "Move", turn = "Turn", size = "Size", tilt = "Tilt", lift = "Lift", pose = "Pose" }
+    @Published var cutoutJob: CutoutJob = .move { didSet { if cutoutJob != oldValue { refreshGizmo(); refreshPoseDots() } } }
     @Published private(set) var carrying = false
     /// The selected 3D model has been tipped or leant (not just turned), so Upright is offered.
     @Published private(set) var selectedTilted = false
@@ -437,6 +438,96 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: cutoutTurn[id] ?? 0)
         try? JSONEncoder().encode(package).write(to: folder.appendingPathComponent(file), options: .atomic)
         if let index = models.firstIndex(where: { $0.id == id }) { models[index].moved = Date() }
+    }
+
+    // MARK: Posing an imported character in live view (Phil, 2026-11-18)
+
+    private var poseDots: [(node: SCNNode, joint: PoseDrag.Joint)] = []
+    private var poseHandle: PoseDrag.Joint?
+    private var poseDepth: Float = 1
+
+    /// The selected model is an imported character that can be posed by its joints.
+    var selectedHasRig: Bool {
+        guard let id = selectedModel else { return false }
+        return rigs[id] != nil
+    }
+
+    /// Dots on the character's hands, feet, elbows, knees and head, riding on its own bones so they follow it.
+    func refreshPoseDots() {
+        for dot in poseDots { dot.node.removeFromParentNode() }
+        poseDots = []
+        poseHandle = nil
+        guard cutoutJob == .pose, let id = selectedModel, let rig = rigs[id], let node = modelNodes[id] else { return }
+        let map = rig.poser.map
+        let worldHeight = max(rig.height * node.simdScale.x, 0.2)
+        var wanted: [(Int, PoseDrag.Joint, Float)] = []
+        for side in 0..<2 {
+            let arm = side == 0 ? map.armL : map.armR, leg = side == 0 ? map.legL : map.legR
+            wanted.append((arm[2], .hand(side), 0.032))
+            wanted.append((arm[1], .elbow(side), 0.022))
+            wanted.append((leg[2], .foot(side), 0.032))
+            wanted.append((leg[1], .knee(side), 0.022))
+        }
+        if let head = map.head ?? map.neck { wanted.append((head, .head, 0.04)) }
+        for (index, joint, share) in wanted {
+            guard let bone = rig.joint(index) else { continue }
+            let scale = max(simd_length(bone.simdWorldTransform.columns.0.xyz), 1e-6)
+            let sphere = SCNSphere(radius: CGFloat(worldHeight * share))
+            sphere.segmentCount = 16
+            sphere.materials = [ModelDimensions.flat(Theme.accentUI)]
+            let dot = SCNNode(geometry: sphere)
+            dot.name = "posedot"
+            dot.simdScale = SIMD3(repeating: 1 / scale)
+            dot.renderingOrder = 2000
+            bone.addChildNode(dot)
+            poseDots.append((dot, joint))
+        }
+    }
+
+    private func posePick(at finger: CGPoint, in view: SCNView) {
+        poseHandle = nil
+        guard let eye = self.eye?.columns.3.xyz else { return }
+        var best: (joint: PoseDrag.Joint, distance: CGFloat, depth: Float)?
+        for dot in poseDots {
+            let world = dot.node.simdWorldPosition
+            let shown = view.projectPoint(SCNVector3(world.x, world.y, world.z))
+            guard shown.z > 0, shown.z < 1 else { continue }
+            let distance = hypot(CGFloat(shown.x) - finger.x, CGFloat(shown.y) - finger.y)
+            if distance < (best?.distance ?? 50) { best = (dot.joint, distance, simd_distance(world, eye)) }
+        }
+        guard let best else { return }
+        poseHandle = best.joint
+        poseDepth = best.depth
+        Haptics.firm()
+    }
+
+    /// The joint under the finger follows it (at the depth it was picked at) and the limb is solved to match.
+    private func poseDrag(to finger: CGPoint, in view: SCNView, node: SCNNode, id: UUID) {
+        guard let joint = poseHandle, let rig = rigs[id], let eye = self.eye?.columns.3.xyz,
+              let model = models.first(where: { $0.id == id }) else { return }
+        let far = SIMD3<Float>(view.unprojectPoint(SCNVector3(Float(finger.x), Float(finger.y), 1)))
+        guard simd_length(far - eye) > 0.001 else { return }
+        let world = eye + simd_normalize(far - eye) * poseDepth
+        let map = rig.poser.map
+        let inverse = node.simdWorldTransform.inverse
+        // Into the model's own space, turned round if the file has the character facing -Z.
+        func local(_ p: SIMD3<Float>) -> SIMD3<Float> {
+            let q = (inverse * SIMD4(p, 1)).xyz
+            return map.facing < 0 ? SIMD3(-q.x, q.y, -q.z) : q
+        }
+        func at(_ index: Int) -> SIMD3<Float> { local(rig.joint(index)?.simdWorldPosition ?? .zero) }
+        let chain: [Int]
+        switch joint {
+        case .hand(let s), .elbow(let s): chain = s == 0 ? map.armL : map.armR
+        case .foot(let s), .knee(let s): chain = s == 0 ? map.legL : map.legR
+        case .head: chain = map.armL
+        }
+        let before = model.rigPose ?? rig.poser.restPose
+        let pose = PoseDrag.solve(joint, target: local(world), top: at(chain[0]), middle: at(chain[1]), end: at(chain[2]),
+                                  hips: at(map.hips), from: before)
+        guard pose != before else { return }
+        rig.apply(pose)
+        if let index = models.firstIndex(where: { $0.id == id }) { models[index].rigPose = pose }
     }
 
     /// The selected model's mannequin, if it is one.
@@ -959,6 +1050,12 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             let camera = eye?.columns.3.xyz ?? node.simdWorldPosition
             // About a millimetre and a half per point for each metre away.
             node.simdWorldPosition.y -= Float(moved.y) * 0.0016 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
+        case .pose:
+            guard let view = gesture.view as? SCNView else { return }
+            let finger = gesture.location(in: view)
+            if gesture.state == .began { posePick(at: finger, in: view) }
+            poseDrag(to: finger, in: view, node: node, id: id)
+            if gesture.state == .ended || gesture.state == .cancelled { poseHandle = nil }
         case .move:
             break
         }
@@ -1665,6 +1762,7 @@ struct ModelOverlay: View {
         case .size: return "arrow.up.left.and.arrow.down.right"
         case .tilt: return "rotate.3d"
         case .lift: return "arrow.up.and.down"
+        case .pose: return "figure.arms.open"
         }
     }
 
@@ -1728,7 +1826,7 @@ struct ModelOverlay: View {
                 HStack(alignment: .bottom, spacing: 0) {
                     VStack(spacing: 0) {
                         // Phil, 2026-11-11: Lift for cut-outs too. 2026-11-17: Tilt for every model ("rotate any object"): tip and lean.
-                        ForEach(ModelPlacer.CutoutJob.allCases, id: \.self) { job in
+                        ForEach(ModelPlacer.CutoutJob.allCases.filter { $0 != .pose }, id: \.self) { job in
                             CutoutTool(word: job == .tilt && !cutout ? "Rotate" : job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
                         }
                         // Carry walks it along with the live camera, so not over a saved frame (Review).
@@ -1740,7 +1838,10 @@ struct ModelOverlay: View {
                         }
                         // Phil, 2026-11-18: the right column ran long, so Floor stands here under Carry.
                         if showsFloor, !cutout { CutoutTool(word: "Floor", symbol: "arrow.down.to.line") { placer.dropToFloor() } }
-                        if placer.selectedPoseSpec != nil {
+                        if placer.selectedHasRig {
+                            // Phil, 2026-11-18: pose it right in the live view, by its joints.
+                            CutoutTool(word: "Pose", symbol: "figure.arms.open", on: placer.cutoutJob == .pose) { placer.cutoutJob = .pose }
+                        } else if placer.selectedPoseSpec != nil {
                             CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
                         }
                     }
@@ -1817,6 +1918,7 @@ private struct MoveHint: View {
         case .size: return ("arrow.up.and.down.circle", "pinch, or drag ↕, to scale · the figures follow")
         case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "push a lever's knob to swing it · or drag anywhere · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
+        case .pose: return ("hand.draw", "drag a dot: hand, foot, elbow, knee, head")
         }
     }
 

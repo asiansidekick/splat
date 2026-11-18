@@ -243,6 +243,8 @@ final class FBXRig {
         self.height = height
     }
 
+    func joint(_ index: Int) -> SCNNode? { index >= 0 && index < nodes.count ? nodes[index] : nil }
+
     /// Nil puts it back as the file has it.
     func apply(_ pose: MannequinPose?) {
         let posed = poser.locals(for: pose)
