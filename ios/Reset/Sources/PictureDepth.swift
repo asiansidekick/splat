@@ -76,7 +76,6 @@ final class PictureDepth {
     private init() {
         model = DepthNetwork.model
     }
-    }
 
     var available: Bool { model != nil }
 
