@@ -61,6 +61,81 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             modelNodes.keys.forEach(refreshDimensions)
         }
     }
+    /// A figure tapped to type its real length (Phil, 2026-11-18: "type a real length to scale").
+    struct DimensionEdit: Identifiable, Equatable {
+        let id = UUID()
+        let model: UUID
+        let letter: String
+        let current: Float
+        var name: String { letter == "W" ? "Width" : letter == "D" ? "Depth" : "Height" }
+    }
+    @Published var editingDimension: DimensionEdit?
+
+    /// The figure nearest the finger (within a thumb's width), if one is shown for the selected model.
+    private func dimensionTap(at point: CGPoint, in view: SCNView) -> Bool {
+        guard showDimensions, let id = selectedModel, let node = modelNodes[id] else { return false }
+        var holders: [SCNNode] = []
+        if let inside = node.childNode(withName: ModelDimensions.nodeName, recursively: false) { holders.append(inside) }
+        if let beside = cutouts[id]?.plane.parent?.childNode(withName: ModelDimensions.nodeName, recursively: false) { holders.append(beside) }
+        var best: (letter: String, distance: CGFloat)?
+        for holder in holders {
+            for tag in holder.childNodes {
+                guard let name = tag.name, name.hasPrefix(ModelDimensions.tagPrefix) else { continue }
+                let place = tag.presentation.worldPosition
+                let shown = view.projectPoint(place)
+                guard shown.z > 0, shown.z < 1 else { continue }
+                let distance = hypot(CGFloat(shown.x) - point.x, CGFloat(shown.y) - point.y)
+                if distance < (best?.distance ?? 48) { best = (String(name.dropFirst(ModelDimensions.tagPrefix.count)), distance) }
+            }
+        }
+        guard let best, let current = dimensionLength(best.letter, of: id) else { return false }
+        Haptics.tap()
+        editingDimension = DimensionEdit(model: id, letter: best.letter, current: current)
+        return true
+    }
+
+    /// Width, depth or height now, in metres, for a model or a cut-out.
+    private func dimensionLength(_ letter: String, of id: UUID) -> Float? {
+        guard let node = modelNodes[id] else { return nil }
+        let scale = node.simdScale.x
+        if let state = cutouts[id] {
+            switch letter {
+            case "W": return state.height * state.aspects[state.shown] * scale
+            case "H": return state.height * scale
+            default: return nil
+            }
+        }
+        guard cutoutPackages[id] == nil, let box = boxes[id] else { return nil }
+        switch letter {
+        case "W": return (box.high.x - box.low.x) * scale
+        case "D": return (box.high.z - box.low.z) * scale
+        default: return (box.high.y - box.low.y) * scale
+        }
+    }
+
+    /// Scales the whole model so the tapped figure reads the length typed.
+    func applyTypedLength(_ edit: DimensionEdit, text: String) {
+        guard let real = LengthText.parse(text), edit.current > 0.0001, let node = modelNodes[edit.model] else {
+            modelError = "That length didn't make sense. Try 120, 1.2 m, or 4 ft."
+            Haptics.warning()
+            return
+        }
+        let factor = real / edit.current
+        let next = node.simdScale.x * factor
+        guard next > 0.005, next < 2000 else {
+            modelError = "That would make it too small or too large."
+            Haptics.warning()
+            return
+        }
+        node.simdScale *= factor
+        pinned.remove(edit.model)
+        updateSize()
+        refreshDimensions(edit.model)
+        commit(edit.model)
+        Haptics.success()
+        Diagnostics.log(String(format: "Typed length: %@ %.0f cm became %.0f cm (x%.2f)", edit.letter, edit.current * 100, real * 100, factor))
+    }
+
     /// A word or two that shows for a moment after the Sizes tool is tapped.
     @Published var dimensionHint: String?
 
@@ -77,7 +152,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let words = showDimensions ? "Figures: " + ModelDimensions.textStepNames[dimensionStep] : "Figures off"
         let teach = HintStore.shouldShow("sizesTip")
         if teach, !showDimensions { HintStore.shown("sizesTip") }
-        let hint = teach ? words + " · tap Sizes again to change" : words
+        let hint = teach ? words + " · tap Sizes again to change\nTap a figure to type its real length" : words
         dimensionHint = hint
         Haptics.tap()
         Task { @MainActor in
@@ -601,6 +676,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
         guard selectionAllowed(), let view = gesture.view as? SCNView else { return }
+        if dimensionTap(at: gesture.location(in: view), in: view) { return }
         let hits = view.hitTest(gesture.location(in: view), options: ReviewPick.options)
         selectedModel = hits.lazy.compactMap { self.modelID(of: $0.node) }.first
     }
@@ -869,7 +945,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 } else {
                     tipModel(node, id: id, by: moved)
                 }
-                if gesture.state == .ended || gesture.state == .cancelled { gizmoRing = nil; gizmoGrab = nil; refreshGizmo() }
+                if gesture.state == .ended || gesture.state == .cancelled { gizmoRing = nil; gizmoEnd = nil; refreshGizmo() }
                 break
             }
             guard var package = cutoutPackages[id], let plane = cutouts[id]?.plane, let model = models.first(where: { $0.id == id }) else { return }
@@ -1040,14 +1116,16 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         updateTilted()
     }
 
-    // MARK: Axis handles (Phil, 2026-11-18: handles like a CAD program, the picked axis shows a long fading line)
+    // MARK: Levers (Phil, 2026-11-18: imaginary physical levers that move with the object's orientation)
 
-    /// Three axes through the middle of the selected 3D model while Rotate is picked: red across (X), green up (Y),
-    /// blue along (Z), each ending in a knob at both ends. Drag a knob to turn the model about that axis only; the
-    /// axis picked then stretches out as a long line that fades away, so the turn's direction reads clearly.
+    /// Three levers stick out of the middle of the selected 3D model while Rotate is picked, in the model's own
+    /// directions (so they turn with it): red, green and blue, each with a knob at both ends. Push a knob and the
+    /// model swings like a handle, the knob following your finger. The lever picked stretches into a long line that
+    /// fades away, so you can see which way it points.
     private var gizmoNode: SCNNode?
     private var gizmoRing: Int?
-    private var gizmoGrab: SIMD3<Float>?
+    private var gizmoEnd: Float?
+    private var gizmoKey = ""
     private static let ringAxes: [SIMD3<Float>] = [SIMD3(1, 0, 0), SIMD3(0, 1, 0), SIMD3(0, 0, 1)]
     private var gizmoCentre = SIMD3<Float>.zero
     private var gizmoRadius: Float = 0.3
@@ -1070,109 +1148,127 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         return material
     }
 
+    /// Shows, moves or takes away the levers. They are built again only when the picked lever changes; while one is
+    /// being turned they just follow the model.
     func refreshGizmo() {
-        guard cutoutJob == .tilt, let (centre, radius) = gizmoGeometry() else {
+        guard cutoutJob == .tilt, let id = selectedModel, let node = modelNodes[id], let (centre, radius) = gizmoGeometry() else {
             gizmoNode?.removeFromParentNode()
             gizmoNode = nil
+            gizmoKey = ""
             return
         }
         gizmoCentre = centre
         gizmoRadius = radius
-        gizmoNode?.removeFromParentNode()
-        let holder = SCNNode()
-        holder.name = "gizmo"
-        holder.renderingOrder = 2000
-        let colours: [UIColor] = [.systemRed, .systemGreen, .systemBlue]
-        // A cylinder stands along its own Y: tip it to lie along X or Z.
-        let tips: [SCNVector4] = [SCNVector4(0, 0, 1, -Float.pi / 2), SCNVector4(0, 0, 0, 0), SCNVector4(1, 0, 0, Float.pi / 2)]
-        for index in 0..<3 {
-            let axis = SCNNode()
-            axis.rotation = tips[index]
-            axis.renderingOrder = 2000
-            let line = SCNCylinder(radius: 0.012, height: 2)
-            line.radialSegmentCount = 8
-            line.materials = [Self.gizmoMaterial(colours[index])]
-            axis.addChildNode(SCNNode(geometry: line))
-            for end: Float in [1, -1] {
-                let knob = SCNSphere(radius: end > 0 ? 0.11 : 0.07)
-                knob.segmentCount = 16
-                knob.materials = [Self.gizmoMaterial(colours[index])]
-                let node = SCNNode(geometry: knob)
-                node.position = SCNVector3(0, end, 0)
-                node.renderingOrder = 2001
-                axis.addChildNode(node)
-            }
-            // The picked axis stretches far out both ways, fading with distance.
-            if gizmoRing == index {
-                let pieces = 24
-                let reach: Float = 7
+        let key = "\(id.uuidString)-\(gizmoRing.map(String.init) ?? "none")"
+        if gizmoNode == nil || key != gizmoKey {
+            gizmoNode?.removeFromParentNode()
+            gizmoKey = key
+            let holder = SCNNode()
+            holder.name = "gizmo"
+            holder.renderingOrder = 2000
+            let colours: [UIColor] = [.systemRed, .systemGreen, .systemBlue]
+            // A cylinder stands along its own Y: tip it to lie along X or Z.
+            let tips: [SCNVector4] = [SCNVector4(0, 0, 1, -Float.pi / 2), SCNVector4(0, 0, 0, 0), SCNVector4(1, 0, 0, Float.pi / 2)]
+            for index in 0..<3 {
+                let axis = SCNNode()
+                axis.rotation = tips[index]
+                axis.renderingOrder = 2000
+                let line = SCNCylinder(radius: 0.012, height: 2)
+                line.radialSegmentCount = 8
+                line.materials = [Self.gizmoMaterial(colours[index])]
+                axis.addChildNode(SCNNode(geometry: line))
                 for end: Float in [1, -1] {
-                    for piece in 0..<pieces {
-                        let fade = 1 - Float(piece) / Float(pieces)
-                        let length = reach / Float(pieces)
-                        let segment = SCNCylinder(radius: 0.009, height: CGFloat(length))
-                        segment.radialSegmentCount = 6
-                        segment.materials = [Self.gizmoMaterial(colours[index], alpha: CGFloat(0.75 * fade * fade))]
-                        let node = SCNNode(geometry: segment)
-                        node.position = SCNVector3(0, end * (1 + (Float(piece) + 0.5) * length), 0)
-                        node.renderingOrder = 1999
-                        axis.addChildNode(node)
+                    let knob = SCNSphere(radius: end > 0 ? 0.11 : 0.07)
+                    knob.segmentCount = 16
+                    knob.materials = [Self.gizmoMaterial(colours[index])]
+                    let ball = SCNNode(geometry: knob)
+                    ball.position = SCNVector3(0, end, 0)
+                    ball.renderingOrder = 2001
+                    axis.addChildNode(ball)
+                }
+                // The picked lever stretches far out both ways, fading with distance.
+                if gizmoRing == index {
+                    let pieces = 24
+                    let reach: Float = 7
+                    for end: Float in [1, -1] {
+                        for piece in 0..<pieces {
+                            let fade = 1 - Float(piece) / Float(pieces)
+                            let length = reach / Float(pieces)
+                            let segment = SCNCylinder(radius: 0.009, height: CGFloat(length))
+                            segment.radialSegmentCount = 6
+                            segment.materials = [Self.gizmoMaterial(colours[index], alpha: CGFloat(0.75 * fade * fade))]
+                            let part = SCNNode(geometry: segment)
+                            part.position = SCNVector3(0, end * (1 + (Float(piece) + 0.5) * length), 0)
+                            part.renderingOrder = 1999
+                            axis.addChildNode(part)
+                        }
                     }
                 }
+                axis.opacity = gizmoRing == nil || gizmoRing == index ? 1 : 0.25
+                holder.addChildNode(axis)
             }
-            axis.opacity = gizmoRing == nil || gizmoRing == index ? 1 : 0.25
-            holder.addChildNode(axis)
+            root.addChildNode(holder)
+            gizmoNode = holder
         }
-        holder.simdWorldPosition = centre
-        holder.simdScale = SIMD3(repeating: radius)
-        root.addChildNode(holder)
-        gizmoNode = holder
+        // Turned with the model, so the levers stay fixed to it.
+        gizmoNode?.simdWorldOrientation = node.simdWorldOrientation
+        gizmoNode?.simdWorldPosition = centre
+        gizmoNode?.simdScale = SIMD3(repeating: radius)
     }
 
-    /// Both knob ends of an axis, in the world.
-    private func handlePoints(_ index: Int) -> [SIMD3<Float>] {
-        let axis = Self.ringAxes[index]
-        return [gizmoCentre + axis * gizmoRadius, gizmoCentre - axis * gizmoRadius]
+    /// Where a lever's knob is now, in the world.
+    private func knobPoint(_ index: Int, end: Float, node: SCNNode) -> SIMD3<Float> {
+        gizmoCentre + node.simdWorldOrientation.act(Self.ringAxes[index]) * (gizmoRadius * end)
     }
 
     /// Chooses the knob nearest the finger (within about a thumb's width) and remembers which end was grabbed.
     private func gizmoPick(at finger: CGPoint, in view: SCNView, node: SCNNode, id: UUID) {
         gizmoRing = nil
-        gizmoGrab = nil
+        gizmoEnd = nil
         guard gizmoNode != nil else { return }
-        var best: (ring: Int, distance: CGFloat, point: SIMD3<Float>)?
+        var best: (ring: Int, end: Float, distance: CGFloat)?
         for ring in 0..<3 {
-            for point in handlePoints(ring) {
+            for end: Float in [1, -1] {
+                let point = knobPoint(ring, end: end, node: node)
                 let shown = view.projectPoint(SCNVector3(point.x, point.y, point.z))
                 guard shown.z > 0, shown.z < 1 else { continue }
                 let distance = hypot(CGFloat(shown.x) - finger.x, CGFloat(shown.y) - finger.y)
-                if distance < (best?.distance ?? 50) { best = (ring, distance, point) }
+                if distance < (best?.distance ?? 50) { best = (ring, end, distance) }
             }
         }
         guard let best else { return }
         gizmoRing = best.ring
-        gizmoGrab = best.point
+        gizmoEnd = best.end
         Haptics.firm()
         refreshGizmo()
     }
 
-    /// Dragging a knob across the line it sits on turns the model about that line.
+    /// The knob follows the finger on the screen, swinging the model about its middle like a handle.
     private func gizmoDrag(by moved: CGPoint, in view: SCNView, node: SCNNode, id: UUID) {
-        guard let ring = gizmoRing, let grab = gizmoGrab else { return }
-        let axis = Self.ringAxes[ring]
-        let middle = view.projectPoint(SCNVector3(gizmoCentre.x, gizmoCentre.y, gizmoCentre.z))
-        let knob = view.projectPoint(SCNVector3(grab.x, grab.y, grab.z))
-        let along = CGPoint(x: CGFloat(knob.x - middle.x), y: CGFloat(knob.y - middle.y))
-        let length = hypot(along.x, along.y)
-        let angle: Float
-        if length > 12 {
-            // Across the line on the screen; the other end of the line turns the other way, so it feels like holding the knob.
-            angle = Float((moved.x * -along.y + moved.y * along.x) / length) * 0.012
-        } else {
-            // The axis points at you: sideways drag turns it.
-            angle = Float(moved.x) * 0.012
-        }
-        rollModel(node, id: id, axis: axis, by: angle)
+        guard let ring = gizmoRing, let end = gizmoEnd else { return }
+        let knob = knobPoint(ring, end: end, node: node)
+        let shown = view.projectPoint(SCNVector3(knob.x, knob.y, knob.z))
+        guard shown.z > 0, shown.z < 1 else { return }
+        let target = SIMD3<Float>(view.unprojectPoint(SCNVector3(shown.x + Float(moved.x), shown.y + Float(moved.y), shown.z)))
+        let from = knob - gizmoCentre
+        let to = target - gizmoCentre
+        guard simd_length(from) > 0.001, simd_length(to) > 0.001 else { return }
+        let a = simd_normalize(from), b = simd_normalize(to)
+        // Never straight back through the middle in one step.
+        guard simd_dot(a, b) > -0.95 else { return }
+        swingModel(node, id: id, by: simd_quatf(from: a, to: b))
+    }
+
+    /// Turns the model about its middle by a turn given in the world.
+    private func swingModel(_ node: SCNNode, id: UUID, by turn: simd_quatf) {
+        let box = boxes[id]
+        let middle = ((box?.low ?? .zero) + (box?.high ?? .zero)) / 2
+        let before = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
+        node.simdWorldOrientation = simd_normalize(turn * node.simdWorldOrientation)
+        let after = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
+        node.simdWorldPosition += before - after
+        updateTilted()
+        refreshGizmo()
     }
 
     /// Rolls the model about `axis` (the line of sight), through its own middle.
@@ -1704,7 +1800,7 @@ private struct MoveHint: View {
         case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further · hold: lift")
         case .turn: return ("arrow.left.and.right", "drag or twist: turn")
         case .size: return ("arrow.up.and.down.circle", "pinch, or drag ↕, to scale · the figures follow")
-        case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "drag a knob to turn about its line · or anywhere · twist: roll")
+        case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "push a lever's knob to swing it · or drag anywhere · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
         }
     }

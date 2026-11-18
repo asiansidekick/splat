@@ -8,6 +8,8 @@ import simd
 @MainActor
 enum ModelDimensions {
     static let nodeName = "dimensions"
+    /// Each figure's tag is named "dim:W", "dim:D" or "dim:H", so a tap on it can be told from a tap on the model.
+    static let tagPrefix = "dim:"
     static let width = UIColor(red: 1, green: 0.35, blue: 0.3, alpha: 1)
     static let depth = UIColor(red: 0.3, green: 0.65, blue: 1, alpha: 1)
     static let height = UIColor(red: 0.35, green: 0.9, blue: 0.4, alpha: 1)
@@ -53,7 +55,9 @@ enum ModelDimensions {
             node.addChildNode(arrow(from: start, to: end, radius: radius, colour: colour))
             let text = "\(letter) \(ModelPlacer.length(length))"
             let middle = (start + end) / 2 + away * (label * 0.7)
-            node.addChildNode(tag(text, colour: colour, height: label, at: middle))
+            let figure = tag(text, colour: colour, height: label, at: middle)
+            figure.name = tagPrefix + letter
+            node.addChildNode(figure)
         }
         onTop(node)
         return node

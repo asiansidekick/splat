@@ -103,11 +103,13 @@ extension View {
 struct ObjectNudge: View {
     @ObservedObject var placer: ModelPlacer
     @State private var label: String?
+    @State private var typedLength = ""
 
     var body: some View {
         ZStack {
             if let hint = placer.dimensionHint {
                 Text(hint)
+                    .multilineTextAlignment(.center)
                     .font(Theme.font(size: 14, weight: .heavy))
                     .foregroundStyle(.white)
                     .shadow(color: .black.opacity(0.9), radius: 3)
@@ -133,6 +135,19 @@ struct ObjectNudge: View {
             withAnimation { label = "Hold, then drag to lift" }
             try? await Task.sleep(for: .seconds(5))
             withAnimation { label = nil }
+        }
+        .alert("Real length", isPresented: Binding(get: { placer.editingDimension != nil }, set: { if !$0 { placer.editingDimension = nil } })) {
+            TextField("cm, or 1.2 m, 4 ft", text: $typedLength)
+                .keyboardType(.numbersAndPunctuation)
+            Button("Scale") {
+                if let edit = placer.editingDimension { placer.applyTypedLength(edit, text: typedLength) }
+                typedLength = ""
+            }
+            Button("Cancel", role: .cancel) { typedLength = "" }
+        } message: {
+            if let edit = placer.editingDimension {
+                Text("\(edit.name) is \(ModelPlacer.length(edit.current)) now. Type what it really is and the whole model scales to match.")
+            }
         }
         .onChange(of: placer.touches) { _ in
             if label != nil { withAnimation { label = nil } }
