@@ -13,6 +13,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         didSet {
             updateSize()
             updateTilted()
+            refreshGizmo()
             if selectedModel != oldValue, selectedModel != nil { Haptics.bump() }
             if selectedModel != oldValue {
                 stopCarrying()
@@ -84,7 +85,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     @Published var lifting = false
     /// Phil, 2026-11-09: cut-outs are handled one job at a time, each with one finger, and carried by holding a finger on the object (2026-11-18).
     enum CutoutJob: String, CaseIterable { case move = "Move", turn = "Turn", size = "Size", tilt = "Tilt", lift = "Lift" }
-    @Published var cutoutJob: CutoutJob = .move
+    @Published var cutoutJob: CutoutJob = .move { didSet { if cutoutJob != oldValue { refreshGizmo() } } }
     @Published private(set) var carrying = false
     /// The selected 3D model has been tipped or leant (not just turned), so Upright is offered.
     @Published private(set) var selectedTilted = false
@@ -828,7 +829,15 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         case .tilt:
             // A 3D model (not a flat cut-out) is tipped and leant as a whole, about its middle.
             if cutoutPackages[id] == nil {
-                tipModel(node, id: id, by: moved)
+                guard let view = gesture.view as? SCNView else { return }
+                let finger = gesture.location(in: view)
+                if gesture.state == .began { gizmoPick(at: finger, in: view, node: node, id: id) }
+                if gizmoRing != nil {
+                    gizmoDrag(by: moved, in: view, node: node, id: id)
+                } else {
+                    tipModel(node, id: id, by: moved)
+                }
+                if gesture.state == .ended || gesture.state == .cancelled { gizmoRing = nil; gizmoGrab = nil; refreshGizmo() }
                 break
             }
             guard var package = cutoutPackages[id], let plane = cutouts[id]?.plane, let model = models.first(where: { $0.id == id }) else { return }
@@ -953,6 +962,116 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         updateTilted()
     }
 
+    // MARK: Rotation rings (Phil, 2026-11-18: handles like a CAD program)
+
+    /// Three rings round the selected 3D model while Rotate is picked: red about the way across (X), green about
+    /// the way up (Y), blue about the way along (Z). Dragging along a ring turns the model about that line only.
+    private var gizmoNode: SCNNode?
+    private var gizmoRing: Int?
+    private var gizmoGrab: SIMD3<Float>?
+    private static let ringAxes: [SIMD3<Float>] = [SIMD3(1, 0, 0), SIMD3(0, 1, 0), SIMD3(0, 0, 1)]
+    private var gizmoCentre = SIMD3<Float>.zero
+    private var gizmoRadius: Float = 0.3
+
+    private func gizmoGeometry() -> (centre: SIMD3<Float>, radius: Float)? {
+        guard let id = selectedModel, cutoutPackages[id] == nil, let node = modelNodes[id], let box = boxes[id] else { return nil }
+        let middle = ((box.low + box.high) / 2)
+        let centre = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
+        let size = (box.high - box.low) * node.simdScale
+        return (centre, max(simd_length(size) * 0.5 * 0.9, 0.12))
+    }
+
+    func refreshGizmo() {
+        guard cutoutJob == .tilt, let (centre, radius) = gizmoGeometry() else {
+            gizmoNode?.removeFromParentNode()
+            gizmoNode = nil
+            return
+        }
+        gizmoCentre = centre
+        gizmoRadius = radius
+        if gizmoNode == nil || gizmoNode?.childNodes.count != 3 {
+            gizmoNode?.removeFromParentNode()
+            let holder = SCNNode()
+            holder.name = "gizmo"
+            holder.renderingOrder = 2000
+            let colours: [UIColor] = [.systemRed, .systemGreen, .systemBlue]
+            // A torus lies flat in its own X-Z plane, turning about Y: tip it to turn about X or Z.
+            let tips: [SCNVector4] = [SCNVector4(0, 0, 1, Float.pi / 2), SCNVector4(0, 0, 0, 0), SCNVector4(1, 0, 0, Float.pi / 2)]
+            for index in 0..<3 {
+                let ring = SCNTorus(ringRadius: 1, pipeRadius: 0.035)
+                ring.ringSegmentCount = 72
+                ring.pipeSegmentCount = 8
+                let material = SCNMaterial()
+                material.lightingModel = .constant
+                material.diffuse.contents = colours[index]
+                material.readsFromDepthBuffer = false
+                material.writesToDepthBuffer = false
+                material.isDoubleSided = true
+                ring.materials = [material]
+                let node = SCNNode(geometry: ring)
+                node.rotation = tips[index]
+                node.renderingOrder = 2000
+                holder.addChildNode(node)
+            }
+            root.addChildNode(holder)
+            gizmoNode = holder
+        }
+        gizmoNode?.simdWorldPosition = centre
+        gizmoNode?.simdScale = SIMD3(repeating: radius)
+        for (index, ring) in (gizmoNode?.childNodes ?? []).enumerated() {
+            ring.opacity = gizmoRing == nil || gizmoRing == index ? 0.95 : 0.25
+        }
+    }
+
+    /// Points on a ring (world), `count` of them.
+    private func ringPoints(_ index: Int, count: Int = 72) -> [SIMD3<Float>] {
+        let axis = Self.ringAxes[index]
+        let a = simd_normalize(simd_cross(axis, abs(axis.y) > 0.9 ? SIMD3<Float>(1, 0, 0) : SIMD3<Float>(0, 1, 0)))
+        let b = simd_cross(axis, a)
+        return (0..<count).map { step in
+            let angle = Float(step) / Float(count) * 2 * .pi
+            return gizmoCentre + (a * cos(angle) + b * sin(angle)) * gizmoRadius
+        }
+    }
+
+    /// Chooses the ring nearest the finger (within about a thumb's width) and remembers where it was grabbed.
+    private func gizmoPick(at finger: CGPoint, in view: SCNView, node: SCNNode, id: UUID) {
+        gizmoRing = nil
+        gizmoGrab = nil
+        guard gizmoNode != nil else { return }
+        var best: (ring: Int, distance: CGFloat, point: SIMD3<Float>)?
+        for ring in 0..<3 {
+            for point in ringPoints(ring) {
+                let shown = view.projectPoint(SCNVector3(point.x, point.y, point.z))
+                guard shown.z > 0, shown.z < 1 else { continue }
+                let distance = hypot(CGFloat(shown.x) - finger.x, CGFloat(shown.y) - finger.y)
+                if distance < (best?.distance ?? 44) { best = (ring, distance, point) }
+            }
+        }
+        guard let best else { return }
+        gizmoRing = best.ring
+        gizmoGrab = best.point
+        Haptics.firm()
+        refreshGizmo()
+    }
+
+    /// The finger's move along the ring's direction at the grabbed spot, turned into an angle.
+    private func gizmoDrag(by moved: CGPoint, in view: SCNView, node: SCNNode, id: UUID) {
+        guard let ring = gizmoRing, let grab = gizmoGrab else { return }
+        let axis = Self.ringAxes[ring]
+        let spoke = grab - gizmoCentre
+        let tangent = simd_normalize(simd_cross(axis, spoke))
+        // Where one radian along the ring's tangent lands on the screen.
+        let here = view.projectPoint(SCNVector3(grab.x, grab.y, grab.z))
+        let ahead = grab + tangent * simd_length(spoke) * 0.1
+        let there = view.projectPoint(SCNVector3(ahead.x, ahead.y, ahead.z))
+        let along = CGPoint(x: CGFloat(there.x - here.x) / 0.1, y: CGFloat(there.y - here.y) / 0.1)
+        let perRadian = hypot(along.x, along.y)
+        guard perRadian > 8 else { return }
+        let angle = Float((moved.x * along.x + moved.y * along.y) / (perRadian * perRadian))
+        rollModel(node, id: id, axis: axis, by: angle)
+    }
+
     /// Rolls the model about `axis` (the line of sight), through its own middle.
     private func rollModel(_ node: SCNNode, id: UUID, axis: SIMD3<Float>, by angle: Float) {
         let box = boxes[id]
@@ -962,6 +1081,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let after = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
         node.simdWorldPosition += before - after
         updateTilted()
+        refreshGizmo()
     }
 
     /// Stands the selected model upright again, keeping the way it faces.
@@ -976,6 +1096,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         node.simdWorldPosition += before - after
         Haptics.success()
         commit(id)
+        refreshGizmo()
     }
 
     private func updateTilted() {
@@ -1442,7 +1563,7 @@ private struct MoveHint: View {
         case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further · hold: lift")
         case .turn: return ("arrow.left.and.right", "drag or twist: turn")
         case .size: return ("arrow.up.and.down", "↑ bigger · or pinch")
-        case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "drag: turn any way · twist: roll")
+        case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "drag a ring · or anywhere to turn · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
         }
     }
