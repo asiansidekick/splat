@@ -1,3 +1,4 @@
+import Metal
 import SceneKit
 import UIKit
 import simd
@@ -58,7 +59,9 @@ enum FBXImport {
                 let pointer: UnsafePointer<CChar>? = part.texture_name
                 guard part.texture_size == 0, let name = pointer else { continue }
                 let file = fileName(String(cString: name))
-                let from = source.deletingLastPathComponent().appendingPathComponent(file)
+                var from = source.deletingLastPathComponent().appendingPathComponent(file)
+                // A character taken out of the gallery has its pictures in its own folder.
+                if !manager.fileExists(atPath: from.path) { from = texturesFolder(for: source).appendingPathComponent(file) }
                 let to = folder.appendingPathComponent(file)
                 guard !file.isEmpty, manager.fileExists(atPath: from.path), !manager.fileExists(atPath: to.path) else { continue }
                 try? manager.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -250,5 +253,43 @@ final class FBXRig {
         let posed = poser.locals(for: pose)
         for (i, node) in nodes.enumerated() where i < posed.locals.count { node.simdTransform = posed.locals[i] }
         lift.simdPosition = SIMD3(0, posed.lift, 0)
+    }
+}
+
+/// A small picture of an FBX character for the gallery, drawn on white (QuickLook can't read FBX).
+@MainActor
+enum FBXThumbnail {
+    private static var cache: [String: UIImage] = [:]
+
+    static func render(_ url: URL) async -> UIImage? {
+        if let hit = cache[url.path] { return hit }
+        guard let loaded = FBXImport.load(url, name: url.deletingPathExtension().lastPathComponent) else { return nil }
+        let scene = SCNScene()
+        scene.background.contents = UIColor.white
+        scene.rootNode.addChildNode(loaded.node)
+        let middle = (loaded.low + loaded.high) / 2
+        let size = loaded.high - loaded.low
+        let camera = SCNNode()
+        camera.camera = SCNCamera()
+        camera.camera?.fieldOfView = 35
+        let distance = max(size.x, size.y, size.z) * 2.2 + 0.2
+        camera.simdPosition = middle + SIMD3(0, 0, distance)
+        scene.rootNode.addChildNode(camera)
+        let light = SCNNode()
+        light.light = SCNLight()
+        light.light?.type = .ambient
+        light.light?.intensity = 900
+        scene.rootNode.addChildNode(light)
+        let directional = SCNNode()
+        directional.light = SCNLight()
+        directional.light?.type = .directional
+        directional.eulerAngles = SCNVector3(-0.5, 0.4, 0)
+        scene.rootNode.addChildNode(directional)
+        let renderer = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
+        renderer.scene = scene
+        renderer.pointOfView = camera
+        let picture = renderer.snapshot(atTime: 0, with: CGSize(width: 600, height: 600), antialiasingMode: .multisampling4X)
+        cache[url.path] = picture
+        return picture
     }
 }

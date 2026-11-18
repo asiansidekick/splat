@@ -87,10 +87,12 @@ extension MannequinPose {
             // Phil, 2026-11-18: a raised leg twisted unnaturally. The hip turns in and out only a little, and less
             // the higher the leg is lifted.
             let lifted = abs(l.out) > 90 || l.forward > 60
-            l.inward = clamp(l.inward, lifted ? -12 : -25, lifted ? 12 : 30)
+            // A bent knee leaves little room to twist the thigh, and a thigh raised forward can't also swing far out.
+            let twist: Float = l.knee > 60 ? 10 : (lifted ? 12 : 25)
+            l.inward = clamp(l.inward, -twist, min(twist + 5, 30))
             if abs(l.out) <= 90 {
-                l.out = clamp(l.out, -25, 45)
                 l.forward = clamp(l.forward, -30, 100)
+                l.out = clamp(l.out, -25, l.forward > 45 ? 20 : 45)
             }
             return l
         }

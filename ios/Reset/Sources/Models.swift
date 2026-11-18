@@ -306,7 +306,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             try? FileManager.default.removeItem(at: FBXImport.texturesFolder(for: destination))
             return nil
         }
-        if keep, !fbx, model.scan != true { ModelLibrary.keep(destination, name: model.name) }
+        if keep, model.scan != true { ModelLibrary.keep(destination, name: model.name) }
         models.append(model)
         return id
     }

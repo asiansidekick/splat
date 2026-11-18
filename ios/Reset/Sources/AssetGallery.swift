@@ -17,14 +17,23 @@ enum ModelLibrary {
     /// Keeps a copy of a stored model (a USDZ) under its name. A model of the same name is replaced.
     static func keep(_ stored: URL, name: String, replacing: Bool = true) {
         let clean = name.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces)
-        guard stored.pathExtension.lowercased() == "usdz", !clean.isEmpty, !clean.hasPrefix("Scan ") else { return }
-        let target = folder.appendingPathComponent("\(clean).usdz")
+        let kind = stored.pathExtension.lowercased()
+        guard kind == "usdz" || kind == "fbx", !clean.isEmpty, !clean.hasPrefix("Scan ") else { return }
+        let target = folder.appendingPathComponent("\(clean).\(kind)")
         let exists = FileManager.default.fileExists(atPath: target.path)
         if exists, !replacing { return }
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             if exists { try FileManager.default.removeItem(at: target) }
             try FileManager.default.copyItem(at: stored, to: target)
+            // Phil, 2026-11-18: imported FBX characters are kept too, with the pictures that came with them.
+            if kind == "fbx" {
+                let pictures = FBXImport.texturesFolder(for: target)
+                try? FileManager.default.removeItem(at: pictures)
+                if FileManager.default.fileExists(atPath: FBXImport.texturesFolder(for: stored).path) {
+                    try FileManager.default.copyItem(at: FBXImport.texturesFolder(for: stored), to: pictures)
+                }
+            }
             if replacing { removed.remove(clean) }
         } catch {
             Diagnostics.log("Could not keep \(clean) in the gallery: \(error.localizedDescription)")
@@ -35,7 +44,7 @@ enum ModelLibrary {
     static func all() -> [URL] {
         let keys: [URLResourceKey] = [.contentModificationDateKey]
         let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys)) ?? []
-        return files.filter { $0.pathExtension.lowercased() == "usdz" }
+        return files.filter { ["usdz", "fbx"].contains($0.pathExtension.lowercased()) }
             .map { ($0, (try? $0.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast) }
             .sorted { $0.1 > $1.1 }
             .map(\.0)
@@ -45,12 +54,14 @@ enum ModelLibrary {
     static func rename(_ url: URL, to text: String) {
         let clean = text.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, clean != url.deletingPathExtension().lastPathComponent else { return }
-        var target = url.deletingLastPathComponent().appendingPathComponent("\(clean).usdz")
+        let kind = url.pathExtension
+        var target = url.deletingLastPathComponent().appendingPathComponent("\(clean).\(kind)")
         var number = 2
         while FileManager.default.fileExists(atPath: target.path) {
-            target = url.deletingLastPathComponent().appendingPathComponent("\(clean) \(number).usdz")
+            target = url.deletingLastPathComponent().appendingPathComponent("\(clean) \(number).\(kind)")
             number += 1
         }
+        if kind.lowercased() == "fbx" { try? FileManager.default.moveItem(at: FBXImport.texturesFolder(for: url), to: FBXImport.texturesFolder(for: target)) }
         // The old name is remembered as gone, so models placed under it earlier don't bring it back.
         removed.insert(url.deletingPathExtension().lastPathComponent)
         try? FileManager.default.moveItem(at: url, to: target)
@@ -59,6 +70,7 @@ enum ModelLibrary {
     static func delete(_ url: URL) {
         removed.insert(url.deletingPathExtension().lastPathComponent)
         try? FileManager.default.removeItem(at: url)
+        if url.pathExtension.lowercased() == "fbx" { try? FileManager.default.removeItem(at: FBXImport.texturesFolder(for: url)) }
     }
 
     /// Models already placed in earlier references come into the gallery too, once each.
@@ -69,8 +81,9 @@ enum ModelLibrary {
         for reference in ReferenceStore.all() {
             for model in reference.models where model.mannequin == nil && !examples.contains(model.name) && !skipped.contains(model.name) {
                 let file = ReferenceStore.folder(for: reference.id).appendingPathComponent(model.file)
-                guard model.scan != true, file.pathExtension.lowercased() == "usdz", FileManager.default.fileExists(atPath: file.path),
-                      !FileManager.default.fileExists(atPath: folder.appendingPathComponent("\(model.name).usdz").path)
+                let kind = file.pathExtension.lowercased()
+                guard model.scan != true, kind == "usdz" || kind == "fbx", FileManager.default.fileExists(atPath: file.path),
+                      !FileManager.default.fileExists(atPath: folder.appendingPathComponent("\(model.name).\(kind)").path)
                 else { continue }
                 keep(file, name: model.name, replacing: false)
                 found += 1
@@ -266,7 +279,9 @@ struct AssetGallery: View {
             Button { place(asset) } label: { Label("Place", systemImage: "scope") }
             Button { newName = asset.name; renaming = asset } label: { Label("Rename", systemImage: "pencil") }
             // Phil, 2026-11-18: AirDrop objects.
-            if case .model(let url) = asset {
+            if case .model(let url) = asset, url.pathExtension.lowercased() == "fbx" {
+                ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
+            } else if case .model(let url) = asset {
                 ShareLink(item: SharedModel(url: url, name: asset.name), preview: SharePreview(asset.name)) { Label("Share", systemImage: "square.and.arrow.up") }
             } else if case .cutout(let entry) = asset {
                 ShareLink(item: SharedCutout(url: CutoutLibrary.file(for: entry.id), name: asset.name), preview: SharePreview(asset.name)) { Label("Share", systemImage: "square.and.arrow.up") }
@@ -344,6 +359,9 @@ private struct AssetPicture: View {
         .task(id: file?.path ?? "cutout") {
             if let cutout {
                 image = UIImage(data: cutout).map { Self.fit($0) }
+            } else if let file, file.pathExtension.lowercased() == "fbx" {
+                guard let rendered = await FBXThumbnail.render(file) else { return }
+                image = await Task.detached(priority: .utility) { Self.tightCrop(rendered) }.value
             } else if let file {
                 let request = QLThumbnailGenerator.Request(fileAt: file, size: CGSize(width: 800, height: 800), scale: 1, representationTypes: .thumbnail)
                 guard let rendered = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).uiImage else { return }
