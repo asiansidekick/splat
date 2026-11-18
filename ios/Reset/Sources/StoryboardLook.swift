@@ -14,6 +14,7 @@ final class StoryboardLook: ObservableObject {
     @Published private(set) var styleName: String
     private var views = NSHashTable<ARSCNView>.weakObjects()
     private var loggedFrames = false
+    private var checked = false
 
     private init() {
         on = UserDefaults.standard.bool(forKey: "storyLookOn")
@@ -38,6 +39,7 @@ final class StoryboardLook: ObservableObject {
 
     func set(_ value: Bool) {
         on = value
+        checked = false
         UserDefaults.standard.set(value, forKey: "storyLookOn")
         Diagnostics.log("Storyboard look \(value ? "on" : "off"), \(styleName)")
         refresh()
@@ -67,30 +69,72 @@ final class StoryboardLook: ObservableObject {
             if view.technique != nil { view.technique = nil }
             return
         }
-        guard let technique = view.technique ?? Self.makeTechnique() else {
+        let s = style
+        // A new technique for each style: the style is built into it (see makeTechnique).
+        guard let technique = Self.makeTechnique(s) else {
             Diagnostics.log("Storyboard look: technique could not be made")
             return
         }
-        let s = style
-        technique.setValue(NSValue(scnVector4: SCNVector4(Float(s.lines), Float(s.detail), Float(s.shadows), Float(s.greys))), forKey: "styleA")
-        technique.setValue(NSValue(scnVector4: SCNVector4(Float(s.colour), Float(s.dots), Float(s.paper), 1)), forKey: "styleB")
-        // The view keeps its own copy of a technique, so it is handed the updated one each time.
         view.technique = technique
         if !loggedFrames {
             loggedFrames = true
             Diagnostics.log("Storyboard look drawing, preferred \(view.preferredFramesPerSecond) fps")
         }
+        check(view)
     }
 
-    /// Two passes: the style at half size, then that drawn over the whole screen.
-    static func makeTechnique() -> SCNTechnique? {
+    /// Once, a second after the look goes on: compares the screen with the plain picture, so the log says whether
+    /// the look really draws (build 1360 switched on but drew nothing, and the log could not tell).
+    private func check(_ view: ARSCNView) {
+        guard !checked else { return }
+        checked = true
+        Task { @MainActor [weak self, weak view] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard let self else { return }
+            guard let view, self.on, view.window != nil else { self.checked = false; return }
+            let drawn = view.snapshot()
+            let plain = self.plainPhoto(of: view)
+            let change = Self.difference(drawn, plain)
+            Diagnostics.log(String(format: "Storyboard look check: screen differs from the plain picture by %.1f%%", change * 100))
+        }
+    }
+
+    /// Average difference of two pictures, 0 to 1, from small grey copies.
+    private static func difference(_ a: UIImage, _ b: UIImage) -> Double {
+        func grey(_ image: UIImage) -> [UInt8] {
+            let w = 32, h = 32
+            var pixels = [UInt8](repeating: 0, count: w * h)
+            guard let cg = image.cgImage, let context = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8,
+                                                                 bytesPerRow: w, space: CGColorSpaceCreateDeviceGray(),
+                                                                 bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return pixels }
+            context.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return pixels
+        }
+        let x = grey(a), y = grey(b)
+        let total = zip(x, y).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }
+        return Double(total) / Double(x.count * 255)
+    }
+
+    /// Three passes: a tiny one whose size carries the style, the style at half size, then that drawn over the
+    /// whole screen. No symbols: values set on a technique never reached the shader on Phil's phone (build 1360).
+    static func makeTechnique(_ s: DrawStyle) -> SCNTechnique? {
+        let width = 1 + min(max(s.lines, 0), 4) + 5 * min(max(s.detail, 0), 2) + 15 * min(max(s.shadows, 0), 3)
+        let height = 1 + min(max(s.greys, 0), 5) + 6 * min(max(s.colour, 0), 4) + 30 * min(max(s.dots, 0), 4)
+            + 150 * min(max(s.paper, 0), 3)
         let definition: [String: Any] = [
             "passes": [
+                "storyLookCode": [
+                    "draw": "DRAW_QUAD",
+                    "metalVertexShader": "storyLookVertex",
+                    "metalFragmentShader": "storyLookCode",
+                    "inputs": [String: Any](),
+                    "outputs": ["color": "storyLookCode"],
+                ],
                 "storyLookStyle": [
                     "draw": "DRAW_QUAD",
                     "metalVertexShader": "storyLookVertex",
                     "metalFragmentShader": "storyLookFragment",
-                    "inputs": ["colorSampler": "COLOR", "styleA": "styleA", "styleB": "styleB"],
+                    "inputs": ["colorSampler": "COLOR", "styleCode": "storyLookCode"],
                     "outputs": ["color": "storyLookHalf"],
                 ],
                 "storyLookShow": [
@@ -101,13 +145,10 @@ final class StoryboardLook: ObservableObject {
                     "outputs": ["color": "COLOR"],
                 ],
             ],
-            "sequence": ["storyLookStyle", "storyLookShow"],
+            "sequence": ["storyLookCode", "storyLookStyle", "storyLookShow"],
             "targets": [
+                "storyLookCode": ["type": "color", "size": "\(width)x\(height)"],
                 "storyLookHalf": ["type": "color", "scaleFactor": 0.5],
-            ],
-            "symbols": [
-                "styleA": ["type": "vec4"],
-                "styleB": ["type": "vec4"],
             ],
         ]
         return SCNTechnique(dictionary: definition)
