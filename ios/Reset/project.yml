@@ -20,6 +20,22 @@ targets:
       properties:
         # Nearby sync (MultipeerConnectivity): phone to phone over Wi-Fi and Bluetooth.
         NSBonjourServices: [_reset-sync._tcp, _reset-sync._udp]
+        # Objects sent by AirDrop open in Reset: USDZ models and Reset's own cut-out files.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: 3D model
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.pixar.universal-scene-description-mobile]
+          - CFBundleTypeName: Reset cut-out
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes: [com.asiansidekick.reset.cutout]
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.asiansidekick.reset.cutout
+            UTTypeDescription: Reset cut-out
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [cutout]
     settings:
       base:
         # Bundle IDs are unique across all of Apple; this one must match the App Store Connect app.

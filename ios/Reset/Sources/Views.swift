@@ -7,6 +7,9 @@ import UniformTypeIdentifiers
 
 @main
 struct ResetApp: App {
+    /// What to tell the person after an object arrives by AirDrop (or Open in Reset).
+    @State private var notice: String?
+
     init() {
         Diagnostics.logLaunch()
         Theme.installAppearance()
@@ -20,6 +23,27 @@ struct ResetApp: App {
             CameraHome()
                 .font(Theme.body)
                 .tint(Theme.accent)
+                .onOpenURL { url in
+                    guard let text = AssetShare.receive(url) else { return }
+                    notice = text
+                    Haptics.success()
+                    Task {
+                        try? await Task.sleep(for: .seconds(4))
+                        if notice == text { notice = nil }
+                    }
+                }
+                .overlay(alignment: .top) {
+                    if let notice {
+                        Text(notice)
+                            .font(Theme.headline)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(.black.opacity(0.75), in: Capsule())
+                            .padding(.top, 60)
+                            .transition(.opacity)
+                            .allowsHitTesting(false)
+                    }
+                }
         }
     }
 }

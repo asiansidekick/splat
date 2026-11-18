@@ -265,6 +265,12 @@ struct AssetGallery: View {
         } else {
             Button { place(asset) } label: { Label("Place", systemImage: "scope") }
             Button { newName = asset.name; renaming = asset } label: { Label("Rename", systemImage: "pencil") }
+            // Phil, 2026-11-18: AirDrop objects.
+            if case .model(let url) = asset {
+                ShareLink(item: SharedModel(url: url, name: asset.name), preview: SharePreview(asset.name)) { Label("Share", systemImage: "square.and.arrow.up") }
+            } else if case .cutout(let entry) = asset {
+                ShareLink(item: SharedCutout(url: CutoutLibrary.file(for: entry.id), name: asset.name), preview: SharePreview(asset.name)) { Label("Share", systemImage: "square.and.arrow.up") }
+            }
             Button(role: .destructive) { delete(asset) } label: { Label("Delete", systemImage: "trash") }
         }
     }

@@ -88,6 +88,11 @@ enum CutoutLibrary {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("CutoutLibrary", isDirectory: true)
     }
 
+    /// Where a kept cut-out's file is, for sharing.
+    static func file(for id: UUID) -> URL {
+        folder.appendingPathComponent("\(id.uuidString).\(Cutout.fileExtension)")
+    }
+
     static func save(_ package: CutoutPackage) {
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
