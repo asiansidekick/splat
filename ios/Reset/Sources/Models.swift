@@ -298,13 +298,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             Diagnostics.log("Model import failed: \(source.lastPathComponent), \(error)")
             return nil
         }
-        let model = PlacedModel(id: id, name: source.deletingPathExtension().lastPathComponent, file: file, transform: flatten(transform))
+        var model = PlacedModel(id: id, name: ScanFolder.title(ofModelAt: source) ?? source.deletingPathExtension().lastPathComponent, file: file, transform: flatten(transform))
+        if source.path.contains("/Scans/") { model.scan = true }
         guard loadNode(for: model) != nil else {
             try? FileManager.default.removeItem(at: destination)
             try? FileManager.default.removeItem(at: FBXImport.texturesFolder(for: destination))
             return nil
         }
-        if keep, !fbx { ModelLibrary.keep(destination, name: model.name) }
+        if keep, !fbx, model.scan != true { ModelLibrary.keep(destination, name: model.name) }
         models.append(model)
         return id
     }
@@ -1399,7 +1400,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         }
         // A scan's colours are photographs, with the light of the day already in them: shown as they are, not lit a
         // second time (Phil's first scan, 2026-11-17: a white bin came out grey beside the real one).
-        if model.name.hasPrefix("Scan ") {
+        if model.scan == true || model.name.hasPrefix("Scan ") {
             node.enumerateHierarchy { child, _ in
                 child.geometry?.materials.forEach { $0.lightingModel = .constant }
             }

@@ -41,6 +41,21 @@ enum ModelLibrary {
             .map(\.0)
     }
 
+    /// Gives a kept model another name by renaming its file; a name already used gets a number.
+    static func rename(_ url: URL, to text: String) {
+        let clean = text.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, clean != url.deletingPathExtension().lastPathComponent else { return }
+        var target = url.deletingLastPathComponent().appendingPathComponent("\(clean).usdz")
+        var number = 2
+        while FileManager.default.fileExists(atPath: target.path) {
+            target = url.deletingLastPathComponent().appendingPathComponent("\(clean) \(number).usdz")
+            number += 1
+        }
+        // The old name is remembered as gone, so models placed under it earlier don't bring it back.
+        removed.insert(url.deletingPathExtension().lastPathComponent)
+        try? FileManager.default.moveItem(at: url, to: target)
+    }
+
     static func delete(_ url: URL) {
         removed.insert(url.deletingPathExtension().lastPathComponent)
         try? FileManager.default.removeItem(at: url)
@@ -54,7 +69,7 @@ enum ModelLibrary {
         for reference in ReferenceStore.all() {
             for model in reference.models where model.mannequin == nil && !examples.contains(model.name) && !skipped.contains(model.name) {
                 let file = ReferenceStore.folder(for: reference.id).appendingPathComponent(model.file)
-                guard file.pathExtension.lowercased() == "usdz", FileManager.default.fileExists(atPath: file.path),
+                guard model.scan != true, file.pathExtension.lowercased() == "usdz", FileManager.default.fileExists(atPath: file.path),
                       !FileManager.default.fileExists(atPath: folder.appendingPathComponent("\(model.name).usdz").path)
                 else { continue }
                 keep(file, name: model.name, replacing: false)
@@ -82,6 +97,8 @@ struct AssetGallery: View {
     @State private var trimming: ScanFolder?
     @State private var preview: URL?
     @State private var version = 0
+    @State private var renaming: Asset?
+    @State private var newName = ""
 
     private enum Asset: Identifiable {
         case scan(ScanFolder)
@@ -97,7 +114,7 @@ struct AssetGallery: View {
         }
         var name: String {
             switch self {
-            case .scan(let folder): return folder.name
+            case .scan(let folder): return folder.title
             case .model(let url): return url.deletingPathExtension().lastPathComponent
             case .cutout(let entry): return entry.package.name
             }
@@ -188,6 +205,23 @@ struct AssetGallery: View {
             }
         }
         .quickLookPreview($preview)
+        .alert("Rename", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Save") { commitRename() }
+            Button("Cancel", role: .cancel) { renaming = nil }
+        }
+    }
+
+    private func commitRename() {
+        guard let asset = renaming else { return }
+        switch asset {
+        case .scan(let folder): folder.rename(to: newName)
+        case .model(let url): ModelLibrary.rename(url, to: newName)
+        case .cutout(let entry): CutoutLibrary.rename(entry.id, to: newName)
+        }
+        renaming = nil
+        refresh()
+        version += 1
     }
 
     private func addButton(_ word: String, _ symbol: String, _ action: @escaping () -> Void) -> some View {
@@ -220,12 +254,14 @@ struct AssetGallery: View {
     @ViewBuilder private func assetOptions(_ asset: Asset) -> some View {
         if case .scan(let folder) = asset {
             Button { place(asset) } label: { Label("Place", systemImage: "scope") }
+            Button { newName = asset.name; renaming = asset } label: { Label("Rename", systemImage: "pencil") }
             Button { trimming = folder } label: { Label("Trim", systemImage: "scissors") }
             Button { preview = folder.model } label: { Label("View", systemImage: "eye") }
             ShareLink(item: folder.model) { Label("Share", systemImage: "square.and.arrow.up") }
             Button(role: .destructive) { delete(asset) } label: { Label("Delete scan", systemImage: "trash") }
         } else {
             Button { place(asset) } label: { Label("Place", systemImage: "scope") }
+            Button { newName = asset.name; renaming = asset } label: { Label("Rename", systemImage: "pencil") }
             Button(role: .destructive) { delete(asset) } label: { Label("Delete", systemImage: "trash") }
         }
     }

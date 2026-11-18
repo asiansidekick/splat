@@ -114,6 +114,15 @@ enum CutoutLibrary {
     static func delete(_ id: UUID) {
         try? FileManager.default.removeItem(at: folder.appendingPathComponent("\(id.uuidString).\(Cutout.fileExtension)"))
     }
+
+    /// Gives a kept cut-out another name (Phil, 2026-11-18).
+    static func rename(_ id: UUID, to text: String) {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let file = folder.appendingPathComponent("\(id.uuidString).\(Cutout.fileExtension)")
+        guard !clean.isEmpty, let data = try? Data(contentsOf: file), var package = try? JSONDecoder().decode(CutoutPackage.self, from: data) else { return }
+        package.name = clean
+        try? JSONEncoder().encode(package).write(to: file, options: .atomic)
+    }
 }
 
 /// Make a scrapbook cut-out: pick photos of a person or thing from different sides, say which side each

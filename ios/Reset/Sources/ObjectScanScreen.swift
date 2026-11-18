@@ -326,7 +326,7 @@ struct LibraryView: View {
                         HStack(spacing: 12) {
                             LibraryThumb(folder: folder)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(folder.name).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
+                                Text(folder.title).font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
                                 Text(folder.hasModel ? "Model ready · \(folder.imageCount) pictures" : folder.hasFull ? "Built, not cropped yet" : "\(folder.imageCount) pictures, no model yet")
                                     .font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
                             }

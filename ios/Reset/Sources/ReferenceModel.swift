@@ -149,6 +149,8 @@ struct PlacedModel: Codable, Identifiable, Equatable {
     var mannequin: MannequinSpec?
     /// The pose given to an imported rigged character (an FBX file), nil while it stands as its file has it.
     var rigPose: MannequinPose?
+    /// Made from one of Reset's own scans (its colours are photographs, shown unlit), whatever it is now called.
+    var scan: Bool?
 }
 
 /// A straight line measured in the room, between two points in its coordinates (metres).

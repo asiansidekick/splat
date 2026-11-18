@@ -7,6 +7,28 @@ struct ScanFolder: Identifiable, Hashable {
     let url: URL
     var id: URL { url }
     var name: String { url.lastPathComponent }
+    private var titleFile: URL { url.appendingPathComponent("title.txt") }
+    /// What the scan is called on screen: the name the person gave it, else its folder's name (Phil, 2026-11-18:
+    /// rename scans). The folder and files keep their names, so nothing that refers to them breaks.
+    var title: String {
+        let given = (try? String(contentsOf: titleFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return given.isEmpty ? name : given
+    }
+    func rename(to text: String) {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if clean.isEmpty || clean == name {
+            try? FileManager.default.removeItem(at: titleFile)
+        } else {
+            try? clean.write(to: titleFile, atomically: true, encoding: .utf8)
+        }
+    }
+    /// The name a scan model file goes by when placed: its title.
+    static func title(ofModelAt file: URL) -> String? {
+        guard file.path.contains("/Scans/") else { return nil }
+        let given = (try? String(contentsOf: file.deletingLastPathComponent().appendingPathComponent("title.txt"), encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return given.isEmpty ? nil : given
+    }
     var images: URL { url.appendingPathComponent("Images", isDirectory: true) }
     var checkpoint: URL { url.appendingPathComponent("Checkpoint", isDirectory: true) }
     var model: URL { url.appendingPathComponent("\(name).usdz") }
