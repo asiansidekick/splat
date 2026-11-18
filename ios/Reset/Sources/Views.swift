@@ -1511,10 +1511,14 @@ struct Gallery: View {
                     GalleryPage(reference: reference)
                         .tag(Optional(reference.id))
                         .onTapGesture(count: 2) { load(reference) }
-                        .contextMenu { menuItems(for: reference) }
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
+            // Phil, 2026-11-18: the hold menu jumped and cross-faded. One menu on the whole pager (not one per page, rebuilt
+            // whenever a page redraws) keeps it still while the phone moves.
+            .contextMenu {
+                if let shown { menuItems(for: shown) }
+            }
             .overlay(alignment: .topTrailing) {
                 if let position = ordered.firstIndex(where: { $0.id == current }), ordered.count > 1 {
                     Text("\(position + 1) of \(ordered.count)")
@@ -1526,7 +1530,6 @@ struct Gallery: View {
                 }
             }
             .overlay { pageArrows }
-            .overlay(alignment: .center) { Color.clear.frame(width: 1, height: 1).holdHint("galleryPhoto2", "Hold the photo for options", above: true, delay: 0.8) }
             filmstrip
             if let shown {
                 // Phil, 2026-11-10: one height for every button, evenly spaced, and a Load label that is never cut short.
