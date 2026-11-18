@@ -879,7 +879,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
-        guard !isSuspended(), let id = selectedModel, let node = modelNodes[id] else { return }
+        // Phil, 2026-11-18: scale and turn were mixed up when both fingers moved. Pinch now belongs to Move and Size only.
+        guard !isSuspended(), cutoutJob == .move || cutoutJob == .size, let id = selectedModel, let node = modelNodes[id] else { gesture.scale = 1; return }
         node.simdScale *= Float(gesture.scale)
         gesture.scale = 1
         updateSize()
@@ -890,7 +891,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     @objc private func handleRotate(_ gesture: UIRotationGestureRecognizer) {
-        guard let id = selectedModel, let node = modelNodes[id] else { return }
+        // Twist belongs to Turn and Rotate only (pinch: Move and Size).
+        guard cutoutJob == .turn || cutoutJob == .tilt, let id = selectedModel, let node = modelNodes[id] else { gesture.rotation = 0; return }
         if cutoutJob == .tilt, cutoutPackages[id] == nil, let eye = self.eye {
             rollModel(node, id: id, axis: -simd_normalize(eye.columns.2.xyz), by: -Float(gesture.rotation))
             gesture.rotation = 0
@@ -1428,8 +1430,8 @@ private struct MoveHint: View {
         if carrying { return ("figure.walk", "walk, let go to drop") }
         switch job {
         case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further · hold: lift")
-        case .turn: return ("arrow.left.and.right", "turn")
-        case .size: return ("arrow.up.and.down", "↑ bigger")
+        case .turn: return ("arrow.left.and.right", "drag or twist: turn")
+        case .size: return ("arrow.up.and.down", "↑ bigger · or pinch")
         case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "drag: turn any way · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
         }
