@@ -891,6 +891,12 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     @objc private func handleRotate(_ gesture: UIRotationGestureRecognizer) {
         guard let id = selectedModel, let node = modelNodes[id] else { return }
+        if cutoutJob == .tilt, cutoutPackages[id] == nil, let eye = self.eye {
+            rollModel(node, id: id, axis: -simd_normalize(eye.columns.2.xyz), by: -Float(gesture.rotation))
+            gesture.rotation = 0
+            if gesture.state == .ended { commit(id) }
+            return
+        }
         node.simdEulerAngles.y -= Float(gesture.rotation)
         if let package = cutoutPackages[id], let plane = cutouts[id]?.plane {
             let turn = (cutoutTurn[id] ?? 0) - Float(gesture.rotation)
@@ -918,22 +924,29 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         if id == selectedModel { updateTilted() }
     }
 
-    /// Drag down tips the top toward you, drag sideways leans it that way: turns about the model's own middle, on
-    /// the horizontal lines across and along your view (Phil, 2026-11-17: rotate any object).
+    /// Free rotation about the model's own middle, like turning an object in your hands (Phil, 2026-11-18: rotate in
+    /// all axes): drag sideways turns it about the way up on your screen, drag up or down tips it about the way
+    /// across your screen, and a two-finger twist rolls it about the line of sight (see handleRotate).
     private func tipModel(_ node: SCNNode, id: UUID, by moved: CGPoint) {
         guard let eye = self.eye else { return }
-        var right = eye.columns.0.xyz
-        right.y = 0
-        var along = -eye.columns.2.xyz
-        along.y = 0
-        guard simd_length(right) > 0.05, simd_length(along) > 0.05 else { return }
-        right = simd_normalize(right)
-        along = simd_normalize(along)
-        let turn = simd_quatf(angle: Float(moved.y) * 0.008, axis: right) * simd_quatf(angle: Float(moved.x) * 0.008, axis: along)
+        let up = simd_normalize(eye.columns.1.xyz)
+        let right = simd_normalize(eye.columns.0.xyz)
+        let turn = simd_quatf(angle: Float(moved.y) * 0.008, axis: right) * simd_quatf(angle: Float(moved.x) * 0.008, axis: up)
         let box = boxes[id]
         let middle = ((box?.low ?? .zero) + (box?.high ?? .zero)) / 2
         let before = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
         node.simdWorldOrientation = simd_normalize(turn * node.simdWorldOrientation)
+        let after = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
+        node.simdWorldPosition += before - after
+        updateTilted()
+    }
+
+    /// Rolls the model about `axis` (the line of sight), through its own middle.
+    private func rollModel(_ node: SCNNode, id: UUID, axis: SIMD3<Float>, by angle: Float) {
+        let box = boxes[id]
+        let middle = ((box?.low ?? .zero) + (box?.high ?? .zero)) / 2
+        let before = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
+        node.simdWorldOrientation = simd_normalize(simd_quatf(angle: angle, axis: axis) * node.simdWorldOrientation)
         let after = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
         node.simdWorldPosition += before - after
         updateTilted()
@@ -1333,7 +1346,7 @@ struct ModelOverlay: View {
                     VStack(spacing: 0) {
                         // Phil, 2026-11-11: Lift for cut-outs too. 2026-11-17: Tilt for every model ("rotate any object"): tip and lean.
                         ForEach(ModelPlacer.CutoutJob.allCases, id: \.self) { job in
-                            CutoutTool(word: job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
+                            CutoutTool(word: job == .tilt && !cutout ? "Rotate" : job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
                         }
                         // Carry walks it along with the live camera, so not over a saved frame (Review).
                         if showsFloor {
@@ -1352,7 +1365,7 @@ struct ModelOverlay: View {
                     .layoutPriority(1)
                     Spacer(minLength: 0)
                     if showsCutoutHelp || placer.carrying || placer.pinStep != nil {
-                        MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText, pin: placer.pinStep)
+                        MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText, pin: placer.pinStep, cutout: cutout)
                             .transition(.opacity)
                     }
                     Spacer(minLength: 0)
@@ -1403,6 +1416,7 @@ private struct MoveHint: View {
     let carrying: Bool
     let size: String?
     var pin: ModelPlacer.PinStep?
+    var cutout = false
 
     private var parts: (arrow: String, words: String) {
         switch pin {
@@ -1416,7 +1430,7 @@ private struct MoveHint: View {
         case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further · hold: lift")
         case .turn: return ("arrow.left.and.right", "turn")
         case .size: return ("arrow.up.and.down", "↑ bigger")
-        case .tilt: return ("arrow.up.and.down.and.arrow.left.and.right", "↕ tip  ↔ lean")
+        case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "drag: turn any way · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
         }
     }
