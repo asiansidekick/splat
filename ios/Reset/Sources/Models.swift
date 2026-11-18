@@ -897,21 +897,67 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         node.simdWorldPosition = simd_mix(node.simdWorldPosition, target, SIMD3(repeating: 0.25))
     }
 
+    // Phil, 2026-11-18: scale and turn got mixed when both fingers moved, but pinch and twist stay the same gestures.
+    // The first clear move decides: a pinch locks to Size, a twist locks to Turn (Roll under Rotate), and the other
+    // is ignored until the fingers lift. Until then nothing moves, and the whole move so far is applied at once.
+    private enum TwoFinger { case undecided, scale, turn }
+    private var twoFinger = TwoFinger.undecided
+    private var twoFingerCount = 0
+    private var pinchSize: Float = 0
+    private var twistSize: Float = 0
+
+    private func twoFingerState(_ gesture: UIGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            if twoFingerCount == 0 { twoFinger = .undecided; pinchSize = 0; twistSize = 0 }
+            twoFingerCount += 1
+        case .ended, .cancelled, .failed:
+            twoFingerCount = max(0, twoFingerCount - 1)
+            if twoFingerCount == 0 { twoFinger = .undecided; pinchSize = 0; twistSize = 0 }
+        default:
+            break
+        }
+    }
+
+    private func twoFingerAllows(_ mode: TwoFinger) -> Bool {
+        if twoFinger == .undecided {
+            // A 5% change of size, or about 4 degrees of twist, makes the call; whichever is further past its mark wins.
+            let pinch = pinchSize / 0.05
+            let twist = twistSize / 0.07
+            if max(pinch, twist) >= 1 {
+                twoFinger = pinch >= twist ? .scale : .turn
+                Haptics.tap()
+            }
+        }
+        return twoFinger == mode
+    }
+
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
-        // Phil, 2026-11-18: scale and turn were mixed up when both fingers moved. Pinch now belongs to Move and Size only.
-        guard !isSuspended(), cutoutJob == .move || cutoutJob == .size, let id = selectedModel, let node = modelNodes[id] else { gesture.scale = 1; return }
+        twoFingerState(gesture)
+        let ended = gesture.state == .ended || gesture.state == .cancelled
+        guard !isSuspended(), let id = selectedModel, let node = modelNodes[id] else { gesture.scale = 1; return }
+        if twoFinger == .undecided { pinchSize = max(pinchSize, abs(log(max(Float(gesture.scale), 0.01)))) }
+        guard twoFingerAllows(.scale) else {
+            if twoFinger != .undecided { gesture.scale = 1 }
+            return
+        }
         node.simdScale *= Float(gesture.scale)
         gesture.scale = 1
         updateSize()
         refreshDimensions(id)
         let active = gesture.state == .began || gesture.state == .changed
         if pinching != active { pinching = active }
-        if gesture.state == .ended { commit(id) }
+        if ended { commit(id) }
     }
 
     @objc private func handleRotate(_ gesture: UIRotationGestureRecognizer) {
-        // Twist belongs to Turn and Rotate only (pinch: Move and Size).
-        guard cutoutJob == .turn || cutoutJob == .tilt, let id = selectedModel, let node = modelNodes[id] else { gesture.rotation = 0; return }
+        twoFingerState(gesture)
+        guard let id = selectedModel, let node = modelNodes[id] else { gesture.rotation = 0; return }
+        if twoFinger == .undecided { twistSize = max(twistSize, abs(Float(gesture.rotation))) }
+        guard twoFingerAllows(.turn) else {
+            if twoFinger != .undecided { gesture.rotation = 0 }
+            return
+        }
         if cutoutJob == .tilt, cutoutPackages[id] == nil, let eye = self.eye {
             rollModel(node, id: id, axis: -simd_normalize(eye.columns.2.xyz), by: -Float(gesture.rotation))
             gesture.rotation = 0
