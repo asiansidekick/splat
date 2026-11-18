@@ -382,6 +382,7 @@ struct CameraHome: View {
         case .pdf: panel = .pdf(reference.id)
         case .delete: deleting = reference
         case .photos: exportPhotos(reference)
+        case .storyboardPhotos: exportStoryboard(reference)
         case .hero: toggleHero(reference)
         case .sketch:
             if let photo = PhotoLibrary.images(of: reference).first {
@@ -524,6 +525,30 @@ struct CameraHome: View {
             let images = PhotoLibrary.images(of: reference)
             let saved = await PhotoLibrary.save(images, stamp: PhotoStamp(reference))
             show(saved ? "Saved \(images.count) \(images.count == 1 ? "photo" : "photos") to Photos" : "Allow Photos in Settings, Reset, Photos")
+        }
+    }
+
+    /// Phil, 2026-11-19: any reference drawn in the current Storyboard look style, saved to Photos.
+    private func exportStoryboard(_ reference: Reference) {
+        let look = StoryboardLook.shared
+        let style = look.style
+        let name = look.styleName
+        show("Drawing in \(name)…", seconds: 30)
+        Task {
+            let images = PhotoLibrary.images(of: reference)
+            var count = 0
+            var saved = true
+            // A few at a time, so a long scan's photos are never all held drawn at once.
+            for start in stride(from: 0, to: images.count, by: 4) {
+                let batch = Array(images[start..<min(start + 4, images.count)])
+                let drawn = await Task.detached(priority: .userInitiated) {
+                    batch.compactMap { StoryboardRenderer.shared.render($0, style: style, maxSide: 2400) }
+                }.value
+                guard await PhotoLibrary.save(drawn, stamp: PhotoStamp(reference)) else { saved = false; break }
+                count += drawn.count
+            }
+            Diagnostics.log("Storyboard look export: \(count) of \(images.count) photos drawn, \(name)")
+            show(saved ? "Saved \(count) \(count == 1 ? "drawing" : "drawings") to Photos" : "Allow Photos in Settings, Reset, Photos")
         }
     }
 
@@ -1354,7 +1379,7 @@ struct ReferenceThumbnail: View {
 /// older ones, tap Load (or double-tap the photo) to bring up its ghost. The grid button shows them
 /// all by scene. Press and hold a photo for its take log, compare, report, slate or delete.
 struct Gallery: View {
-    enum Action { case takeLog, compare, review, measure, explore, slate, pdf, delete, photos, sketch, hero, cutout, edit }
+    enum Action { case takeLog, compare, review, measure, explore, slate, pdf, delete, photos, storyboardPhotos, sketch, hero, cutout, edit }
 
     @Environment(\.dismiss) private var dismiss
     /// Oldest first, so the newest is the last page, as in Photos.
@@ -1762,6 +1787,7 @@ struct Gallery: View {
         Menu {
             Button { dismiss(); action(.pdf, reference) } label: { Label("PDF report", systemImage: "doc.richtext") }
             Button { dismiss(); action(.photos, reference) } label: { Label("Save to Photos", systemImage: "photo.on.rectangle.angled") }
+            Button { dismiss(); action(.storyboardPhotos, reference) } label: { Label("Save in Storyboard look", systemImage: "paintbrush.pointed") }
         } label: { Label("Share", systemImage: "square.and.arrow.up") }
         Button(role: .destructive) { dismiss(); action(.delete, reference) } label: { Label("Delete", systemImage: "trash") }
     }

@@ -56,25 +56,26 @@ static float3 lookBlur(texture2d<float, access::sample> t, sampler s, float2 uv,
     return sum / 16.0;
 }
 
-/// styleA: lines (0 off to 4 heavy), detail (0 simple to 2 detailed), shadows (0 to 3), tones (0 smooth, 1 to 5).
-/// styleB: colour (0 none, 1 sepia, 2 muted, 3 full, 4 bold), texture (0 off, 1 dots, 2 tone, 3 hatch, 4 cross),
-/// paper (0 to 3), on (1 when set; 0 means the values never arrived, so the picture shows as it is).
+/// The style arrives as the size of a small texture (`styleCode`), which SceneKit always passes along. Build 1360 sent
+/// it as two vec4 values instead; they never reached the shader on Phil's phone, so the picture showed plain.
+/// Width - 1 = lines + 5 * detail + 15 * shadows; height - 1 = tones + 6 * colour + 30 * texture + 150 * paper.
 fragment half4 storyLookFragment(LookVertexOut in [[stage_in]],
                                  texture2d<float, access::sample> colorSampler [[texture(0)]],
-                                 constant float4& styleA [[buffer(0)]],
-                                 constant float4& styleB [[buffer(1)]]) {
+                                 texture2d<float, access::sample> styleCode [[texture(1)]]) {
     constexpr sampler s(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 size = float2(colorSampler.get_width(), colorSampler.get_height());
-    float3 original = colorSampler.sample(s, in.uv).rgb;
-    if (styleB.w < 0.5) { return half4(half3(original), 1.0h); }
 
-    int lines = int(styleA.x + 0.5);
-    int detail = clamp(int(styleA.y + 0.5), 0, 2);
-    int shadows = clamp(int(styleA.z + 0.5), 0, 3);
-    int tones = int(styleA.w + 0.5);
-    int colourMode = int(styleB.x + 0.5);
-    int dots = int(styleB.y + 0.5);
-    int paperStep = clamp(int(styleB.z + 0.5), 0, 3);
+    int a = int(styleCode.get_width()) - 1;
+    int b = int(styleCode.get_height()) - 1;
+    // Not a style code (SceneKit sized the texture another way): Marker.
+    if (a < 0 || a >= 60 || b < 0 || b >= 600) { a = 3 + 5 * 1 + 15 * 1; b = 4; }
+    int lines = a % 5;
+    int detail = (a / 5) % 3;
+    int shadows = clamp(a / 15, 0, 3);
+    int tones = b % 6;
+    int colourMode = (b / 6) % 5;
+    int dots = (b / 30) % 5;
+    int paperStep = clamp(b / 150, 0, 3);
 
     float unit = max(size.x, size.y) / 1000.0;
     float2 pixel = 1.0 / size;
@@ -148,6 +149,9 @@ fragment half4 storyLookFragment(LookVertexOut in [[stage_in]],
     }
     return half4(half3(clamp(c, 0.0, 1.0)), 1.0h);
 }
+
+/// Fills the style code target; only its size matters.
+fragment half4 storyLookCode(LookVertexOut in [[stage_in]]) { return half4(0.0h); }
 
 /// Draws the half-size styled picture over the whole screen.
 fragment half4 storyLookShow(LookVertexOut in [[stage_in]],
