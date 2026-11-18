@@ -128,7 +128,8 @@ final class StoryboardRenderer: @unchecked Sendable {
         context = CIContext(options: [.workingColorSpace: sRGB, .workingFormat: CIFormat.RGBAh, .cacheIntermediates: false])
         var lines: CIColorKernel?
         var compose: CIColorKernel?
-        if let url = Bundle.main.url(forResource: "default", withExtension: "metallib"),
+        // Built from Storyboard.ci.metal by the project's Core Image build rule (project.yml).
+        if let url = Bundle.main.url(forResource: "Storyboard.ci", withExtension: "metallib"),
            let data = try? Data(contentsOf: url) {
             do {
                 lines = try CIColorKernel(functionName: "storyLines", fromMetalLibraryData: data)
@@ -137,7 +138,7 @@ final class StoryboardRenderer: @unchecked Sendable {
                 Diagnostics.log("Storyboard: kernels failed to load: \(error)")
             }
         } else {
-            Diagnostics.log("Storyboard: no default.metallib in the app")
+            Diagnostics.log("Storyboard: no Storyboard.ci.metallib in the app")
         }
         linesKernel = lines
         composeKernel = compose

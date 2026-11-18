@@ -15,6 +15,19 @@ targets:
         optional: true
     # A shared scheme, so CI can archive the app for TestFlight.
     scheme: {}
+    # Storyboard drawing styles: Core Image kernels (*.ci.metal) need their own compile and link flags, so they
+    # build into Storyboard.ci.metallib; ordinary Metal shaders (the live Storyboard look) stay in default.metallib.
+    buildRules:
+      - name: Core Image kernels
+        filePattern: "*.ci.metal"
+        script: |
+          set -e
+          air="${DERIVED_FILE_DIR}/${INPUT_FILE_BASE}.air"
+          mkdir -p "${DERIVED_FILE_DIR}" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          xcrun -sdk "${PLATFORM_NAME}" metal -c -fcikernel "${INPUT_FILE_PATH}" -o "${air}"
+          xcrun -sdk "${PLATFORM_NAME}" metallib -cikernel "${air}" -o "${SCRIPT_OUTPUT_FILE_0}"
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(INPUT_FILE_BASE).metallib
     info:
       path: Info.plist
       properties:
@@ -59,8 +72,5 @@ targets:
         INFOPLIST_KEY_UIFileSharingEnabled: YES
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         SWIFT_VERSION: "5.9"
-        # Storyboard drawing styles are Core Image kernels written in Metal (Sources/Storyboard.metal).
-        MTL_COMPILER_FLAGS: "-fcikernel"
-        MTLLINKER_FLAGS: "-cikernel"
         # FBX files are read with ufbx (C, Sources/FBX).
         SWIFT_OBJC_BRIDGING_HEADER: Sources/FBX/Reset-Bridging-Header.h
