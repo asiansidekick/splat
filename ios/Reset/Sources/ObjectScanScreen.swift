@@ -54,6 +54,9 @@ struct ScanScreen: View {
         }
         .quickLookPreview($preview)
         .statusBarHidden()
+        // The camera restarting puts the torch out, so it is lit again after each step; off when the scanner closes.
+        .onChange(of: model.phase) { _ in Torch.shared.applySoon() }
+        .onDisappear { Torch.shared.switchOff() }
     }
 
     /// Area mode has no object to aim at, so Apple's object reticle is hidden (iOS 18+).
@@ -83,6 +86,7 @@ struct ScanScreen: View {
     private var captureControls: some View {
         VStack(spacing: 0) {
             topBar
+            TorchDial().padding(.top, 8)
             Spacer()
             if model.phase == .passDone { passChoices }
             Text(stepText)
@@ -103,6 +107,8 @@ struct ScanScreen: View {
                 Text("\(model.shots) / \(model.maxShots)")
                     .font(.caption.monospacedDigit().weight(.semibold))
             }
+            // Phil, 2026-11-18: a torch for the 3D scan. Tap for on and off, hold for the brightness.
+            TorchButton()
             Spacer()
             Text(model.hint)
                 .font(.caption.weight(.semibold))

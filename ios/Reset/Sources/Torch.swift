@@ -34,6 +34,7 @@ final class Torch: ObservableObject {
     /// The camera ARKit is using (iOS 16 and later), which owns the torch.
     private var device: AVCaptureDevice? {
         ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera
+            ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
     }
 
     var available: Bool { device?.hasTorch == true }
