@@ -12,6 +12,14 @@ enum ModelDimensions {
     static let depth = UIColor(red: 0.3, green: 0.65, blue: 1, alpha: 1)
     static let height = UIColor(red: 0.35, green: 0.9, blue: 0.4, alpha: 1)
 
+    /// Figure sizes the Sizes tool steps through (Phil, 2026-11-18: change the font size of the dimensions).
+    static let textSteps: [Float] = [0.7, 1, 1.8, 3.2]
+    static let textStepNames = ["S", "M", "L", "XL"]
+    static var textScale: Float {
+        let step = UserDefaults.standard.object(forKey: "dimensionStep") as? Int ?? 1
+        return textSteps[min(max(step, 0), textSteps.count - 1)]
+    }
+
     /// A node to add to the model's node. `low` and `high` are the model's box in its own
     /// coordinates and `scale` its (even) scale; the node undoes the scale so the arrows keep
     /// the same thickness and the labels the same size whatever the model has been pinched to.
@@ -28,7 +36,7 @@ enum ModelDimensions {
         // Just outside the box, so the arrows sit beside the model rather than on it.
         let gap = min(max(largest * 0.05, 0.015), 0.1)
         let radius = min(max(largest * 0.005, 0.0015), 0.008)
-        let label = min(max(largest * 0.07, 0.03), 0.15)
+        let label = min(max(largest * 0.07, 0.03), 0.15) * textScale
 
         // Width along the front bottom edge, depth along the right bottom edge, height up the
         // front right corner.

@@ -54,6 +54,37 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             modelNodes.keys.forEach(refreshDimensions)
         }
     }
+    /// How large the figures are: 0 small to 3 extra large (see ModelDimensions.textSteps).
+    @Published var dimensionStep = UserDefaults.standard.object(forKey: "dimensionStep") as? Int ?? 1 {
+        didSet {
+            UserDefaults.standard.set(dimensionStep, forKey: "dimensionStep")
+            modelNodes.keys.forEach(refreshDimensions)
+        }
+    }
+    /// A word or two that shows for a moment after the Sizes tool is tapped.
+    @Published var dimensionHint: String?
+
+    /// Sizes steps off, small, medium, large, extra large, then off again.
+    func cycleDimensions() {
+        if !showDimensions {
+            dimensionStep = 0
+            showDimensions = true
+        } else if dimensionStep < ModelDimensions.textSteps.count - 1 {
+            dimensionStep += 1
+        } else {
+            showDimensions = false
+        }
+        let words = showDimensions ? "Figures: " + ModelDimensions.textStepNames[dimensionStep] : "Figures off"
+        let teach = HintStore.shouldShow("sizesTip")
+        if teach, !showDimensions { HintStore.shown("sizesTip") }
+        let hint = teach ? words + " · tap Sizes again to change" : words
+        dimensionHint = hint
+        Haptics.tap()
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            if dimensionHint == hint { dimensionHint = nil }
+        }
+    }
     private var modelNodes: [UUID: SCNNode] = [:]
     /// Scrapbook cut-outs on show: each turns to the photo that matches the side the camera sees.
     private struct CutoutState {
@@ -1549,7 +1580,7 @@ struct ModelOverlay: View {
         if let onAdd {
             CutoutTool(word: "Add", symbol: "plus", tint: Theme.accent, action: onAdd)
         }
-        CutoutTool(word: placer.showDimensions ? "Hide sizes" : "Sizes", symbol: "ruler") { placer.showDimensions.toggle() }
+        CutoutTool(word: placer.showDimensions ? "Sizes " + ModelDimensions.textStepNames[min(max(placer.dimensionStep, 0), 3)] : "Sizes", symbol: "ruler") { placer.cycleDimensions() }
         CutoutTool(word: "Delete", symbol: "trash", tint: .red) { placer.deleteSelectedModel() }
         CutoutTool(word: "Done", symbol: "checkmark") { placer.selectedModel = nil }
     }

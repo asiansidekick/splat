@@ -106,6 +106,14 @@ struct ObjectNudge: View {
 
     var body: some View {
         ZStack {
+            if let hint = placer.dimensionHint {
+                Text(hint)
+                    .font(Theme.font(size: 14, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.9), radius: 3)
+                    .fixedSize()
+                    .transition(.opacity)
+            }
             if let label {
                 HoldHintBubble(label: label)
                     .fixedSize()
