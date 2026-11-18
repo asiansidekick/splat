@@ -1135,7 +1135,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let middle = ((box.low + box.high) / 2)
         let centre = (node.simdWorldTransform * SIMD4(middle, 1)).xyz
         let size = (box.high - box.low) * node.simdScale
-        return (centre, max(simd_length(size) * 0.5 * 0.9, 0.12))
+        // Short levers (Phil, 2026-11-18): about the model's own half-size, so a near knob doesn't swell over the screen.
+        return (centre, max(max(size.x, size.y, size.z) * 0.5 * 0.7, 0.08))
     }
 
     private static func gizmoMaterial(_ colour: UIColor, alpha: CGFloat = 1) -> SCNMaterial {
@@ -1173,12 +1174,12 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 let axis = SCNNode()
                 axis.rotation = tips[index]
                 axis.renderingOrder = 2000
-                let line = SCNCylinder(radius: 0.012, height: 2)
+                let line = SCNCylinder(radius: 0.01, height: 2)
                 line.radialSegmentCount = 8
                 line.materials = [Self.gizmoMaterial(colours[index])]
                 axis.addChildNode(SCNNode(geometry: line))
                 for end: Float in [1, -1] {
-                    let knob = SCNSphere(radius: end > 0 ? 0.11 : 0.07)
+                    let knob = SCNSphere(radius: end > 0 ? 0.075 : 0.05)
                     knob.segmentCount = 16
                     knob.materials = [Self.gizmoMaterial(colours[index])]
                     let ball = SCNNode(geometry: knob)
@@ -1188,8 +1189,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 }
                 // The picked lever stretches far out both ways, fading with distance.
                 if gizmoRing == index {
-                    let pieces = 24
-                    let reach: Float = 7
+                    let pieces = 10
+                    let reach: Float = 3
                     for end: Float in [1, -1] {
                         for piece in 0..<pieces {
                             let fade = 1 - Float(piece) / Float(pieces)
@@ -1248,8 +1249,12 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         guard let ring = gizmoRing, let end = gizmoEnd else { return }
         let knob = knobPoint(ring, end: end, node: node)
         let shown = view.projectPoint(SCNVector3(knob.x, knob.y, knob.z))
-        guard shown.z > 0, shown.z < 1 else { return }
-        let target = SIMD3<Float>(view.unprojectPoint(SCNVector3(shown.x + Float(moved.x), shown.y + Float(moved.y), shown.z)))
+        guard shown.z > 0, shown.z < 1, let eye = self.eye?.columns.3.xyz else { return }
+        // The finger's line of sight, and the point on it as far from the camera as the knob is: steadier than
+        // unprojecting at the knob's own depth, which jumps when a knob comes close to the camera.
+        let far = SIMD3<Float>(view.unprojectPoint(SCNVector3(shown.x + Float(moved.x), shown.y + Float(moved.y), 1)))
+        guard simd_length(far - eye) > 0.001 else { return }
+        let target = eye + simd_normalize(far - eye) * simd_distance(knob, eye)
         let from = knob - gizmoCentre
         let to = target - gizmoCentre
         guard simd_length(from) > 0.001, simd_length(to) > 0.001 else { return }
