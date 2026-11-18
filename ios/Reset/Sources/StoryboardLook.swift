@@ -165,19 +165,26 @@ final class StoryboardLook: ObservableObject {
     }
 }
 
-/// While the look is on: the style (tap for the next one), Make panel, and Off. Top of the recording and reset
-/// screens, plain words.
+/// While the look is on: two small pills down the right edge, the style (tap for the next one) and Panel. Phil,
+/// 2026-11-19: the old three-button row took too much room and showed in screenshots, so it is left out of them,
+/// and Look off is in the menus (and on holding the style pill).
 struct StoryboardLookBar: View {
     @ObservedObject private var look = StoryboardLook.shared
     let makePanel: () -> Void
 
     var body: some View {
         if look.on {
-            HStack(spacing: 8) {
-                lookButton("Look: \(look.styleName) ›", name: "Look style", on: true) { look.nextStyle() }
-                lookButton("Make panel", name: "Look panel", on: false) { makePanel() }
-                lookButton("Look off", name: "Look off", on: false) { look.set(false) }
+            VStack(alignment: .trailing, spacing: 6) {
+                lookButton(look.styleName + " ›", name: "Look style", on: true) { look.nextStyle() }
+                    .contextMenu {
+                        Button { makePanel() } label: { Label("Make panel", systemImage: "rectangle.split.3x1") }
+                        Button { look.set(false) } label: { Label("Look off", systemImage: "paintbrush.pointed") }
+                    }
+                lookButton("Panel", name: "Look panel", on: false) { makePanel() }
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.trailing, 10)
+            .hiddenInScreenshots()
             .transition(.opacity)
         }
     }
@@ -185,12 +192,12 @@ struct StoryboardLookBar: View {
     private func lookButton(_ title: String, name: String, on: Bool, action: @escaping () -> Void) -> some View {
         Button { TapGate.run(name) { Haptics.tap(); action() } } label: {
             Text(title)
-                .font(Theme.footnote.weight(.semibold))
+                .font(Theme.caption.weight(.semibold))
                 .lineLimit(1)
                 .fixedSize()
-                .padding(.horizontal, 12)
-                .frame(minHeight: 34)
-                .background(on ? Theme.active : Color.black.opacity(0.55), in: Capsule())
+                .padding(.horizontal, 9)
+                .frame(minHeight: 26)
+                .background(on ? Theme.active.opacity(0.85) : Color.black.opacity(0.4), in: Capsule())
                 .foregroundStyle(on ? Color.black : Color.white)
         }
         .caughtTap(name) { Haptics.tap(); action() }
