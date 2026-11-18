@@ -111,6 +111,8 @@ struct AssetGallery: View {
     @State private var assets: [Asset] = []
     @State private var loaded = false
     @State private var message: String?
+    /// Phil, 2026-11-18: the grid scales in rows and columns. Pinch, or tap the grid button, to change.
+    @AppStorage("galleryColumns") private var columns = 2
 
     var body: some View {
         NavigationStack {
@@ -122,15 +124,15 @@ struct AssetGallery: View {
                     Text("Nothing here yet. Scans, 3D models and cut-outs you add show here, ready to place again.")
                         .font(Theme.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(30)
                 }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 12) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: min(max(columns, 1), 5)), spacing: 12) {
                     ForEach(assets) { asset in
                         Button { place(asset) } label: {
                             VStack(spacing: 4) {
                                 AssetPicture(file: asset.file, cutout: Self.picture(of: asset))
-                                    .frame(height: 190)
                                     .frame(maxWidth: .infinity)
+                                    .aspectRatio(1, contentMode: .fit)
                                     .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                                Text(asset.name).font(Theme.caption.weight(.semibold)).lineLimit(3).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                                Text(asset.name).font(columns >= 4 ? Theme.caption2.weight(.semibold) : Theme.caption.weight(.semibold)).lineLimit(3).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                                 Text(asset.kind).font(Theme.caption2).foregroundStyle(.secondary)
                             }
                         }
@@ -146,9 +148,21 @@ struct AssetGallery: View {
                 }
                 .padding(12)
             }
+            .gesture(MagnifyGesture().onEnded { value in
+                if value.magnification > 1.2 { columns = max(1, columns - 1) }
+                else if value.magnification < 0.83 { columns = min(5, columns + 1) }
+            })
             .navigationTitle("Gallery")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Back") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Back") { dismiss() } }
+                ToolbarItem(placement: .primaryAction) {
+                    // 1 to 5 across, round again after 5.
+                    Button { columns = columns >= 5 ? 1 : columns + 1 } label: {
+                        Label("\(columns) across", systemImage: columns <= 1 ? "square" : columns == 2 ? "square.grid.2x2" : "square.grid.3x3")
+                    }
+                }
+            }
         }
         .preferredColorScheme(.dark)
         .task { await load() }
@@ -201,7 +215,7 @@ struct AssetGallery: View {
     }
 }
 
-/// A small picture of an asset: a cut-out's own photo, or a rendering of the 3D file.
+/// A small picture of an asset: a cut-out's own photo, or a rendering of the 3D file cropped close round the object.
 private struct AssetPicture: View {
     let file: URL?
     let cutout: Data?
@@ -210,18 +224,70 @@ private struct AssetPicture: View {
     var body: some View {
         ZStack {
             if let image {
-                Image(uiImage: image).resizable().scaledToFit().padding(4)
+                Image(uiImage: image).resizable().scaledToFill()
             } else {
                 Image(systemName: file == nil ? "figure.stand" : "cube").font(.system(size: 30)).foregroundStyle(.secondary)
             }
         }
+        .clipped()
         .task(id: file?.path ?? "cutout") {
             if let cutout {
-                image = UIImage(data: cutout)
+                image = UIImage(data: cutout).map { Self.fit($0) }
             } else if let file {
-                let request = QLThumbnailGenerator.Request(fileAt: file, size: CGSize(width: 380, height: 380), scale: 2, representationTypes: .thumbnail)
-                image = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).uiImage
+                let request = QLThumbnailGenerator.Request(fileAt: file, size: CGSize(width: 800, height: 800), scale: 1, representationTypes: .thumbnail)
+                guard let rendered = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).uiImage else { return }
+                // The crop is made off the main thread.
+                image = await Task.detached(priority: .utility) { Self.tightCrop(rendered) }.value
             }
+        }
+    }
+
+    /// A cut-out's photo: shown whole, padded to a square so it fills the tile evenly.
+    private static func fit(_ picture: UIImage) -> UIImage { picture }
+
+    /// Phil, 2026-11-18: "zoom in on the objects, reduce the white". The preview has the object small in a white
+    /// square (and Apple's cube badge top right): find where the object is, cut a square close round it, and
+    /// draw that at full size.
+    private static func tightCrop(_ picture: UIImage) -> UIImage {
+        guard let cg = picture.cgImage else { return picture }
+        let width = cg.width, height = cg.height
+        // Look at a 200-pixel copy.
+        let probe = 200
+        guard let context = CGContext(data: nil, width: probe, height: probe, bitsPerComponent: 8, bytesPerRow: probe * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return picture }
+        context.setFillColor(UIColor.white.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: probe, height: probe))
+        context.interpolationQuality = .low
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: probe, height: probe))
+        guard let data = context.data else { return picture }
+        let pixels = data.bindMemory(to: UInt8.self, capacity: probe * probe * 4)
+        var minX = probe, minY = probe, maxX = -1, maxY = -1
+        for y in 0..<probe {
+            for x in 0..<probe {
+                // The badge sits in the top right corner (CGContext rows run bottom up).
+                if x > probe * 78 / 100, y > probe * 78 / 100 { continue }
+                let p = (y * probe + x) * 4
+                if pixels[p] < 240 || pixels[p + 1] < 240 || pixels[p + 2] < 240 {
+                    minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+                }
+            }
+        }
+        guard maxX > minX, maxY > minY else { return picture }
+        // Back to full-size pixels, top row first.
+        let scaleX = CGFloat(width) / CGFloat(probe), scaleY = CGFloat(height) / CGFloat(probe)
+        let box = CGRect(x: CGFloat(minX) * scaleX, y: CGFloat(probe - 1 - maxY) * scaleY,
+                         width: CGFloat(maxX - minX + 1) * scaleX, height: CGFloat(maxY - minY + 1) * scaleY)
+        let side = max(box.width, box.height) * 1.1
+        let crop = CGRect(x: box.midX - side / 2, y: box.midY - side / 2, width: side, height: side)
+        let out: CGFloat = 480
+        let zoom = out / side
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: CGSize(width: out, height: out), format: format).image { renderer in
+            UIColor.white.setFill()
+            renderer.fill(CGRect(x: 0, y: 0, width: out, height: out))
+            UIImage(cgImage: cg).draw(in: CGRect(x: -crop.minX * zoom, y: -crop.minY * zoom, width: CGFloat(width) * zoom, height: CGFloat(height) * zoom))
         }
     }
 }
