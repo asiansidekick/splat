@@ -269,8 +269,8 @@ private struct AssetPicture: View {
         var minX = probe, minY = probe, maxX = -1, maxY = -1
         for y in 0..<probe {
             for x in 0..<probe {
-                // The badge sits in the top right corner (CGContext rows run bottom up).
-                if x > probe * 78 / 100, y > probe * 78 / 100 { continue }
+                // Apple's cube badge sits in the top right corner (the first rows in memory are the top of the picture).
+                if x > probe * 74 / 100, y < probe * 26 / 100 { continue }
                 let p = (y * probe + x) * 4
                 if pixels[p] < 240 || pixels[p + 1] < 240 || pixels[p + 2] < 240 {
                     minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
@@ -280,9 +280,9 @@ private struct AssetPicture: View {
         guard maxX > minX, maxY > minY else { return picture }
         // Back to full-size pixels, top row first.
         let scaleX = CGFloat(width) / CGFloat(probe), scaleY = CGFloat(height) / CGFloat(probe)
-        let box = CGRect(x: CGFloat(minX) * scaleX, y: CGFloat(probe - 1 - maxY) * scaleY,
+        let box = CGRect(x: CGFloat(minX) * scaleX, y: CGFloat(minY) * scaleY,
                          width: CGFloat(maxX - minX + 1) * scaleX, height: CGFloat(maxY - minY + 1) * scaleY)
-        let side = max(box.width, box.height) * 1.1
+        let side = max(box.width, box.height) * 1.06
         let crop = CGRect(x: box.midX - side / 2, y: box.midY - side / 2, width: side, height: side)
         let out: CGFloat = 480
         let zoom = out / side
