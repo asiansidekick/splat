@@ -59,5 +59,8 @@ targets:
         INFOPLIST_KEY_UIFileSharingEnabled: YES
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         SWIFT_VERSION: "5.9"
+        # Storyboard drawing styles are Core Image kernels written in Metal (Sources/Storyboard.metal).
+        MTL_COMPILER_FLAGS: "-fcikernel"
+        MTLLINKER_FLAGS: "-cikernel"
         # FBX files are read with ufbx (C, Sources/FBX).
         SWIFT_OBJC_BRIDGING_HEADER: Sources/FBX/Reset-Bridging-Header.h
