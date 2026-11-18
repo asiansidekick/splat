@@ -84,10 +84,13 @@ extension MannequinPose {
         func leg(_ l: Leg) -> Leg {
             var l = l
             l.knee = clamp(l.knee, 0, 145)
-            l.inward = clamp(l.inward, -45, 45)
+            // Phil, 2026-11-18: a raised leg twisted unnaturally. The hip turns in and out only a little, and less
+            // the higher the leg is lifted.
+            let lifted = abs(l.out) > 90 || l.forward > 60
+            l.inward = clamp(l.inward, lifted ? -12 : -25, lifted ? 12 : 30)
             if abs(l.out) <= 90 {
-                l.out = clamp(l.out, -30, 50)
-                l.forward = clamp(l.forward, -35, 90)
+                l.out = clamp(l.out, -25, 45)
+                l.forward = clamp(l.forward, -30, 100)
             }
             return l
         }

@@ -38,6 +38,7 @@ enum PoseDrag {
             toTarget = simd_normalize(toTarget)
             // Bend the same way as now, so the elbow or knee keeps pointing where it did.
             var pole = (m - s) - simd_dot(m - s, toTarget) * toTarget
+            if !isArm { pole = SIMD3(0, 0, 1) }  // a knee always points forward, so the shin never swings sideways
             if simd_length(pole) < 0.01 { pole = isArm ? SIMD3(0, -0.3, -1) : SIMD3(0, 0, 1) }
             pole = simd_normalize(pole - simd_dot(pole, toTarget) * toTarget)
             let cosAngle = max(-1, min(1, (a * a + reach * reach - b * b) / (2 * a * reach)))
