@@ -74,7 +74,12 @@ final class StoryboardStore: ObservableObject {
 
     private init() {
         if let data = try? Data(contentsOf: listURL), let saved = try? JSONDecoder().decode([StoryPanel].self, from: data) {
-            panels = saved
+            // Splatter is gone (Phil, 2026-11-19); clear it so these panels still match their style's name.
+            panels = saved.map { panel in
+                var panel = panel
+                panel.style.splatter = 0
+                return panel
+            }
         }
     }
 

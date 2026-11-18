@@ -15,7 +15,7 @@ struct DrawStyle: Codable, Equatable {
     var splatter = 0
 
     enum Element: String, CaseIterable, Identifiable {
-        case lines, detail, shadows, greys, colour, dots, paper, splatter
+        case lines, detail, shadows, greys, colour, dots, paper
         var id: String { rawValue }
 
         var title: String {
@@ -27,7 +27,6 @@ struct DrawStyle: Codable, Equatable {
             case .colour: return "Colour"
             case .dots: return "Texture"
             case .paper: return "Paper"
-            case .splatter: return "Splatter"
             }
         }
 
@@ -40,7 +39,6 @@ struct DrawStyle: Codable, Equatable {
             case .colour: return ["None", "Sepia", "Muted", "Full", "Bold"]
             case .dots: return ["Off", "Dots", "Tone", "Hatch", "Cross"]
             case .paper: return ["Smooth", "Light", "Rough", "Heavy"]
-            case .splatter: return ["Off", "Some", "Lots"]
             }
         }
 
@@ -54,7 +52,6 @@ struct DrawStyle: Codable, Equatable {
             case .colour: return "less or more colour"
             case .dots: return "dots, screen tone or hatching"
             case .paper: return "smoother or rougher paper"
-            case .splatter: return "less or more ink splatter"
             }
         }
     }
@@ -69,7 +66,6 @@ struct DrawStyle: Codable, Equatable {
             case .colour: return colour
             case .dots: return dots
             case .paper: return paper
-            case .splatter: return splatter
             }
         }
         set {
@@ -82,7 +78,6 @@ struct DrawStyle: Codable, Equatable {
             case .colour: colour = value
             case .dots: dots = value
             case .paper: paper = value
-            case .splatter: splatter = value
             }
         }
     }
@@ -197,7 +192,8 @@ final class StoryboardRenderer: @unchecked Sendable {
         let saturation: Float = [0, 0, 0.45, 1.0, 1.45][style.colour]
         let lineDark: Float = [0, 0.7, 1, 1, 1][style.lines]
         let paper: Float = [0, 0.06, 0.12, 0.2][style.paper]
-        let splatter: Float = [0, 0.06, 0.16][style.splatter]
+        // Phil, 2026-11-19: splatter removed (the blots stayed fixed on screen); old saved styles draw none.
+        let splatter: Float = 0
         let arguments: [Any] = [smooth, lines, levels, shadow, colourMode, saturation, Float(style.dots),
                                 lineDark, paper, splatter, unit]
         return composeKernel.apply(extent: frame, arguments: arguments) ?? photo

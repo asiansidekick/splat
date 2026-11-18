@@ -188,6 +188,7 @@ struct StoryboardScreen: View {
         }
         if let data = savedStyle.data(using: .utf8), let saved = try? JSONDecoder().decode(DrawStyle.self, from: data) {
             style = saved
+            style.splatter = 0
         } else if let preset = StylePreset.named(styleName) {
             style = preset.style
         }
