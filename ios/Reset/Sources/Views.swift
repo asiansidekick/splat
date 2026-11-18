@@ -2121,21 +2121,31 @@ struct CaptureStage: View {
         .overlay { CleanViewControls(snap: shutterOnce) }
         // Without the controls, a volume button takes a snapshot too.
         .modifier(CaptureButtonAction(action: volumeShutter))
-        .confirmationDialog("Add to the room", isPresented: $choosingModel) {
-            Button("Gallery: scans, models, cut-outs") { choosingAsset = true }
-            Button("3D model (USDZ, OBJ, STL or FBX)") { importingModels = true }
-            Button("Cut-out from photos") { makingCutout = true }
-            Button("Examples: people, set pieces") { choosingExample = true }
-            if ObjectScanView.supported, !recorder.capturing, !recorder.pendingSave, !recorder.saving {
-                Button("Scan an object in 3D") { startObjectScan() }
-            }
+        // Phil, 2026-11-18: 3D models, the gallery and the scans list are one menu now: the gallery, with the ways to
+        // add things along its top and an edit menu on each scan.
+        .sheet(isPresented: $choosingModel) {
+            AssetGallery(
+                placer: recorder.placer,
+                actions: { action in
+                    choosingModel = false
+                    Task {
+                        try? await Task.sleep(for: .seconds(0.5))
+                        switch action {
+                        case .importModel: importingModels = true
+                        case .cutout: makingCutout = true
+                        case .examples: choosingExample = true
+                        case .scan: startObjectScan()
+                        }
+                    }
+                },
+                canScan: ObjectScanView.supported && !recorder.capturing && !recorder.pendingSave && !recorder.saving
+            ).themed()
         }
         .fullScreenCover(isPresented: $scanningObject, onDismiss: endObjectScan) {
             ObjectScanView { scannedModel = $0 }
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: recorder.placer).themed() }
         .sheet(isPresented: $choosingExample) { ExamplesSheet(placer: recorder.placer).themed() }
-        .sheet(isPresented: $choosingAsset) { AssetGallery(placer: recorder.placer).themed() }
         .fileImporter(isPresented: $importingModels, allowedContentTypes: ModelImport.pickerTypes, allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { recorder.placer.add(from: urls, keep: true) }
         }

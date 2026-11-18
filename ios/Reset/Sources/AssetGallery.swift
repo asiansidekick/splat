@@ -65,13 +65,23 @@ enum ModelLibrary {
     }
 }
 
+/// What the top row of the gallery asks the screen behind it to do.
+enum GalleryAction { case importModel, cutout, examples, scan }
+
 /// Everything that can be stood in the room, in one place: 3D scans, 3D models used before, and cut-outs. Tap one
 /// to place it.
 struct AssetGallery: View {
     let placer: ModelPlacer
     /// Where it goes when there is no live camera (Review); nil places it where the camera points.
     var base: simd_float4x4? = nil
+    /// Phil, 2026-11-18: one menu for 3D models, the gallery and the scans list. With this set, the top row adds
+    /// things (scan, import, cut-out, people and props) and each scan has its own edit menu.
+    var actions: ((GalleryAction) -> Void)? = nil
+    var canScan = false
     @Environment(\.dismiss) private var dismiss
+    @State private var trimming: ScanFolder?
+    @State private var preview: URL?
+    @State private var version = 0
 
     private enum Asset: Identifiable {
         case scan(ScanFolder)
@@ -117,6 +127,15 @@ struct AssetGallery: View {
     var body: some View {
         NavigationStack {
             ScrollView {
+                if let actions {
+                    HStack(spacing: 6) {
+                        if canScan { addButton("Scan", "viewfinder") { actions(.scan) } }
+                        addButton("Import", "square.and.arrow.down") { actions(.importModel) }
+                        addButton("Cut-out", "scissors") { actions(.cutout) }
+                        addButton("People", "figure.stand") { actions(.examples) }
+                    }
+                    .padding(.horizontal, 12).padding(.top, 8)
+                }
                 if let message {
                     Text(message).font(Theme.footnote).foregroundStyle(.orange).padding(.horizontal)
                 }
@@ -137,22 +156,18 @@ struct AssetGallery: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .contextMenu {
-                            if case .scan = asset {
-                                Text("Delete scans from the Scans list")
-                            } else {
-                                Button(role: .destructive) { delete(asset) } label: { Label("Delete from the gallery", systemImage: "trash") }
-                            }
-                        }
+                        .overlay(alignment: .topTrailing) { editMenu(asset) }
+                        .contextMenu { assetOptions(asset) }
                     }
                 }
                 .padding(12)
+                .id(version)
             }
             .gesture(MagnifyGesture().onEnded { value in
                 if value.magnification > 1.2 { columns = max(1, columns - 1) }
                 else if value.magnification < 0.83 { columns = min(5, columns + 1) }
             })
-            .navigationTitle("Gallery")
+            .navigationTitle("3D models")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Back") { dismiss() } }
@@ -166,6 +181,53 @@ struct AssetGallery: View {
         }
         .preferredColorScheme(.dark)
         .task { await load() }
+        .fullScreenCover(item: $trimming) { folder in
+            ScanTrimScreen(folder: folder) { _ in
+                trimming = nil
+                version += 1
+            }
+        }
+        .quickLookPreview($preview)
+    }
+
+    private func addButton(_ word: String, _ symbol: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: symbol).font(.system(size: 22, weight: .semibold))
+                Text(word).font(Theme.caption.weight(.semibold)).lineLimit(1).fixedSize()
+            }
+            .foregroundStyle(Theme.accent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The small ... on a tile: the same choices as holding it.
+    private func editMenu(_ asset: Asset) -> some View {
+        Menu {
+            assetOptions(asset)
+        } label: {
+            Image(systemName: "ellipsis.circle.fill")
+                .font(.system(size: 22))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, Color.black.opacity(0.55))
+                .padding(8)
+        }
+    }
+
+    @ViewBuilder private func assetOptions(_ asset: Asset) -> some View {
+        if case .scan(let folder) = asset {
+            Button { place(asset) } label: { Label("Place", systemImage: "scope") }
+            Button { trimming = folder } label: { Label("Trim", systemImage: "scissors") }
+            Button { preview = folder.model } label: { Label("View", systemImage: "eye") }
+            ShareLink(item: folder.model) { Label("Share", systemImage: "square.and.arrow.up") }
+            Button(role: .destructive) { delete(asset) } label: { Label("Delete scan", systemImage: "trash") }
+        } else {
+            Button { place(asset) } label: { Label("Place", systemImage: "scope") }
+            Button(role: .destructive) { delete(asset) } label: { Label("Delete", systemImage: "trash") }
+        }
     }
 
     private static func picture(of asset: Asset) -> Data? {
@@ -209,7 +271,7 @@ struct AssetGallery: View {
         switch asset {
         case .model(let url): ModelLibrary.delete(url)
         case .cutout(let entry): CutoutLibrary.delete(entry.id)
-        case .scan: return
+        case .scan(let folder): try? FileManager.default.removeItem(at: folder.url)
         }
         refresh()
     }
