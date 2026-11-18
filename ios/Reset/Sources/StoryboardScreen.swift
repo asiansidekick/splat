@@ -181,6 +181,11 @@ struct StoryboardScreen: View {
     // MARK: Actions
 
     private func start() {
+        // The old Splatter ink style (before 1357) comes back as Scratchy ink, without the blots.
+        if styleName == "Splatter ink" {
+            styleName = "Scratchy ink"
+            savedStyle = ""
+        }
         if let data = savedStyle.data(using: .utf8), let saved = try? JSONDecoder().decode(DrawStyle.self, from: data) {
             style = saved
         } else if let preset = StylePreset.named(styleName) {

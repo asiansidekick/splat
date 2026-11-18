@@ -91,7 +91,7 @@ struct DrawStyle: Codable, Equatable {
 }
 
 /// The ready-made styles. Several are drawn from looks Phil named (2026-11-18) as inspiration, not copies:
-/// heavy black weekly-comic ink, dense fine-line detail, painted realism, splattered scratchy ink, wobbly
+/// heavy black weekly-comic ink, dense fine-line detail, painted realism, scratchy ink, wobbly
 /// coloured pencil and clean tech manga.
 struct StylePreset: Identifiable, Equatable {
     let name: String
@@ -106,7 +106,8 @@ struct StylePreset: Identifiable, Equatable {
         StylePreset(name: "Bold comic", style: DrawStyle(lines: 4, detail: 1, shadows: 3, greys: 2, colour: 4, paper: 0, dots: 1, splatter: 0)),
         StylePreset(name: "Fine line", style: DrawStyle(lines: 1, detail: 2, shadows: 1, greys: 4, colour: 2, paper: 1, dots: 0, splatter: 0)),
         StylePreset(name: "Painted", style: DrawStyle(lines: 0, detail: 2, shadows: 0, greys: 0, colour: 3, paper: 1, dots: 0, splatter: 0)),
-        StylePreset(name: "Splatter ink", style: DrawStyle(lines: 4, detail: 0, shadows: 2, greys: 2, colour: 1, paper: 2, dots: 0, splatter: 2)),
+        // Phil, 2026-11-19: no splatter in the preset; the blots stayed put on the screen while the picture moved.
+        StylePreset(name: "Scratchy ink", style: DrawStyle(lines: 4, detail: 0, shadows: 2, greys: 2, colour: 1, paper: 2, dots: 0, splatter: 0)),
         StylePreset(name: "Coloured pencil", style: DrawStyle(lines: 1, detail: 1, shadows: 0, greys: 4, colour: 2, paper: 3, dots: 3, splatter: 0)),
         StylePreset(name: "Tech manga", style: DrawStyle(lines: 1, detail: 2, shadows: 1, greys: 3, colour: 0, paper: 0, dots: 2, splatter: 0)),
         StylePreset(name: "Photo", style: DrawStyle(lines: 0, detail: 2, shadows: 0, greys: 0, colour: 3, paper: 0, dots: 0, splatter: 0)),
