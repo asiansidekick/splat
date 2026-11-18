@@ -73,6 +73,12 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
+      - name: Metal toolchain
+        run: |
+          # Xcode 26 no longer ships the Metal compiler in the app; Storyboard.metal needs it.
+          if ! xcrun metal --version >/dev/null 2>&1; then
+            for n in 1 2 3; do xcodebuild -downloadComponent MetalToolchain && break || sleep 30; done
+          fi
       - name: Cache the depth model
         uses: actions/cache@v4
         with:
