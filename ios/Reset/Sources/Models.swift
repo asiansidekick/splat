@@ -1208,18 +1208,26 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 axis.opacity = gizmoRing == nil || gizmoRing == index ? 1 : 0.25
                 holder.addChildNode(axis)
             }
-            root.addChildNode(holder)
+            // On the model itself, so the levers go wherever it goes: moved, carried, lifted or turned.
+            node.addChildNode(holder)
             gizmoNode = holder
         }
-        // Turned with the model, so the levers stay fixed to it.
-        gizmoNode?.simdWorldOrientation = node.simdWorldOrientation
-        gizmoNode?.simdWorldPosition = centre
-        gizmoNode?.simdScale = SIMD3(repeating: radius)
+        if let box = boxes[id] {
+            gizmoNode?.simdPosition = (box.low + box.high) / 2
+            gizmoNode?.simdOrientation = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+            // The model's own scale is part of its node, so the levers are shrunk to stay `radius` metres long.
+            gizmoNode?.simdScale = SIMD3(repeating: radius / max(node.simdScale.x, 0.0001))
+        }
     }
 
     /// Where a lever's knob is now, in the world.
     private func knobPoint(_ index: Int, end: Float, node: SCNNode) -> SIMD3<Float> {
-        gizmoCentre + node.simdWorldOrientation.act(Self.ringAxes[index]) * (gizmoRadius * end)
+        // The model may have moved since the levers were last shown, so the middle is read again.
+        if let now = gizmoGeometry() {
+            gizmoCentre = now.centre
+            gizmoRadius = now.radius
+        }
+        return gizmoCentre + node.simdWorldOrientation.act(Self.ringAxes[index]) * (gizmoRadius * end)
     }
 
     /// Chooses the knob nearest the finger (within about a thumb's width) and remembers which end was grabbed.
