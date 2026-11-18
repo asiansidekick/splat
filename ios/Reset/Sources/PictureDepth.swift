@@ -8,6 +8,26 @@ import simd
 /// only which parts of the picture are nearer than which; the points ARKit tracks in the picture, whose distances
 /// it knows, turn that into metres (one scale and shift, fitted so that outliers cannot pull it). The method is
 /// Wofk et al. 2023, "Monocular visual-inertial depth estimation".
+/// The depth network, loaded off the main thread (Phil, 2026-11-18: Measure froze the screen for about ten seconds the
+/// first time, while Core ML prepared the model). The app starts loading it at launch; whoever needs it first waits
+/// only for what is left.
+enum DepthNetwork {
+    nonisolated(unsafe) static let model: VNCoreMLModel? = {
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .all
+        if let url = Bundle.main.url(forResource: "DepthAnythingV2SmallF16", withExtension: "mlmodelc"),
+           let ml = try? MLModel(contentsOf: url, configuration: configuration),
+           let vision = try? VNCoreMLModel(for: ml) {
+            Diagnostics.log("Picture depth: model loaded")
+            return vision
+        }
+        Diagnostics.log("Picture depth: model missing from the app")
+        return nil
+    }()
+
+    static func warmUp() { Task.detached(priority: .utility) { _ = model } }
+}
+
 @MainActor
 final class PictureDepth {
     static let shared = PictureDepth()
@@ -54,17 +74,8 @@ final class PictureDepth {
     }
 
     private init() {
-        let configuration = MLModelConfiguration()
-        configuration.computeUnits = .all
-        if let url = Bundle.main.url(forResource: "DepthAnythingV2SmallF16", withExtension: "mlmodelc"),
-           let ml = try? MLModel(contentsOf: url, configuration: configuration),
-           let vision = try? VNCoreMLModel(for: ml) {
-            model = vision
-            Diagnostics.log("Picture depth: model loaded")
-        } else {
-            model = nil
-            Diagnostics.log("Picture depth: model missing from the app")
-        }
+        model = DepthNetwork.model
+    }
     }
 
     var available: Bool { model != nil }

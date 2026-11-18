@@ -57,6 +57,7 @@ enum Diagnostics {
 
     /// Called once at launch: device, system and storage, so every report says what it ran on.
     @MainActor static func logLaunch() {
+        DepthNetwork.warmUp()
         let device = UIDevice.current
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"

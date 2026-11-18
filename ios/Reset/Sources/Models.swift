@@ -1633,7 +1633,7 @@ private struct MoveHint: View {
         switch job {
         case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further · hold: lift")
         case .turn: return ("arrow.left.and.right", "drag or twist: turn")
-        case .size: return ("arrow.up.and.down", "↑ bigger · or pinch")
+        case .size: return ("arrow.up.and.down.circle", "pinch, or drag ↕, to scale · the figures follow")
         case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "drag a knob to turn about its line · or anywhere · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
         }
