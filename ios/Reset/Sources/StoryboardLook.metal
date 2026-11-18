@@ -3,8 +3,9 @@
 // steps as Storyboard.ci.metal, simplified to run every frame: lines from two blurs, tone bands, colour,
 // shadows, dots or hatching, paper. Worked out at half the screen's size, then drawn full screen.
 #include <metal_stdlib>
-#include <SceneKit/scn_metal>
 using namespace metal;
+// SceneKit's header expects the metal namespace already in use.
+#include <SceneKit/scn_metal>
 
 struct LookVertexIn {
     float4 position [[attribute(SCNVertexSemanticPosition)]];
