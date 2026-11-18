@@ -224,7 +224,11 @@ private struct AssetPicture: View {
     var body: some View {
         ZStack {
             if let image {
-                Image(uiImage: image).resizable().scaledToFill()
+                if cutout != nil {
+                    Image(uiImage: image).resizable().scaledToFit().padding(4)
+                } else {
+                    Image(uiImage: image).resizable().scaledToFill()
+                }
             } else {
                 Image(systemName: file == nil ? "figure.stand" : "cube").font(.system(size: 30)).foregroundStyle(.secondary)
             }
