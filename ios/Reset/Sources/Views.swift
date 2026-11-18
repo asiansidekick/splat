@@ -1951,6 +1951,13 @@ struct CaptureStage: View {
                 .disabled(recorder.capturing)
                 .caughtTap("LiDAR", enabled: !recorder.capturing) { useLiDAR.toggle() }
                 .accessibilityLabel(useLiDAR ? "LiDAR on" : "LiDAR off")
+            } else {
+                // No LiDAR here: the pill stays, dimmed, and says why when tapped.
+                TopPill(text: lidarWord ? "LiDAR" : "", systemImage: "dot.circle.viewfinder") {
+                    TapGate.run("LiDAR") { showToast(DeviceSupport.apology("LiDAR")) }
+                }
+                .opacity(0.45)
+                .accessibilityLabel("LiDAR not available")
             }
             TorchButton()
             // Works while a scan or recording is going, too.
@@ -2138,7 +2145,8 @@ struct CaptureStage: View {
                         }
                     }
                 },
-                canScan: ObjectScanView.supported && !recorder.capturing && !recorder.pendingSave && !recorder.saving
+                canScan: ObjectScanView.supported && !recorder.capturing && !recorder.pendingSave && !recorder.saving,
+                scanApology: ObjectScanView.supported ? nil : DeviceSupport.apology("3D scanning")
             ).themed()
         }
         .fullScreenCover(isPresented: $scanningObject, onDismiss: endObjectScan) {

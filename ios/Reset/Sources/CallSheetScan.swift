@@ -129,6 +129,11 @@ struct CallSheetSheet: View {
                 Section {
                     if VNDocumentCameraViewController.isSupported {
                         Button { scanning = true } label: { Label("Scan a call sheet", systemImage: "doc.viewfinder") }
+                    } else {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("Scan a call sheet", systemImage: "doc.viewfinder").foregroundStyle(.secondary)
+                            Text(DeviceSupport.apology("scanning paper")).font(Theme.footnote).foregroundStyle(.orange)
+                        }
                     }
                     PhotosPicker(selection: $picked, maxSelectionCount: 10, matching: .images) {
                         Label("Pick photos of one (several if it runs on)", systemImage: "photo.on.rectangle")

@@ -316,6 +316,12 @@ struct ExamplesSheet: View {
                             Label("Copy the actor's pose", systemImage: "figure.stand.line.dotted.figure.stand")
                                 .fontWeight(.semibold)
                         }
+                    } else if base == nil {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label("Copy the actor's pose", systemImage: "figure.stand.line.dotted.figure.stand")
+                                .fontWeight(.semibold).foregroundStyle(.secondary)
+                            Text(DeviceSupport.apology("copying a pose")).font(Theme.footnote).foregroundStyle(.orange)
+                        }
                     }
                     ForEach(MannequinPose.all, id: \.name) { item in
                         Button {

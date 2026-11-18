@@ -93,6 +93,8 @@ struct AssetGallery: View {
     /// things (scan, import, cut-out, people and props) and each scan has its own edit menu.
     var actions: ((GalleryAction) -> Void)? = nil
     var canScan = false
+    /// Set when the device can't scan at all: the Scan button stays and says so.
+    var scanApology: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var trimming: ScanFolder?
     @State private var preview: URL?
@@ -147,6 +149,7 @@ struct AssetGallery: View {
                 if let actions {
                     HStack(spacing: 6) {
                         if canScan { addButton("Scan", "viewfinder") { actions(.scan) } }
+                        else if let apology = scanApology { addButton("Scan", "viewfinder") { message = apology }.opacity(0.5) }
                         addButton("Import", "square.and.arrow.down") { actions(.importModel) }
                         addButton("Cut-out", "scissors") { actions(.cutout) }
                         addButton("People", "figure.stand") { actions(.examples) }

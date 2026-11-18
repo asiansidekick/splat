@@ -130,7 +130,7 @@ final class ScanModel: ObservableObject {
         startedAt = Date()
         lastPolled = ""
         guard ObjectCaptureSession.isSupported else {
-            phase = .unsupported("This device can't run Apple's Object Capture (it needs LiDAR and iOS 17).")
+            phase = .unsupported(DeviceSupport.apology("3D scanning"))
             ScanLog.add("Object Capture not supported on this device")
             return
         }
@@ -477,7 +477,7 @@ final class ScanModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 500_000_000)
             do {
                 guard PhotogrammetrySession.isSupported else {
-                    throw NSError(domain: "Scan", code: 1, userInfo: [NSLocalizedDescriptionKey: "This device can't build models."])
+                    throw NSError(domain: "Scan", code: 1, userInfo: [NSLocalizedDescriptionKey: DeviceSupport.apology("building 3D models")])
                 }
                 var config = PhotogrammetrySession.Configuration()
                 config.checkpointDirectory = folder.checkpoint
