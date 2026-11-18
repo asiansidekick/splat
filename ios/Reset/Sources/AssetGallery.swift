@@ -122,15 +122,15 @@ struct AssetGallery: View {
                     Text("Nothing here yet. Scans, 3D models and cut-outs you add show here, ready to place again.")
                         .font(Theme.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(30)
                 }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 10)], spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 12) {
                     ForEach(assets) { asset in
                         Button { place(asset) } label: {
                             VStack(spacing: 4) {
                                 AssetPicture(file: asset.file, cutout: Self.picture(of: asset))
-                                    .frame(height: 100)
+                                    .frame(height: 190)
                                     .frame(maxWidth: .infinity)
                                     .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                                Text(asset.name).font(Theme.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.center)
+                                Text(asset.name).font(Theme.caption.weight(.semibold)).lineLimit(3).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                                 Text(asset.kind).font(Theme.caption2).foregroundStyle(.secondary)
                             }
                         }
@@ -219,7 +219,7 @@ private struct AssetPicture: View {
             if let cutout {
                 image = UIImage(data: cutout)
             } else if let file {
-                let request = QLThumbnailGenerator.Request(fileAt: file, size: CGSize(width: 200, height: 200), scale: 2, representationTypes: .thumbnail)
+                let request = QLThumbnailGenerator.Request(fileAt: file, size: CGSize(width: 380, height: 380), scale: 2, representationTypes: .thumbnail)
                 image = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request).uiImage
             }
         }

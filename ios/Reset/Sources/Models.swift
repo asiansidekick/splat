@@ -1008,10 +1008,11 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         updateTilted()
     }
 
-    // MARK: Rotation rings (Phil, 2026-11-18: handles like a CAD program)
+    // MARK: Axis handles (Phil, 2026-11-18: handles like a CAD program, the picked axis shows a long fading line)
 
-    /// Three rings round the selected 3D model while Rotate is picked: red about the way across (X), green about
-    /// the way up (Y), blue about the way along (Z). Dragging along a ring turns the model about that line only.
+    /// Three axes through the middle of the selected 3D model while Rotate is picked: red across (X), green up (Y),
+    /// blue along (Z), each ending in a knob at both ends. Drag a knob to turn the model about that axis only; the
+    /// axis picked then stretches out as a long line that fades away, so the turn's direction reads clearly.
     private var gizmoNode: SCNNode?
     private var gizmoRing: Int?
     private var gizmoGrab: SIMD3<Float>?
@@ -1027,6 +1028,16 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         return (centre, max(simd_length(size) * 0.5 * 0.9, 0.12))
     }
 
+    private static func gizmoMaterial(_ colour: UIColor, alpha: CGFloat = 1) -> SCNMaterial {
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = colour.withAlphaComponent(alpha)
+        material.readsFromDepthBuffer = false
+        material.writesToDepthBuffer = false
+        material.isDoubleSided = true
+        return material
+    }
+
     func refreshGizmo() {
         guard cutoutJob == .tilt, let (centre, radius) = gizmoGeometry() else {
             gizmoNode?.removeFromParentNode()
@@ -1035,63 +1046,75 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         }
         gizmoCentre = centre
         gizmoRadius = radius
-        if gizmoNode == nil || gizmoNode?.childNodes.count != 3 {
-            gizmoNode?.removeFromParentNode()
-            let holder = SCNNode()
-            holder.name = "gizmo"
-            holder.renderingOrder = 2000
-            let colours: [UIColor] = [.systemRed, .systemGreen, .systemBlue]
-            // A torus lies flat in its own X-Z plane, turning about Y: tip it to turn about X or Z.
-            let tips: [SCNVector4] = [SCNVector4(0, 0, 1, Float.pi / 2), SCNVector4(0, 0, 0, 0), SCNVector4(1, 0, 0, Float.pi / 2)]
-            for index in 0..<3 {
-                let ring = SCNTorus(ringRadius: 1, pipeRadius: 0.035)
-                ring.ringSegmentCount = 72
-                ring.pipeSegmentCount = 8
-                let material = SCNMaterial()
-                material.lightingModel = .constant
-                material.diffuse.contents = colours[index]
-                material.readsFromDepthBuffer = false
-                material.writesToDepthBuffer = false
-                material.isDoubleSided = true
-                ring.materials = [material]
-                let node = SCNNode(geometry: ring)
-                node.rotation = tips[index]
-                node.renderingOrder = 2000
-                holder.addChildNode(node)
+        gizmoNode?.removeFromParentNode()
+        let holder = SCNNode()
+        holder.name = "gizmo"
+        holder.renderingOrder = 2000
+        let colours: [UIColor] = [.systemRed, .systemGreen, .systemBlue]
+        // A cylinder stands along its own Y: tip it to lie along X or Z.
+        let tips: [SCNVector4] = [SCNVector4(0, 0, 1, -Float.pi / 2), SCNVector4(0, 0, 0, 0), SCNVector4(1, 0, 0, Float.pi / 2)]
+        for index in 0..<3 {
+            let axis = SCNNode()
+            axis.rotation = tips[index]
+            axis.renderingOrder = 2000
+            let line = SCNCylinder(radius: 0.012, height: 2)
+            line.radialSegmentCount = 8
+            line.materials = [Self.gizmoMaterial(colours[index])]
+            axis.addChildNode(SCNNode(geometry: line))
+            for end: Float in [1, -1] {
+                let knob = SCNSphere(radius: end > 0 ? 0.11 : 0.07)
+                knob.segmentCount = 16
+                knob.materials = [Self.gizmoMaterial(colours[index])]
+                let node = SCNNode(geometry: knob)
+                node.position = SCNVector3(0, end, 0)
+                node.renderingOrder = 2001
+                axis.addChildNode(node)
             }
-            root.addChildNode(holder)
-            gizmoNode = holder
+            // The picked axis stretches far out both ways, fading with distance.
+            if gizmoRing == index {
+                let pieces = 24
+                let reach: Float = 7
+                for end: Float in [1, -1] {
+                    for piece in 0..<pieces {
+                        let fade = 1 - Float(piece) / Float(pieces)
+                        let length = reach / Float(pieces)
+                        let segment = SCNCylinder(radius: 0.009, height: CGFloat(length))
+                        segment.radialSegmentCount = 6
+                        segment.materials = [Self.gizmoMaterial(colours[index], alpha: CGFloat(0.75 * fade * fade))]
+                        let node = SCNNode(geometry: segment)
+                        node.position = SCNVector3(0, end * (1 + (Float(piece) + 0.5) * length), 0)
+                        node.renderingOrder = 1999
+                        axis.addChildNode(node)
+                    }
+                }
+            }
+            axis.opacity = gizmoRing == nil || gizmoRing == index ? 1 : 0.25
+            holder.addChildNode(axis)
         }
-        gizmoNode?.simdWorldPosition = centre
-        gizmoNode?.simdScale = SIMD3(repeating: radius)
-        for (index, ring) in (gizmoNode?.childNodes ?? []).enumerated() {
-            ring.opacity = gizmoRing == nil || gizmoRing == index ? 0.95 : 0.25
-        }
+        holder.simdWorldPosition = centre
+        holder.simdScale = SIMD3(repeating: radius)
+        root.addChildNode(holder)
+        gizmoNode = holder
     }
 
-    /// Points on a ring (world), `count` of them.
-    private func ringPoints(_ index: Int, count: Int = 72) -> [SIMD3<Float>] {
+    /// Both knob ends of an axis, in the world.
+    private func handlePoints(_ index: Int) -> [SIMD3<Float>] {
         let axis = Self.ringAxes[index]
-        let a = simd_normalize(simd_cross(axis, abs(axis.y) > 0.9 ? SIMD3<Float>(1, 0, 0) : SIMD3<Float>(0, 1, 0)))
-        let b = simd_cross(axis, a)
-        return (0..<count).map { step in
-            let angle = Float(step) / Float(count) * 2 * .pi
-            return gizmoCentre + (a * cos(angle) + b * sin(angle)) * gizmoRadius
-        }
+        return [gizmoCentre + axis * gizmoRadius, gizmoCentre - axis * gizmoRadius]
     }
 
-    /// Chooses the ring nearest the finger (within about a thumb's width) and remembers where it was grabbed.
+    /// Chooses the knob nearest the finger (within about a thumb's width) and remembers which end was grabbed.
     private func gizmoPick(at finger: CGPoint, in view: SCNView, node: SCNNode, id: UUID) {
         gizmoRing = nil
         gizmoGrab = nil
         guard gizmoNode != nil else { return }
         var best: (ring: Int, distance: CGFloat, point: SIMD3<Float>)?
         for ring in 0..<3 {
-            for point in ringPoints(ring) {
+            for point in handlePoints(ring) {
                 let shown = view.projectPoint(SCNVector3(point.x, point.y, point.z))
                 guard shown.z > 0, shown.z < 1 else { continue }
                 let distance = hypot(CGFloat(shown.x) - finger.x, CGFloat(shown.y) - finger.y)
-                if distance < (best?.distance ?? 44) { best = (ring, distance, point) }
+                if distance < (best?.distance ?? 50) { best = (ring, distance, point) }
             }
         }
         guard let best else { return }
@@ -1101,20 +1124,22 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         refreshGizmo()
     }
 
-    /// The finger's move along the ring's direction at the grabbed spot, turned into an angle.
+    /// Dragging a knob across the line it sits on turns the model about that line.
     private func gizmoDrag(by moved: CGPoint, in view: SCNView, node: SCNNode, id: UUID) {
         guard let ring = gizmoRing, let grab = gizmoGrab else { return }
         let axis = Self.ringAxes[ring]
-        let spoke = grab - gizmoCentre
-        let tangent = simd_normalize(simd_cross(axis, spoke))
-        // Where one radian along the ring's tangent lands on the screen.
-        let here = view.projectPoint(SCNVector3(grab.x, grab.y, grab.z))
-        let ahead = grab + tangent * simd_length(spoke) * 0.1
-        let there = view.projectPoint(SCNVector3(ahead.x, ahead.y, ahead.z))
-        let along = CGPoint(x: CGFloat(there.x - here.x) / 0.1, y: CGFloat(there.y - here.y) / 0.1)
-        let perRadian = hypot(along.x, along.y)
-        guard perRadian > 8 else { return }
-        let angle = Float((moved.x * along.x + moved.y * along.y) / (perRadian * perRadian))
+        let middle = view.projectPoint(SCNVector3(gizmoCentre.x, gizmoCentre.y, gizmoCentre.z))
+        let knob = view.projectPoint(SCNVector3(grab.x, grab.y, grab.z))
+        let along = CGPoint(x: CGFloat(knob.x - middle.x), y: CGFloat(knob.y - middle.y))
+        let length = hypot(along.x, along.y)
+        let angle: Float
+        if length > 12 {
+            // Across the line on the screen; the other end of the line turns the other way, so it feels like holding the knob.
+            angle = Float((moved.x * -along.y + moved.y * along.x) / length) * 0.012
+        } else {
+            // The axis points at you: sideways drag turns it.
+            angle = Float(moved.x) * 0.012
+        }
         rollModel(node, id: id, axis: axis, by: angle)
     }
 
@@ -1599,9 +1624,9 @@ private struct MoveHint: View {
 
     private var parts: (arrow: String, words: String) {
         switch pin {
-        case .stepAside: return ("arrow.left.and.right", "step to the side")
-        case .dragBack: return ("arrow.left.and.right", "drag it back onto its spot")
-        case .done: return ("checkmark", "pinned")
+        case .stepAside: return ("arrow.left.and.right", "1 of 2: step sideways, keep it in view")
+        case .dragBack: return ("hand.draw", "2 of 2: drag it back onto its spot")
+        case .done: return ("checkmark", "pinned: its distance is fixed")
         case nil: break
         }
         if carrying { return ("figure.walk", "walk, let go to drop") }
@@ -1609,7 +1634,7 @@ private struct MoveHint: View {
         case .move: return ("arrow.up.and.down.and.arrow.left.and.right", "↑ further · hold: lift")
         case .turn: return ("arrow.left.and.right", "drag or twist: turn")
         case .size: return ("arrow.up.and.down", "↑ bigger · or pinch")
-        case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "drag a ring · or anywhere to turn · twist: roll")
+        case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "drag a knob to turn about its line · or anywhere · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
         }
     }
