@@ -1145,6 +1145,21 @@ struct AddTool: View {
 }
 
 /// The word GUIDE: tap to switch the tiling guide (rings to fill by turning on the spot) on or off in Auto scan.
+/// Phil, 2026-11-18: with an object selected, GUIDE sat on top of Done. It then stands at the top of the screen
+/// (`top`), and goes back down beside the shutter once nothing is selected.
+struct GuidePlaced: View {
+    @ObservedObject var placer: ModelPlacer
+    let top: Bool
+    let on: Bool
+    let action: () -> Void
+
+    var body: some View {
+        if (placer.selectedModel != nil) == top {
+            GuideWord(on: on, toggle: action)
+        }
+    }
+}
+
 struct GuideWord: View {
     let on: Bool
     let toggle: () -> Void
@@ -1925,6 +1940,8 @@ struct CaptureStage: View {
             // Phil, 2026-11-17: on its side GUIDE was hidden behind the model tools beside the shutter; it stands up here.
             if verticalSize == .compact, mode == .walk, !recorder.capturing {
                 GuideWord(on: tileGuide) { toggleGuide() }
+            } else if mode == .walk, !recorder.capturing {
+                GuidePlaced(placer: recorder.placer, top: true, on: tileGuide) { toggleGuide() }
             }
             Spacer()
             if Recorder.lidarAvailable {
@@ -2076,7 +2093,7 @@ struct CaptureStage: View {
                 } else if mode == .walk, !recorder.capturing {
                     // Phil, 2026-11-14: the tiling guide's switch on the camera screen, where the lenses stand in Manual scan.
                     if verticalSize != .compact {
-                        GuideWord(on: tileGuide) { toggleGuide() }.offset(y: -66)
+                        GuidePlaced(placer: recorder.placer, top: false, on: tileGuide) { toggleGuide() }.offset(y: -66)
                     }
                 }
             }

@@ -1670,7 +1670,6 @@ struct ModelOverlay: View {
         if cutout {
             CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }
         } else {
-            if showsFloor { CutoutTool(word: "Floor", symbol: "arrow.down.to.line") { placer.dropToFloor() } }
             CutoutTool(word: "True size", symbol: "1.square") { placer.resetSelectedModelSize() }
             if placer.selectedTilted { CutoutTool(word: "Upright", symbol: "arrow.up.to.line", tint: Theme.accent) { placer.makeUpright() } }
         }
@@ -1730,6 +1729,8 @@ struct ModelOverlay: View {
                                     .onChanged { _ in placer.startCarrying() }
                                     .onEnded { _ in placer.stopCarrying() })
                         }
+                        // Phil, 2026-11-18: the right column ran long, so Floor stands here under Carry.
+                        if showsFloor, !cutout { CutoutTool(word: "Floor", symbol: "arrow.down.to.line") { placer.dropToFloor() } }
                         if placer.selectedPoseSpec != nil {
                             CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
                         }
