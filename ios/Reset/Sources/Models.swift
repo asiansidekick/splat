@@ -630,12 +630,22 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             let delta = gesture.translation(in: view)
             gesture.setTranslation(.zero, in: view)
             guard var target = dragTarget, let eye = self.eye?.columns.3.xyz else { return }
-            let shown = view.projectPoint(SCNVector3(target.x, target.y, target.z))
-            if shown.z > 0, shown.z < 1 {
-                let moved = SIMD3<Float>(view.unprojectPoint(SCNVector3(shown.x + Float(delta.x), shown.y, shown.z)))
-                var sideways = moved - target
-                sideways.y = 0
-                if simd_length(sideways) < 1 { target += sideways }
+            // Phil, 2026-11-18: moving became possible in one direction only. Far objects (and big ones pushed out
+            // to hundreds of metres) fell outside the depth range the screen maths works in, or one finger step
+            // came to over a metre, and the sideways move was dropped. Now the step is measured at a point on the
+            // same line of sight at most 20 m away and scaled up to the object's real distance.
+            let toTarget = target - eye
+            let range = simd_length(toTarget)
+            if range > 0.05 {
+                let near = min(range, 20)
+                let reference = eye + toTarget / range * near
+                let shown = view.projectPoint(SCNVector3(reference.x, reference.y, reference.z))
+                if shown.z > 0, shown.z < 1 {
+                    let moved = SIMD3<Float>(view.unprojectPoint(SCNVector3(shown.x + Float(delta.x), shown.y, shown.z)))
+                    var sideways = (moved - reference) * (range / near)
+                    sideways.y = 0
+                    if simd_length(sideways) < max(1, range) { target += sideways }
+                }
             }
             var away = target - eye
             away.y = 0
