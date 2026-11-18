@@ -2452,6 +2452,8 @@ struct ResetStage: View {
     /// Phil, 2026-11-11: the ••• menu did nothing on its side. It is a sheet of plain buttons now, which
     /// opens from the window watcher too.
     @State private var showingMore = false
+    /// Storyboard mode (StoryboardScreen.swift), from the ••• menu (Phil, 2026-11-18).
+    @State private var storyboarding = false
     /// While swiping the ghost strength, the cursor shows.
     @State private var swipingStrength = false
     /// While swiping, how far towards now the view is, for the THEN and NOW tags; nil hides them.
@@ -2662,6 +2664,11 @@ struct ResetStage: View {
         .sheet(isPresented: $showingMore) {
             MoreSheet(items: moreItems).themed()
         }
+        .fullScreenCover(isPresented: $storyboarding) {
+            StoryboardScreen(liveFrame: { [weak r = restorer] in r?.session.currentFrame?.capturedImage },
+                             referencePhoto: restorer.startPhoto, scene: reference.scene, shot: reference.shot)
+                .themed()
+        }
     }
 
     /// What + offers in simple touch mode.
@@ -2738,6 +2745,7 @@ struct ResetStage: View {
         if ExploreView.offered { items.append(.init("Explore in 3D", "view.3d") { open(.explore(reference.id)) }) }
         if !reference.photoOnly { items.append(.init("Walk through", "figure.walk") { open(.walk(reference.id)) }) }
         items.append(.init("Frames", "rectangle.stack") { open(.review(reference.id)) })
+        items.append(.init("Storyboard", "rectangle.split.3x1") { storyboarding = true })
         items.append(.init("Compare", "rectangle.split.2x1") { open(.compare(reference.id)) })
         items.append(.init("Take log", "list.number") { open(.takeLog(reference.id)) })
         items.append(.init("PDF report", "square.and.arrow.up") { open(.pdf(reference.id)) })
