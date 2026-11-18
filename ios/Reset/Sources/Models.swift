@@ -1,5 +1,6 @@
 import ARKit
 import Foundation
+import ImageIO
 import SceneKit
 import SwiftUI
 import UIKit
@@ -1208,6 +1209,43 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         return nil
     }
 
+    /// Phil, 2026-11-18: dragging scans ran at 25-45 ms a frame and one scan held 400-500 MB. A scan's picture is often
+    /// 8192 pixels square (256 MB loaded), far more than a phone screen can show: pictures over 2048 pixels are read
+    /// down to 2048 with ImageIO (never fully decoded) and mipmapped.
+    private static func shrinkTextures(of node: SCNNode, longest: Int = 2048) {
+        var shrunk = 0
+        node.enumerateHierarchy { child, _ in
+            for material in child.geometry?.materials ?? [] {
+                for property in [material.diffuse, material.normal, material.emission, material.roughness, material.metalness, material.ambientOcclusion] {
+                    var source: CGImageSource?
+                    if let url = property.contents as? URL {
+                        source = CGImageSourceCreateWithURL(url as CFURL, nil)
+                    } else if let path = property.contents as? String, path.hasPrefix("/") {
+                        source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil)
+                    }
+                    guard let source,
+                          let info = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                          let width = info[kCGImagePropertyPixelWidth] as? Int,
+                          let height = info[kCGImagePropertyPixelHeight] as? Int,
+                          max(width, height) > longest
+                    else { continue }
+                    let options: [CFString: Any] = [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceShouldCacheImmediately: true,
+                        kCGImageSourceThumbnailMaxPixelSize: longest,
+                    ]
+                    if let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
+                        property.contents = image
+                        property.mipFilter = .linear
+                        shrunk += 1
+                    }
+                }
+            }
+        }
+        if shrunk > 0 { Diagnostics.log("Pictures shrunk to \(longest) pixels: \(shrunk)") }
+    }
+
     @discardableResult
     private func loadNode(for model: PlacedModel) -> SCNNode? {
         if model.file.hasSuffix("." + Cutout.fileExtension) { return loadCutoutNode(for: model) }
@@ -1226,6 +1264,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 child.geometry?.materials.forEach { $0.lightingModel = .constant }
             }
         }
+        Self.shrinkTextures(of: node)
         let (low, high) = node.boundingBox
         var geometries = 0
         node.enumerateHierarchy { child, _ in if child.geometry != nil { geometries += 1 } }
