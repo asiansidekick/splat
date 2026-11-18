@@ -23,6 +23,15 @@ struct HelpView: View {
                     ShareLink(item: report) {
                         Label("Send feedback log", systemImage: "ladybug")
                     }
+                    // Phil, 2026-11-19: Storyboard look right under feedback while testing. REMIND PHIL to move it later.
+                    Toggle(isOn: Binding(get: { look.on }, set: { look.set($0) })) {
+                        Label("Storyboard look", systemImage: "paintbrush.pointed")
+                    }
+                    if look.on {
+                        Button { look.nextStyle() } label: {
+                            Label("Style: \(look.styleName)", systemImage: "paintpalette")
+                        }
+                    }
                     NavigationLink {
                         SurfaceTestView()
                     } label: {
@@ -32,19 +41,6 @@ struct HelpView: View {
                     Text("Testing")
                 } footer: {
                     Text("Sends a record of what the app did on this device (no photos), to help fix problems. Add screenshots in the same message.\n\n\(HelpView.buildLabel)")
-                }
-                // Phil, 2026-11-19: the Storyboard look switch at the top of this menu, under feedback.
-                Section {
-                    Toggle(isOn: Binding(get: { look.on }, set: { look.set($0) })) {
-                        Label("Storyboard look", systemImage: "paintbrush.pointed")
-                    }
-                    if look.on {
-                        Button { look.nextStyle() } label: {
-                            Label("Style: \(look.styleName)", systemImage: "paintpalette")
-                        }
-                    }
-                } footer: {
-                    Text("Draws the camera picture and everything placed in it like a storyboard sketch, as a filter over the whole app. Everything else works as usual.")
                 }
                 Section {
                     Button {

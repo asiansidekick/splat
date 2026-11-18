@@ -2777,6 +2777,8 @@ struct ResetStage: View {
     /// What the ••• button offers, in the order the old menu had.
     private var moreItems: [MoreSheet.Item] {
         var items: [MoreSheet.Item] = []
+        // Phil, 2026-11-19: first in the menu while testing.
+        items.append(.init(look.on ? "Storyboard look: on" : "Storyboard look: off", "paintbrush.pointed") { look.set(!look.on) })
         let ready = restorer.status == .ready
         if reference.photoOnly {
             items.append(.init("Flip photo", "arrow.left.and.right.righttriangle.left.righttriangle.right") {
@@ -2821,7 +2823,6 @@ struct ResetStage: View {
         if !reference.photoOnly { items.append(.init("Walk through", "figure.walk") { open(.walk(reference.id)) }) }
         items.append(.init("Frames", "rectangle.stack") { open(.review(reference.id)) })
         items.append(.init("Storyboard", "rectangle.split.3x1") { storyboarding = true })
-        items.append(.init(look.on ? "Storyboard look: on" : "Storyboard look: off", "paintbrush.pointed") { look.set(!look.on) })
         items.append(.init("Compare", "rectangle.split.2x1") { open(.compare(reference.id)) })
         items.append(.init("Take log", "list.number") { open(.takeLog(reference.id)) })
         items.append(.init("PDF report", "square.and.arrow.up") { open(.pdf(reference.id)) })
