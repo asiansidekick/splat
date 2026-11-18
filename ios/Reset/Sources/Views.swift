@@ -55,6 +55,8 @@ struct CameraView: UIViewRepresentable {
     var content: SCNNode?
     /// Called once with the view, for example to add gestures.
     var onMake: ((ARSCNView) -> Void)?
+    /// Drawn in the Storyboard look when it is on (StoryboardLook.swift): the recording and reset screens.
+    var storyboardLook = false
 
     func makeUIView(context: Context) -> ARSCNView {
         let view = ARSCNView(frame: .zero)
@@ -63,6 +65,7 @@ struct CameraView: UIViewRepresentable {
         view.autoenablesDefaultLighting = true  // lights imported models
         if let content { view.scene.rootNode.addChildNode(content) }
         onMake?(view)
+        if storyboardLook { StoryboardLook.shared.attach(view) }
         return view
     }
 
@@ -1928,6 +1931,8 @@ struct CaptureStage: View {
     @Environment(\.verticalSizeClass) private var verticalSize
     @State private var holder = CameraViewHolder()
     @State private var importingModels = false
+    /// A panel made with Make panel while the Storyboard look is on.
+    @State private var lookPanel: LookPanel?
     @State private var scanningObject = false
     /// The model a scan made, to stand in the room once the camera is back.
     @State private var scannedModel: URL?
@@ -2053,11 +2058,18 @@ struct CaptureStage: View {
             }
         } preview: {
             ZStack {
-                CameraView(session: recorder.session, content: recorder.modelsNode) { view in
+                CameraView(session: recorder.session, content: recorder.modelsNode, onMake: { view in
                     recorder.placer.attachGestures(to: view)
                     recorder.measurer.attachGestures(to: view)
                     holder.view = view
+                }, storyboardLook: true)
+                .overlay(alignment: .top) {
+                    StoryboardLookBar {
+                        lookPanel = LookPanel.make(from: holder.view, scene: scene, shot: shot)
+                    }
+                    .padding(.top, 112)
                 }
+                .fullScreenCover(item: $lookPanel) { PanelEditor(panel: $0.panel, close: { lookPanel = nil }) }
                 // Dots on everything the scan has covered, building up as you walk round.
                 GeometryReader { geometry in
                     Color.clear
@@ -2489,6 +2501,8 @@ struct ResetStage: View {
     @State private var showingMore = false
     /// Storyboard mode (StoryboardScreen.swift), from the ••• menu (Phil, 2026-11-18).
     @State private var storyboarding = false
+    @State private var lookPanel: LookPanel?
+    @ObservedObject private var look = StoryboardLook.shared
     /// While swiping the ghost strength, the cursor shows.
     @State private var swipingStrength = false
     /// While swiping, how far towards now the view is, for the THEN and NOW tags; nil hides them.
@@ -2699,7 +2713,7 @@ struct ResetStage: View {
         .sheet(isPresented: $showingMore) {
             MoreSheet(items: moreItems).themed()
         }
-        .fullScreenCover(isPresented: $storyboarding) {
+        .fullScreenCover(isPresented: $storyboarding, onDismiss: { StoryboardLook.shared.refresh() }) {
             StoryboardScreen(liveFrame: { [weak r = restorer] in r?.session.currentFrame?.capturedImage },
                              referencePhoto: restorer.startPhoto, scene: reference.scene, shot: reference.shot)
                 .themed()
@@ -2781,6 +2795,7 @@ struct ResetStage: View {
         if !reference.photoOnly { items.append(.init("Walk through", "figure.walk") { open(.walk(reference.id)) }) }
         items.append(.init("Frames", "rectangle.stack") { open(.review(reference.id)) })
         items.append(.init("Storyboard", "rectangle.split.3x1") { storyboarding = true })
+        items.append(.init(look.on ? "Storyboard look: on" : "Storyboard look: off", "paintbrush.pointed") { look.set(!look.on) })
         items.append(.init("Compare", "rectangle.split.2x1") { open(.compare(reference.id)) })
         items.append(.init("Take log", "list.number") { open(.takeLog(reference.id)) })
         items.append(.init("PDF report", "square.and.arrow.up") { open(.pdf(reference.id)) })
@@ -2802,12 +2817,19 @@ struct ResetStage: View {
     private var preview: some View {
         GeometryReader { geometry in
             ZStack {
-                CameraView(session: restorer.session, content: restorer.sceneContent) { view in
+                CameraView(session: restorer.session, content: restorer.sceneContent, onMake: { view in
                     restorer.placer.attachGestures(to: view)
                     restorer.measurer.attachGestures(to: view)
                     restorer.attachLookGestures(to: view)
                     holder.view = view
+                }, storyboardLook: true)
+                .overlay(alignment: .top) {
+                    StoryboardLookBar {
+                        lookPanel = LookPanel.make(from: holder.view, scene: reference.scene, shot: reference.shot)
+                    }
+                    .padding(.top, 112)
                 }
+                .fullScreenCover(item: $lookPanel) { PanelEditor(panel: $0.panel, close: { lookPanel = nil }) }
                 if ghostShown, !restorer.backdropOn {
                     if reference.photoOnly, let photo = restorer.startPhoto {
                         Image(uiImage: photo)

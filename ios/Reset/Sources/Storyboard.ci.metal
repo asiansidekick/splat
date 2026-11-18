@@ -1,5 +1,5 @@
 // Storyboard drawing styles (Phil, 2026-11-18): Core Image kernels that turn a photo into an illustration.
-// Built with -fcikernel (project.yml), loaded by StoryboardRenderer from the app's default.metallib.
+// Built by the Core Image build rule in project.yml into Storyboard.ci.metallib, loaded by StoryboardRenderer.
 #include <CoreImage/CoreImage.h>
 using namespace metal;
 

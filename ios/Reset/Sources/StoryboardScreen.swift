@@ -15,6 +15,8 @@ struct StoryboardScreen: View {
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var store = StoryboardStore.shared
+    /// The Storyboard look over the whole app (StoryboardLook.swift).
+    @ObservedObject private var look = StoryboardLook.shared
     @AppStorage("storyLive") private var liveStyled = true
     @AppStorage("storyAspect") private var aspect = "16:9"
     @AppStorage("storyStyleName") private var styleName = "Marker"
@@ -37,18 +39,18 @@ struct StoryboardScreen: View {
             ZStack {
                 Color.black.ignoresSafeArea()
                 if wide {
+                    // On its side: shutter and sources down the left edge, the elements down the right (each fits
+                    // the height without scrolling), the picture between.
                     HStack(spacing: 10) {
+                        shutterRow(vertical: true)
+                            .frame(width: 140)
                         VStack(spacing: 10) {
                             topBar
                             picture
                             StyleStrip(name: $styleName, choose: choosePreset)
                         }
-                        VStack(spacing: 8) {
-                            ElementColumn(style: style, element: $element, step: stepElement)
-                            Spacer(minLength: 4)
-                            shutterRow(vertical: true)
-                        }
-                        .frame(width: 168)
+                        ElementColumn(style: style, element: $element, step: stepElement)
+                            .frame(width: 160)
                     }
                     .padding(.horizontal, 8)
                 } else {
@@ -170,6 +172,8 @@ struct StoryboardScreen: View {
             ShutterButton(style: .photo, busy: busy) { takePanel() }
             VStack(spacing: 8) {
                 WordButton(title: "Photos", on: false) { choosingPhoto = true }
+                // The same look on the recording and reset screens, models and all (StoryboardLook.swift).
+                WordButton(title: look.on ? "Whole app: on" : "Whole app: off", on: look.on) { look.set(!look.on) }
                 if let referencePhoto {
                     WordButton(title: "Reference", on: false) { makePanel(from: referencePhoto) }
                 }

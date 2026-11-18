@@ -133,6 +133,12 @@ jobs:
       - name: Package unsigned IPA
         working-directory: ios/Reset
         run: |
+          # Storyboard needs both Metal libraries: its Core Image kernels and the live look's shaders.
+          ls -l build/Release-iphoneos/Reset.app/*.metallib
+          if [ ! -f build/Release-iphoneos/Reset.app/Storyboard.ci.metallib ]; then
+            echo "::error::Storyboard.ci.metallib is missing from the app (Core Image build rule in project.yml)"
+            exit 1
+          fi
           mkdir -p Payload
           cp -R build/Release-iphoneos/Reset.app Payload/
           zip -qr "Reset-build-${{ github.run_number }}.ipa" Payload
