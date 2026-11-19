@@ -87,6 +87,7 @@ final class LensLive: ObservableObject {
     @Published private(set) var session: AVCaptureSession?
     private var output: AVCapturePhotoOutput?
     private var observer: NSObjectProtocol?
+    private var errorObserver: NSObjectProtocol?
     /// Something else took the camera (the app went to the background, for one).
     var onInterrupted: (() -> Void)?
     /// One after another: a lens is fully stopped before the next starts.
@@ -105,7 +106,11 @@ final class LensLive: ObservableObject {
         self.session = session
         self.output = output
         self.lens = lens
-        observer = NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: .main) { [weak self] _ in
+        errorObserver = NotificationCenter.default.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: .main) { note in
+            Diagnostics.log("Lens view: runtime error \(String(describing: note.userInfo?[AVCaptureSessionErrorKey]))")
+        }
+        observer = NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: .main) { [weak self] note in
+            Diagnostics.log("Lens view: interruption reason \(String(describing: note.userInfo?[AVCaptureSessionInterruptionReasonKey]))")
             MainActor.assumeIsolated {
                 // The room camera letting go can interrupt it for a moment as it starts: only a lasting one counts.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
@@ -139,7 +144,7 @@ final class LensLive: ObservableObject {
             session.addOutput(output)
             session.commitConfiguration()
             session.startRunning()
-            Diagnostics.log(String(format: "Lens view: %@ running after %.2f s", lens.label, Date().timeIntervalSince(began)))
+            Diagnostics.log(String(format: "Lens view: %@ running after %.2f s (running %@, interrupted %@)", lens.label, Date().timeIntervalSince(began), session.isRunning.description, session.isInterrupted.description))
         }
         return true
     }
@@ -148,6 +153,8 @@ final class LensLive: ObservableObject {
     func stop(then: (() -> Void)? = nil) {
         if let observer { NotificationCenter.default.removeObserver(observer) }
         observer = nil
+        if let errorObserver { NotificationCenter.default.removeObserver(errorObserver) }
+        errorObserver = nil
         let old = session
         session = nil
         output = nil

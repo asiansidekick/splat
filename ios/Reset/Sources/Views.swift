@@ -2041,11 +2041,6 @@ struct CaptureStage: View {
     /// The stage with the live view of another lens behind its controls (split from `stage` for the compiler's sake).
     var body: some View {
         stage
-        .background {
-            if let session = lensLive.session {
-                LensPreview(session: session).ignoresSafeArea().allowsHitTesting(false)
-            }
-        }
         .onReceive(recorder.placer.$selectedModel) { picked in
             editingModel = picked != nil
             if picked != nil, lens != 1 { lens = 1 }
@@ -2105,6 +2100,10 @@ struct CaptureStage: View {
                     .padding(.top, 112)
                 }
                 .fullScreenCover(item: $lookPanel) { PanelEditor(panel: $0.panel, close: { lookPanel = nil }) }
+                // Phil, 2026-11-19: wide and telephoto were black behind the room view. The other lens now draws on top of it.
+                if let session = lensLive.session {
+                    LensPreview(session: session).ignoresSafeArea().allowsHitTesting(false)
+                }
                 // Dots on everything the scan has covered, building up as you walk round.
                 GeometryReader { geometry in
                     Color.clear
