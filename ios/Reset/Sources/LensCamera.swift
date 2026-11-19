@@ -88,6 +88,8 @@ final class LensLive: ObservableObject {
     private var output: AVCapturePhotoOutput?
     private var observer: NSObjectProtocol?
     private var errorObserver: NSObjectProtocol?
+    private var endedObserver: NSObjectProtocol?
+    private var startedObserver: NSObjectProtocol?
     private var heartbeat: Task<Void, Never>?
     /// Something else took the camera (the app went to the background, for one).
     var onInterrupted: (() -> Void)?
@@ -109,6 +111,13 @@ final class LensLive: ObservableObject {
         self.session = session
         self.output = output
         self.lens = lens
+        let asked = Date()
+        endedObserver = NotificationCenter.default.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: .main) { _ in
+            Diagnostics.log(String(format: "Lens view: interruption ended %.1f s after the pick", Date().timeIntervalSince(asked)))
+        }
+        startedObserver = NotificationCenter.default.addObserver(forName: AVCaptureSession.didStartRunningNotification, object: session, queue: .main) { _ in
+            Diagnostics.log(String(format: "Lens view: camera running %.1f s after the pick", Date().timeIntervalSince(asked)))
+        }
         errorObserver = NotificationCenter.default.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: .main) { note in
             Diagnostics.log("Lens view: runtime error \(String(describing: note.userInfo?[AVCaptureSessionErrorKey]))")
         }
@@ -169,6 +178,10 @@ final class LensLive: ObservableObject {
         observer = nil
         if let errorObserver { NotificationCenter.default.removeObserver(errorObserver) }
         errorObserver = nil
+        if let endedObserver { NotificationCenter.default.removeObserver(endedObserver) }
+        endedObserver = nil
+        if let startedObserver { NotificationCenter.default.removeObserver(startedObserver) }
+        startedObserver = nil
         heartbeat?.cancel()
         heartbeat = nil
         let old = session
