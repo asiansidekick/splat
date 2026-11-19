@@ -422,7 +422,7 @@ struct RigPoser {
         for (k, bone) in map.spine.enumerated() {
             out[bone] = hips * simd_slerp(identity, lean, Float(k + 1) / Float(map.spine.count))
         }
-        let look = Self.turn(pose.headDown, Self.x) * Self.turn(pose.headTurn, Self.y)
+        let look = Self.turn(pose.detail.headTilt, Self.z) * Self.turn(pose.headDown, Self.x) * Self.turn(pose.headTurn, Self.y)
         if let head = map.head {
             out[head] = spine * look
             if let neck = map.neck { out[neck] = spine * simd_slerp(identity, look, 0.5) }

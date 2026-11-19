@@ -126,10 +126,13 @@ enum Mannequin {
             s.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.torso * 0.72, 0), scale: SIMD3(d.shoulders * 0.5, d.torso * 0.3, d.chestDepth)))
         }
         s.addChildNode(shape(SCNCapsule(capRadius: CGFloat((body == .woman ? 0.036 : 0.045) * k), height: CGFloat(d.neck + 0.08 * k)), at: SIMD3(0, d.torso + d.neck * 0.4, 0)))
-        let neck = joint("neck", at: SIMD3(0, d.torso + d.neck, 0), x: pose.headDown, y: pose.headTurn)
+        let neck = joint("neck", at: SIMD3(0, d.torso + d.neck, 0), z: pose.detail.headTilt, x: pose.headDown, y: pose.headTurn)
         s.addChildNode(neck.outer)
         neck.inner.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.head * 0.5, 0.01 * k), scale: SIMD3(0.085 * k, d.head * 0.5, 0.1 * k)))
         neck.inner.addChildNode(marker("end.head", at: SIMD3(0, d.head * 0.5, 0)))
+        // Phil, 2026-11-19: the crown turns and nods the head, the ear tilts it.
+        neck.inner.addChildNode(marker("tip.crown", at: SIMD3(0, d.head * 1.02, 0.01 * k)))
+        neck.inner.addChildNode(marker("tip.ear", at: SIMD3(0.1 * k, d.head * 0.5, 0)))
 
         // Arms.
         for (side, arm) in [(Float(1), pose.left), (Float(-1), pose.right)] {

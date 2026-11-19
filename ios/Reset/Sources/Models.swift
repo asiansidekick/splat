@@ -493,7 +493,15 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             wanted.append((arm[2], .wrist(side), 0.02, beyond(arm[2], from: arm[1], share: 0.45, forward: false), yellow))
             wanted.append((leg[2], .ankle(side), 0.02, beyond(leg[2], from: leg[1], share: 0.5, forward: true), yellow))
         }
-        if let head = map.head ?? map.neck { wanted.append((head, .head, 0.04, nil, mint)) }
+        if let neck = map.neck ?? map.head { wanted.append((neck, .head, 0.04, nil, mint)) }
+        // Head and neck (Phil, 2026-11-19): the crown turns and nods the head, the ear tilts it.
+        if let head = map.head ?? map.neck, let bone = rig.joint(head) {
+            let up = node.simdWorldOrientation.act(SIMD3(0, 1, 0))
+            let side = node.simdWorldOrientation.act(SIMD3(map.facing, 0, 0))
+            let at = bone.simdWorldPosition
+            wanted.append((head, .headLook, 0.025, at + up * (worldHeight * 0.12), yellow))
+            wanted.append((head, .headTilt, 0.02, at + up * (worldHeight * 0.06) + side * (worldHeight * 0.055), yellow))
+        }
         wanted.append((map.hips, .hips, 0.04, nil, yellow))
         for (index, joint, share, place, colour) in wanted {
             guard let bone = rig.joint(index) else { continue }
@@ -553,14 +561,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         switch joint {
         case .hand(let s), .elbow(let s), .wrist(let s): chain = s == 0 ? map.armL : map.armR
         case .foot(let s), .knee(let s), .ankle(let s): chain = s == 0 ? map.legL : map.legR
-        case .head, .hips: chain = map.armL
+        case .head, .hips, .headLook, .headTilt: chain = map.armL
         }
         let before = model.rigPose ?? rig.poser.restPose
         // Hips, wrists and ankles go by how far the finger has dragged from where it landed.
         var basis = before
         var screen = SIMD2<Float>.zero
         switch joint {
-        case .hips, .wrist, .ankle:
+        case .hips, .wrist, .ankle, .headLook, .headTilt:
             basis = poseStartPose ?? before
             screen = SIMD2(Float(finger.x - poseStartFinger.x), Float(finger.y - poseStartFinger.y))
         default: break
@@ -2090,7 +2098,7 @@ private struct MoveHint: View {
         case .size: return ("arrow.up.and.down.circle", "pinch, or drag ↕, to scale · the figures follow")
         case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "push a lever's knob to swing it · or drag anywhere · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
-        case .pose: return ("hand.draw", "mint dot: reach · yellow: hips ↔ turn ↕ tilt, wrist, ankle")
+        case .pose: return ("hand.draw", "mint dot: reach · yellow: hips, wrist, ankle, head ↔ turn ↕ nod")
         }
     }
 

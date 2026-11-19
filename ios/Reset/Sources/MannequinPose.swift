@@ -20,6 +20,8 @@ struct MannequinPose: Codable, Equatable {
     struct Detail: Codable, Equatable {
         var hipTilt: Float = 0
         var hipTurn: Float = 0
+        /// The head leaning toward a shoulder (Phil, 2026-11-19: head and neck).
+        var headTilt: Float = 0
         var leftHand = Hand(), rightHand = Hand()
         var leftFoot = Foot(), rightFoot = Foot()
         /// How far each finger is curled, 0 open to 1 shut: thumb, index, middle, ring, little. Nil is open.
@@ -117,6 +119,7 @@ extension MannequinPose {
         p.headTurn = -headTurn
         p.detail.hipTilt = -detail.hipTilt
         p.detail.hipTurn = -detail.hipTurn
+        p.detail.headTilt = -detail.headTilt
         p.detail.leftHand = detail.rightHand
         p.detail.rightHand = detail.leftHand
         p.detail.leftFoot = detail.rightFoot
@@ -200,6 +203,7 @@ extension MannequinPose {
         func hand(_ h: Hand) -> Hand { Hand(bend: clamp(h.bend, -60, 80), side: clamp(h.side, -20, 30)) }
         func foot(_ f: Foot) -> Foot { Foot(point: clamp(f.point, -20, 50), turn: clamp(f.turn, -25, 25)) }
         p.detail.hipTilt = clamp(detail.hipTilt, -15, 15)
+        p.detail.headTilt = clamp(detail.headTilt, -35, 35)
         p.detail.hipTurn = clamp(detail.hipTurn, -35, 35)
         p.detail.leftHand = hand(detail.leftHand)
         p.detail.rightHand = hand(detail.rightHand)
