@@ -103,6 +103,7 @@ final class LensLive: ObservableObject {
     var onFailed: (() -> Void)?
 
     func start(_ lens: LensCamera.Lens) -> Bool {
+        MainStallWatch.start()
         stop()
         // Phil, 2026-11-19: wide worked, then a crash about 20 s after switching straight on to telephoto. The old lens
         // is gone from the screen first (an empty moment), and the new one opens only after the old one has stopped.
@@ -290,5 +291,30 @@ struct LensChooser: View {
                 }
             }
         }
+    }
+}
+
+/// Phil, 2026-11-19: switching lenses froze the screen for 10 s or more. This says in the log when the main thread
+/// stood still and for how long, so the freeze can be lined up with what the app was doing.
+enum MainStallWatch {
+    nonisolated(unsafe) private static var running = false
+
+    static func start() {
+        guard !running else { return }
+        running = true
+        let thread = Thread {
+            while true {
+                Thread.sleep(forTimeInterval: 0.5)
+                let sent = Date()
+                let done = DispatchSemaphore(value: 0)
+                DispatchQueue.main.async { done.signal() }
+                if done.wait(timeout: .now() + 1) == .timedOut {
+                    done.wait()
+                    Diagnostics.log(String(format: "Main thread stood still for %.1f s", Date().timeIntervalSince(sent)))
+                }
+            }
+        }
+        thread.qualityOfService = .utility
+        thread.start()
     }
 }

@@ -2349,6 +2349,7 @@ struct CaptureStage: View {
                 pausedTracking = recorder.session.configuration
                 recorder.measurer.active = false
                 recorder.session.pause()
+                Diagnostics.log("Lens view: room camera paused")
             }
             lensLive.onInterrupted = { lens = 1 }
             lensLive.onFailed = {
@@ -2366,6 +2367,7 @@ struct CaptureStage: View {
     }
 
     private func resumeTracking() {
+        Diagnostics.log("Lens view: room camera starting again")
         if let configuration = pausedTracking { recorder.session.run(configuration) }
         pausedTracking = nil
     }
