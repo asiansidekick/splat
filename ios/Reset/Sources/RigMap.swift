@@ -322,6 +322,8 @@ struct RigPoser {
     /// Per hand (left, right) and finger (thumb to little): the finger's bones from the knuckle out, and the way its
     /// bones curl (in the model's space). Empty when the character has no finger bones.
     let fingers: [[[Int]]]
+    /// The collar bone of each shoulder (left, right), when the character has one: the parent of the upper arm.
+    let collars: [Int?]
     private let fingerAxes: [[SIMD3<Float>]]
 
     private static func turn(_ degrees: Float, _ axis: SIMD3<Float>) -> simd_quatf { simd_quatf(angle: degrees * .pi / 180, axis: axis) }
@@ -404,6 +406,12 @@ struct RigPoser {
             chains.append(sideChains)
             axes.append(sideAxes)
         }
+        collars = [map.armL[0], map.armR[0]].map { upper -> Int? in
+            let parent = nodes[upper].parent
+            guard parent >= 0, parent < nodes.count, nodes[parent].isBone, !map.spine.contains(parent), parent != map.hips else { return nil }
+            let key = RigFinder.label(nodes[parent].name).key
+            return ["shoulder", "clavicle", "collar", "collarbone", "clav"].contains(where: { key.contains($0) }) ? parent : nil
+        }
         fingers = chains
         fingerAxes = axes
         self.armFrames = armFrames
@@ -430,7 +438,15 @@ struct RigPoser {
         for (index, arm) in [pose.left, pose.right].enumerated() {
             let side: Float = index == 0 ? 1 : -1
             let limb = index == 0 ? map.armL : map.armR
-            let upper = spine * Self.turn(side * arm.out, Self.z) * Self.turn(-arm.forward, Self.x) * Self.turn(-side * arm.inward, Self.y)
+            // The collar bone shrugs and rolls, and the arm goes with it.
+            let lift = index == 0 ? pose.detail.leftShoulder : pose.detail.rightShoulder
+            var carry = spine
+            if let collar = collars[index], lift.shrug != 0 || lift.roll != 0 {
+                let shift = Self.turn(-side * lift.roll, Self.y) * Self.turn(side * lift.shrug, Self.z)
+                out[collar] = spine * shift
+                carry = spine * shift
+            }
+            let upper = carry * Self.turn(side * arm.out, Self.z) * Self.turn(-arm.forward, Self.x) * Self.turn(-side * arm.inward, Self.y)
             let lower = upper * Self.turn(-arm.elbow, Self.x)
             out[limb[0]] = upper * armFrames[index][0].inverse
             let forearm = lower * armFrames[index][1].inverse

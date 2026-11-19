@@ -4,7 +4,7 @@ import simd
 /// dots, worked on the character's own joint positions, in the space the mannequin angles use (facing +Z, left at +X).
 enum PoseDrag {
     enum Joint: Equatable {
-        case hand(Int), foot(Int), elbow(Int), knee(Int), head, wrist(Int), ankle(Int), hips, headLook, headTilt  // Int: 0 left, 1 right
+        case hand(Int), foot(Int), elbow(Int), knee(Int), head, wrist(Int), ankle(Int), hips, headLook, headTilt, shoulder(Int)  // Int: 0 left, 1 right
     }
 
     /// The pose after the joint is dragged to `target`. `top`, `middle` and `end` are the limb's joints now (shoulder or hip,
@@ -17,6 +17,16 @@ enum PoseDrag {
             // Sideways turns the pelvis, up and down tilts it.
             pose.detail.hipTurn = pose.detail.hipTurn + screen.x * 0.4
             pose.detail.hipTilt = pose.detail.hipTilt - screen.y * 0.2
+        case .shoulder(let side):
+            // Up and down on the screen shrugs the shoulder, sideways rolls it forward or back.
+            let sign: Float = side == 0 ? 1 : -1
+            if side == 0 {
+                pose.detail.leftShoulder.shrug -= screen.y * 0.3
+                pose.detail.leftShoulder.roll += screen.x * 0.3 * sign
+            } else {
+                pose.detail.rightShoulder.shrug -= screen.y * 0.3
+                pose.detail.rightShoulder.roll += screen.x * 0.3 * sign
+            }
         case .headLook:
             // Sideways turns the head, up and down nods it.
             pose.headTurn += screen.x * 0.4

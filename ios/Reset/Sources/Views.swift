@@ -2053,7 +2053,12 @@ struct CaptureStage: View {
         .onChange(of: lens) { _, picked in
             syncLens()
             // Phil, 2026-11-12: say what the other lenses cost, every time one is picked.
-            if picked != 1 { showToast("\(picked == 0.5 ? "0.5×" : "\(Int(picked))×") works in Manual scan only: no room map, models or measuring") }
+            // Phil, 2026-11-19: the lenses stand in Auto scan too; picking one there moves to Manual scan, and says what goes.
+            if picked != 1 {
+                let name = picked == 0.5 ? "Wide (0.5×)" : picked == 3 ? "Telephoto (3×)" : "\(Int(picked))×"
+                if mode == .walk { mode = .snapshot }
+                showToast("\(name) is a plain photo lens. Unavailable: Auto scan, room map, models, measuring and the guide")
+            }
         }
         .onChange(of: mode) { _, new in
             if new == .walk, lens != 1 {
@@ -2153,7 +2158,7 @@ struct CaptureStage: View {
             }
             .modifier(WindowFrame { frame in tapCatcher.targets["Capture shutter"] = (frame, { shutterOnce() }) })
             .overlay(alignment: verticalSize == .compact ? (leftHanded ? .trailing : .leading) : .top) {
-                if mode == .snapshot, !recorder.capturing, !editingModel {
+                if mode == .snapshot || mode == .walk, !recorder.capturing, !editingModel {
                     // On its side the lenses stand in a column beside the shutter, clear of the mode words.
                     if verticalSize == .compact {
                         LensChooser(zoom: $lens, vertical: true)
@@ -2162,11 +2167,10 @@ struct CaptureStage: View {
                         // Upright they sit above the mode words, not on them.
                         LensChooser(zoom: $lens).offset(y: -66).disabled(lensBusy)
                     }
-                } else if mode == .walk, !recorder.capturing {
-                    // Phil, 2026-11-14: the tiling guide's switch on the camera screen, where the lenses stand in Manual scan.
-                    if verticalSize != .compact {
-                        GuidePlaced(placer: recorder.placer, top: false, on: tileGuide) { toggleGuide() }.offset(y: -66)
-                    }
+                }
+                if mode == .walk, !recorder.capturing, verticalSize != .compact {
+                    // Phil, 2026-11-14: the tiling guide's switch on the camera screen, above the lenses.
+                    GuidePlaced(placer: recorder.placer, top: false, on: tileGuide) { toggleGuide() }.offset(y: -110)
                 }
             }
             .disabled(recorder.saving || lensBusy)

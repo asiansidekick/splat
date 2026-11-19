@@ -197,7 +197,7 @@ private struct PoseStage: UIViewRepresentable {
             handles = [:]
             // Phil, 2026-11-10: elbows and knees get their own (smaller) dots.
             for name in ["end.hand.L", "end.hand.R", "end.foot.L", "end.foot.R", "end.head", "elbow.L", "elbow.R", "knee.L", "knee.R",
-                         "tip.hand.L", "tip.hand.R", "tip.foot.L", "tip.foot.R", "tip.crown", "tip.ear", "pelvis"] {
+                         "tip.hand.L", "tip.hand.R", "tip.foot.L", "tip.foot.R", "tip.crown", "tip.ear", "tip.shoulder.L", "tip.shoulder.R", "pelvis"] {
                 guard let marker = made.childNode(withName: name, recursively: true) else { continue }
                 let joint = !name.hasPrefix("end.")
                 let dot = SCNNode(geometry: SCNSphere(radius: CGFloat((joint ? 0.032 : 0.045) * parent.height / 1.7)))
@@ -219,7 +219,7 @@ private struct PoseStage: UIViewRepresentable {
 
         private func articulate(_ handle: String, to point: CGPoint) {
             let side = handle.hasSuffix("L") ? 0 : 1
-            let joint: PoseDrag.Joint = handle == "pelvis" ? .hips : handle == "tip.crown" ? .headLook : handle == "tip.ear" ? .headTilt
+            let joint: PoseDrag.Joint = handle == "pelvis" ? .hips : handle == "tip.crown" ? .headLook : handle == "tip.ear" ? .headTilt : handle.hasPrefix("tip.shoulder") ? .shoulder(side)
                 : handle.hasPrefix("tip.hand") ? .wrist(side) : .ankle(side)
             let pose = PoseDrag.solve(joint, target: .zero, top: .zero, middle: .zero, end: .zero, hips: .zero, from: startPose,
                                       screen: SIMD2(Float(point.x - startPoint.x), Float(point.y - startPoint.y)))

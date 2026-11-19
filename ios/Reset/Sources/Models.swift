@@ -490,6 +490,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             wanted.append((arm[1], .elbow(side), 0.022, nil, mint))
             wanted.append((leg[2], .foot(side), 0.032, nil, mint))
             wanted.append((leg[1], .knee(side), 0.022, nil, mint))
+            wanted.append((arm[0], .shoulder(side), 0.022, rig.joint(arm[0]).map { $0.simdWorldPosition + node.simdWorldOrientation.act(SIMD3(0, 1, 0)) * (worldHeight * 0.04) }, yellow))
             wanted.append((arm[2], .wrist(side), 0.02, beyond(arm[2], from: arm[1], share: 0.45, forward: false), yellow))
             wanted.append((leg[2], .ankle(side), 0.02, beyond(leg[2], from: leg[1], share: 0.5, forward: true), yellow))
         }
@@ -562,13 +563,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         case .hand(let s), .elbow(let s), .wrist(let s): chain = s == 0 ? map.armL : map.armR
         case .foot(let s), .knee(let s), .ankle(let s): chain = s == 0 ? map.legL : map.legR
         case .head, .hips, .headLook, .headTilt: chain = map.armL
+        case .shoulder(let s): chain = s == 0 ? map.armL : map.armR
         }
         let before = model.rigPose ?? rig.poser.restPose
         // Hips, wrists and ankles go by how far the finger has dragged from where it landed.
         var basis = before
         var screen = SIMD2<Float>.zero
         switch joint {
-        case .hips, .wrist, .ankle, .headLook, .headTilt:
+        case .hips, .wrist, .ankle, .headLook, .headTilt, .shoulder:
             basis = poseStartPose ?? before
             screen = SIMD2(Float(finger.x - poseStartFinger.x), Float(finger.y - poseStartFinger.y))
         default: break
@@ -2098,7 +2100,7 @@ private struct MoveHint: View {
         case .size: return ("arrow.up.and.down.circle", "pinch, or drag ↕, to scale · the figures follow")
         case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "push a lever's knob to swing it · or drag anywhere · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
-        case .pose: return ("hand.draw", "mint dot: reach · yellow: hips, wrist, ankle, head ↔ turn ↕ nod")
+        case .pose: return ("hand.draw", "mint dot: reach · yellow: shoulder, hips, wrist, ankle, head")
         }
     }
 

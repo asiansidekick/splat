@@ -17,6 +17,8 @@ struct MannequinPose: Codable, Equatable {
     /// Phil, 2026-11-19 (Magic Poser): hips, wrists and ankles. Kept apart so poses saved before them still open.
     struct Hand: Codable, Equatable { var bend: Float = 0; var side: Float = 0 }
     struct Foot: Codable, Equatable { var point: Float = 0; var turn: Float = 0 }
+    /// Shoulders (Phil, 2026-11-19): up (shrug, degrees) and forward (roll, degrees, negative back).
+    struct Shoulder: Codable, Equatable { var shrug: Float = 0; var roll: Float = 0 }
     struct Detail: Codable, Equatable {
         var hipTilt: Float = 0
         var hipTurn: Float = 0
@@ -27,6 +29,44 @@ struct MannequinPose: Codable, Equatable {
         /// How far each finger is curled, 0 open to 1 shut: thumb, index, middle, ring, little. Nil is open.
         var leftFingers: [Float]?
         var rightFingers: [Float]?
+        var leftShoulder = Shoulder(), rightShoulder = Shoulder()
+
+        init() {}
+
+        // Every key is optional, so poses saved by earlier builds (before each of these was added) still open.
+        private enum Keys: String, CodingKey {
+            case hipTilt, hipTurn, headTilt, leftHand, rightHand, leftFoot, rightFoot, leftFingers, rightFingers, leftShoulder, rightShoulder
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: Keys.self)
+            hipTilt = try c.decodeIfPresent(Float.self, forKey: .hipTilt) ?? 0
+            hipTurn = try c.decodeIfPresent(Float.self, forKey: .hipTurn) ?? 0
+            headTilt = try c.decodeIfPresent(Float.self, forKey: .headTilt) ?? 0
+            leftHand = try c.decodeIfPresent(Hand.self, forKey: .leftHand) ?? Hand()
+            rightHand = try c.decodeIfPresent(Hand.self, forKey: .rightHand) ?? Hand()
+            leftFoot = try c.decodeIfPresent(Foot.self, forKey: .leftFoot) ?? Foot()
+            rightFoot = try c.decodeIfPresent(Foot.self, forKey: .rightFoot) ?? Foot()
+            leftFingers = try c.decodeIfPresent([Float].self, forKey: .leftFingers)
+            rightFingers = try c.decodeIfPresent([Float].self, forKey: .rightFingers)
+            leftShoulder = try c.decodeIfPresent(Shoulder.self, forKey: .leftShoulder) ?? Shoulder()
+            rightShoulder = try c.decodeIfPresent(Shoulder.self, forKey: .rightShoulder) ?? Shoulder()
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: Keys.self)
+            try c.encode(hipTilt, forKey: .hipTilt)
+            try c.encode(hipTurn, forKey: .hipTurn)
+            try c.encode(headTilt, forKey: .headTilt)
+            try c.encode(leftHand, forKey: .leftHand)
+            try c.encode(rightHand, forKey: .rightHand)
+            try c.encode(leftFoot, forKey: .leftFoot)
+            try c.encode(rightFoot, forKey: .rightFoot)
+            try c.encodeIfPresent(leftFingers, forKey: .leftFingers)
+            try c.encodeIfPresent(rightFingers, forKey: .rightFingers)
+            try c.encode(leftShoulder, forKey: .leftShoulder)
+            try c.encode(rightShoulder, forKey: .rightShoulder)
+        }
     }
     var detail = Detail()
 
@@ -125,6 +165,8 @@ extension MannequinPose {
         p.detail.leftFoot = detail.rightFoot
         p.detail.rightFoot = detail.leftFoot
         p.detail.leftFingers = detail.rightFingers
+        p.detail.leftShoulder = detail.rightShoulder
+        p.detail.rightShoulder = detail.leftShoulder
         p.detail.rightFingers = detail.leftFingers
         return p
     }
@@ -204,6 +246,9 @@ extension MannequinPose {
         func foot(_ f: Foot) -> Foot { Foot(point: clamp(f.point, -20, 50), turn: clamp(f.turn, -25, 25)) }
         p.detail.hipTilt = clamp(detail.hipTilt, -15, 15)
         p.detail.headTilt = clamp(detail.headTilt, -35, 35)
+        func shoulder(_ s: Shoulder) -> Shoulder { Shoulder(shrug: clamp(s.shrug, -15, 35), roll: clamp(s.roll, -25, 25)) }
+        p.detail.leftShoulder = shoulder(detail.leftShoulder)
+        p.detail.rightShoulder = shoulder(detail.rightShoulder)
         p.detail.hipTurn = clamp(detail.hipTurn, -35, 35)
         p.detail.leftHand = hand(detail.leftHand)
         p.detail.rightHand = hand(detail.rightHand)

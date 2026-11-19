@@ -137,7 +137,13 @@ enum Mannequin {
         // Arms.
         for (side, arm) in [(Float(1), pose.left), (Float(-1), pose.right)] {
             let name = side > 0 ? "L" : "R"
-            let shoulder = joint("shoulder.\(name)", at: SIMD3(side * d.shoulders / 2, d.torso - 0.03 * k, 0),
+            // Shoulders (Phil, 2026-11-19): shrug lifts the joint along the arc of the collar, roll brings it forward or back.
+            let lift = side > 0 ? pose.detail.leftShoulder : pose.detail.rightShoulder
+            let shrug = d.shoulders * 0.5 * sin(lift.shrug * .pi / 180)
+            let roll = d.shoulders * 0.5 * sin(lift.roll * .pi / 180)
+            let shoulderAt = SIMD3<Float>(side * d.shoulders / 2, d.torso - 0.03 * k + shrug, roll)
+            s.addChildNode(marker("tip.shoulder.\(name)", at: shoulderAt + SIMD3(side * 0.01 * k, 0.045 * k, 0)))
+            let shoulder = joint("shoulder.\(name)", at: shoulderAt,
                                  z: side * arm.out, x: -arm.forward, y: -side * arm.inward)
             s.addChildNode(shoulder.outer)
             shoulder.inner.addChildNode(shape(SCNSphere(radius: CGFloat(d.armRadius * 1.25)), at: .zero))
