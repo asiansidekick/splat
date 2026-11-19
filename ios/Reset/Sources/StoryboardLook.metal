@@ -58,7 +58,8 @@ static float3 lookBlur(texture2d<float, access::sample> t, sampler s, float2 uv,
 
 /// The style arrives as the size of a small texture (`styleCode`), which SceneKit always passes along. Build 1360 sent
 /// it as two vec4 values instead; they never reached the shader on Phil's phone, so the picture showed plain.
-/// Width - 1 = lines + 5 * detail + 15 * shadows; height - 1 = tones + 6 * colour + 30 * texture + 150 * paper.
+/// Width - 1 = lines + 5 * detail + 20 * shadows + 80 * light; height - 1 = tones + 7 * colour + 35 * texture
+/// + 175 * paper.
 fragment half4 storyLookFragment(LookVertexOut in [[stage_in]],
                                  texture2d<float, access::sample> colorSampler [[texture(0)]],
                                  texture2d<float, access::sample> styleCode [[texture(1)]]) {
@@ -68,24 +69,27 @@ fragment half4 storyLookFragment(LookVertexOut in [[stage_in]],
     int a = int(styleCode.get_width()) - 1;
     int b = int(styleCode.get_height()) - 1;
     // Not a style code (SceneKit sized the texture another way): Marker.
-    if (a < 0 || a >= 60 || b < 0 || b >= 600) { a = 3 + 5 * 1 + 15 * 1; b = 4; }
+    if (a < 0 || a >= 400 || b < 0 || b >= 700) { a = 3 + 5 * 1 + 20 * 1 + 80 * 2; b = 4; }
     int lines = a % 5;
-    int detail = (a / 5) % 3;
-    int shadows = clamp(a / 15, 0, 3);
-    int tones = b % 6;
-    int colourMode = (b / 6) % 5;
-    int dots = (b / 30) % 5;
-    int paperStep = clamp(b / 150, 0, 3);
+    int detail = (a / 5) % 4;
+    int shadows = (a / 20) % 4;
+    int light = clamp(a / 80, 0, 4);
+    int tones = b % 7;
+    int colourMode = (b / 7) % 5;
+    int dots = (b / 35) % 5;
+    int paperStep = clamp(b / 175, 0, 3);
+    float gammas[5] = {1.6, 1.25, 1.0, 0.75, 0.55};
+    float gamma = gammas[light];
 
     float unit = max(size.x, size.y) / 1000.0;
     float2 pixel = 1.0 / size;
-    float sigmas[3] = {2.2, 1.6, 1.15};
+    float sigmas[4] = {2.2, 1.6, 1.15, 0.85};
     float sigma = max(sigmas[detail] * unit, 1.0);
 
     // Lines: extended difference of two blurs.
     float near = lookLuma(lookBlur(colorSampler, s, in.uv, pixel * sigma));
     float far = lookLuma(lookBlur(colorSampler, s, in.uv, pixel * sigma * 1.6));
-    float epsilons[3] = {0.5, 0.55, 0.62};
+    float epsilons[4] = {0.5, 0.55, 0.62, 0.68};
     float shifts[5] = {0.0, -0.03, 0.0, 0.04, 0.08};
     float eps = epsilons[detail] + shifts[clamp(lines, 0, 4)];
     float d = 19.0 * near - 18.0 * far;
@@ -94,8 +98,8 @@ fragment half4 storyLookFragment(LookVertexOut in [[stage_in]],
     float lineDark = darkness[clamp(lines, 0, 4)];
 
     // Flattened colour for the tone bands.
-    float spreads[3] = {5.0, 3.5, 2.4};
-    float3 colour = clamp(lookBlur(colorSampler, s, in.uv, pixel * spreads[detail] * unit), 0.0, 1.0);
+    float spreads[4] = {5.0, 3.5, 2.4, 1.5};
+    float3 colour = pow(clamp(lookBlur(colorSampler, s, in.uv, pixel * spreads[detail] * unit), 0.0, 1.0), float3(gamma));
     float lum = lookLuma(colour);
     float tone = lum;
     if (tones > 0) {
