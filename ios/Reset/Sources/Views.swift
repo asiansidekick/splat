@@ -2348,13 +2348,13 @@ struct CaptureStage: View {
                 recorder.session.pause()
             }
             lensLive.onInterrupted = { lens = 1 }
-            if lensLive.start(wanted) {
-                Diagnostics.log("Lens view: \(wanted.label)")
-            } else {
+            lensLive.onFailed = {
                 Diagnostics.log("Lens view: could not open \(wanted.label)")
                 showToast("Couldn't open the \(wanted.label) lens")
                 lens = 1
-                resumeTracking()
+            }
+            if lensLive.start(wanted) {
+                Diagnostics.log("Lens view: \(wanted.label)")
             }
         } else {
             Diagnostics.log("Lens view: back to 1×")

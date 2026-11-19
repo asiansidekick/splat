@@ -93,16 +93,15 @@ final class LensLive: ObservableObject {
     private static let queue = DispatchQueue(label: "reset.lens.live", qos: .userInitiated)
 
     /// False if the lens could not be opened.
+    /// Phil, 2026-11-19: froze when the wide lens was picked. Opening the camera input waits for the room camera to let
+    /// go, and it was done on the main thread, so the whole screen waited with it. Now everything but showing the
+    /// preview happens on the lens queue, a moment after the room camera stops; `onFailed` says if it could not open.
+    var onFailed: (() -> Void)?
+
     func start(_ lens: LensCamera.Lens) -> Bool {
         stop()
-        guard let device = AVCaptureDevice.default(lens.type, for: .video, position: .back),
-              let input = try? AVCaptureDeviceInput(device: device) else { return false }
         let session = AVCaptureSession()
-        session.sessionPreset = .photo
         let output = AVCapturePhotoOutput()
-        guard session.canAddInput(input), session.canAddOutput(output) else { return false }
-        session.addInput(input)
-        session.addOutput(output)
         self.session = session
         self.output = output
         self.lens = lens
@@ -118,7 +117,30 @@ final class LensLive: ObservableObject {
                 }
             }
         }
-        Self.queue.async { session.startRunning() }
+        Self.queue.async { [weak self] in
+            // Let the room camera finish letting go.
+            Thread.sleep(forTimeInterval: 0.4)
+            let began = Date()
+            guard let device = AVCaptureDevice.default(lens.type, for: .video, position: .back),
+                  let input = try? AVCaptureDeviceInput(device: device) else {
+                Diagnostics.log("Lens view: no input for \(lens.label)")
+                DispatchQueue.main.async { MainActor.assumeIsolated { if self?.session === session { self?.onFailed?() } } }
+                return
+            }
+            session.beginConfiguration()
+            session.sessionPreset = .photo
+            guard session.canAddInput(input), session.canAddOutput(output) else {
+                session.commitConfiguration()
+                Diagnostics.log("Lens view: could not add the camera to its session")
+                DispatchQueue.main.async { MainActor.assumeIsolated { if self?.session === session { self?.onFailed?() } } }
+                return
+            }
+            session.addInput(input)
+            session.addOutput(output)
+            session.commitConfiguration()
+            session.startRunning()
+            Diagnostics.log(String(format: "Lens view: %@ running after %.2f s", lens.label, Date().timeIntervalSince(began)))
+        }
         return true
     }
 
