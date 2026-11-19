@@ -608,7 +608,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     /// Back to the pose the file has.
-    func resetPose() {
+    func resetCharacterPose() {
         guard let id = selectedModel, let model = models.first(where: { $0.id == id }), model.rigPose != nil else { return }
         poseUndo[id, default: []].append(model.rigPose)
         poseRedo[id] = []
@@ -2007,7 +2007,7 @@ struct ModelOverlay: View {
             CutoutTool(word: "Undo", symbol: "arrow.uturn.backward", tint: placer.canUndoPose ? .white : .gray) { placer.undoPose() }
             CutoutTool(word: "Redo", symbol: "arrow.uturn.forward", tint: placer.canRedoPose ? .white : .gray) { placer.redoPose() }
             CutoutTool(word: "Mirror", symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right") { placer.mirrorPose() }
-            CutoutTool(word: "Reset", symbol: "arrow.counterclockwise") { placer.resetPose() }
+            CutoutTool(word: "Reset", symbol: "arrow.counterclockwise") { placer.resetCharacterPose() }
         }
         .fixedSize()
     }
