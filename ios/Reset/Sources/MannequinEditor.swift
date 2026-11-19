@@ -9,6 +9,8 @@ struct MannequinPoseEditor: View {
     let onDone: (MannequinSpec) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var pose: MannequinPose
+    @State private var proportion: MannequinProportion
+    @State private var showsBuild = false
     /// Phil, 2026-11-19 (Magic Poser): undo, redo, flip.
     @State private var undo: [MannequinPose] = []
     @State private var redo: [MannequinPose] = []
@@ -20,6 +22,16 @@ struct MannequinPoseEditor: View {
         self.spec = spec
         self.onDone = onDone
         _pose = State(initialValue: spec.pose)
+        _proportion = State(initialValue: spec.proportion ?? MannequinProportion())
+    }
+
+    /// One slider for the length or width of a part, from 80% to 120% of the standard body.
+    private func buildSlider(_ name: String, _ value: Binding<Float>) -> some View {
+        HStack {
+            Text(name).font(Theme.footnote).frame(width: 78, alignment: .leading)
+            Slider(value: value, in: 0.8...1.2).tint(Theme.accent)
+            Text("\(Int((value.wrappedValue * 100).rounded()))%").font(Theme.footnote.monospacedDigit()).frame(width: 44, alignment: .trailing)
+        }
     }
 
     var body: some View {
@@ -32,6 +44,7 @@ struct MannequinPoseEditor: View {
                 Button {
                     var changed = spec
                     changed.pose = pose
+                    changed.proportion = proportion.isStandard ? nil : proportion
                     onDone(changed)
                     dismiss()
                 } label: { Text("Done").fontWeight(.bold) }
@@ -40,7 +53,7 @@ struct MannequinPoseEditor: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             ZStack(alignment: .top) {
-                PoseStage(person: spec.body, height: spec.height, pose: $pose, onBegin: { undo.append(pose); redo = [] })
+                PoseStage(person: spec.body, height: spec.height, proportion: proportion, pose: $pose, onBegin: { undo.append(pose); redo = [] })
                 Text("Mint dots reach. Yellow: hips turn and tilt, wrists and ankles bend. Drag elsewhere to turn round.")
                     .font(Theme.caption)
                     .foregroundStyle(.white)
@@ -56,11 +69,25 @@ struct MannequinPoseEditor: View {
                 Button("Mirror") { undo.append(pose); redo = []; pose = pose.mirrored }
                 Button("Reset") { undo.append(pose); redo = []; pose = spec.pose == pose ? .standing : spec.pose }
                 Button("Save") { saving = true }
+                Button("Build") { showsBuild.toggle() }
             }
             .font(Theme.footnote.weight(.semibold))
             .buttonStyle(.bordered)
             .tint(Theme.accent)
             .padding(.top, 6)
+            if showsBuild {
+                VStack(spacing: 2) {
+                    buildSlider("Arms", $proportion.arms)
+                    buildSlider("Legs", $proportion.legs)
+                    buildSlider("Torso", $proportion.torso)
+                    buildSlider("Head", $proportion.head)
+                    buildSlider("Shoulders", $proportion.shoulders)
+                    Button("Standard build") { proportion = MannequinProportion() }
+                        .font(Theme.footnote.weight(.semibold))
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(library.items) { item in
@@ -101,6 +128,7 @@ struct MannequinPoseEditor: View {
 private struct PoseStage: UIViewRepresentable {
     let person: Mannequin.Body
     let height: Float
+    var proportion = MannequinProportion()
     @Binding var pose: MannequinPose
     var onBegin: () -> Void = {}
 
@@ -131,7 +159,7 @@ private struct PoseStage: UIViewRepresentable {
 
     func updateUIView(_ view: SCNView, context: Context) {
         context.coordinator.parent = self
-        if context.coordinator.shown != pose { context.coordinator.rebuild(pose) }
+        if context.coordinator.shown != pose || context.coordinator.shownProportion != proportion { context.coordinator.rebuild(pose) }
     }
 
     @MainActor
@@ -142,6 +170,7 @@ private struct PoseStage: UIViewRepresentable {
         var figure: SCNNode?
         var handles: [String: SCNNode] = [:]
         var shown: MannequinPose?
+        var shownProportion: MannequinProportion?
         private var yaw: Float = 0.5
         private var dragging: String?
         private var depth: Float = 0
@@ -159,7 +188,8 @@ private struct PoseStage: UIViewRepresentable {
         func rebuild(_ pose: MannequinPose) {
             guard let scene = view?.scene else { return }
             figure?.removeFromParentNode()
-            let made = Mannequin.make(parent.person, pose: pose, height: parent.height)
+            let made = Mannequin.make(parent.person, pose: pose, height: parent.height, proportion: parent.proportion)
+            shownProportion = parent.proportion
             scene.rootNode.addChildNode(made)
             figure = made
             shown = pose

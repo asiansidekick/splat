@@ -69,3 +69,34 @@ struct PoseLibrarySheet: View {
         .preferredColorScheme(.dark)
     }
 }
+
+/// Ready-made hands for a character with finger bones: pick one for each hand, or both together.
+struct HandsSheet: View {
+    let onPick: (Int?, HandPreset) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach([("Both hands", Int?.none), ("Left hand", 0), ("Right hand", 1)], id: \.0) { title, side in
+                    Section(title) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(HandPreset.allCases, id: \.self) { preset in
+                                    Button(preset.rawValue) { onPick(side, preset) }
+                                        .buttonStyle(.bordered)
+                                        .tint(Theme.accent)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Hands")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium])
+        .preferredColorScheme(.dark)
+    }
+}

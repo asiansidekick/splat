@@ -22,6 +22,9 @@ struct MannequinPose: Codable, Equatable {
         var hipTurn: Float = 0
         var leftHand = Hand(), rightHand = Hand()
         var leftFoot = Foot(), rightFoot = Foot()
+        /// How far each finger is curled, 0 open to 1 shut: thumb, index, middle, ring, little. Nil is open.
+        var leftFingers: [Float]?
+        var rightFingers: [Float]?
     }
     var detail = Detail()
 
@@ -118,6 +121,8 @@ extension MannequinPose {
         p.detail.rightHand = detail.leftHand
         p.detail.leftFoot = detail.rightFoot
         p.detail.rightFoot = detail.leftFoot
+        p.detail.leftFingers = detail.rightFingers
+        p.detail.rightFingers = detail.leftFingers
         return p
     }
 }
@@ -127,6 +132,36 @@ struct MannequinSpec: Codable, Equatable {
     var body: MannequinBody
     var height: Float
     var pose: MannequinPose
+    /// Phil, 2026-11-19 (Magic Poser): the build, kept apart so mannequins made earlier still open.
+    var proportion: MannequinProportion?
+}
+
+/// How much longer or shorter each part is than the standard body, 1 being as it is. The height stays the same, so
+/// longer legs mean a shorter torso, as with real people.
+struct MannequinProportion: Codable, Equatable {
+    var arms: Float = 1
+    var legs: Float = 1
+    var torso: Float = 1
+    var head: Float = 1
+    var shoulders: Float = 1
+
+    var isStandard: Bool { self == MannequinProportion() }
+}
+
+/// Ready-made hands: how far each finger curls (thumb, index, middle, ring, little).
+enum HandPreset: String, CaseIterable {
+    case open = "Open", relaxed = "Relaxed", fist = "Fist", point = "Point", peace = "Peace", thumbsUp = "Thumbs up"
+
+    var curls: [Float] {
+        switch self {
+        case .open: return [0, 0, 0, 0, 0]
+        case .relaxed: return [0.25, 0.3, 0.35, 0.4, 0.45]
+        case .fist: return [0.8, 1, 1, 1, 1]
+        case .point: return [0.8, 0, 1, 1, 1]
+        case .peace: return [0.8, 0, 0, 1, 1]
+        case .thumbsUp: return [0, 1, 1, 1, 1]
+        }
+    }
 }
 
 

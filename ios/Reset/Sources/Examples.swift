@@ -70,8 +70,16 @@ enum Mannequin {
         shape(SCNCapsule(capRadius: CGFloat(radius), height: CGFloat(length + radius)), at: SIMD3(0, -length / 2, 0))
     }
 
-    static func make(_ body: Body, pose: MannequinPose, height: Float? = nil) -> SCNNode {
+    static func make(_ body: Body, pose: MannequinPose, height: Float? = nil, proportion: MannequinProportion? = nil) -> SCNNode {
         var d = build(body)
+        // Phil, 2026-11-19 (Magic Poser): longer or shorter parts; the height below keeps the whole figure the same size.
+        if let p = proportion {
+            d.upperArm *= p.arms; d.forearm *= p.arms; d.hand *= p.arms
+            d.thigh *= p.legs; d.shin *= p.legs
+            d.torso *= p.torso
+            d.head *= p.head
+            d.shoulders *= p.shoulders
+        }
         let k = (height ?? defaultHeight(body)) / d.standing
         for path in [\Build.shoulders, \.hips, \.torso, \.neck, \.head, \.upperArm, \.forearm, \.hand, \.thigh, \.shin, \.foot,
                      \.armRadius, \.legRadius, \.waist, \.chestDepth, \.bust] as [WritableKeyPath<Build, Float>] {

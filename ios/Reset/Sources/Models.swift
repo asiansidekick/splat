@@ -607,6 +607,24 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         Haptics.tap()
     }
 
+    /// The character has finger bones, so hand presets work.
+    var selectedHasFingers: Bool {
+        guard let id = selectedModel, let rig = rigs[id] else { return false }
+        return rig.poser.fingers.contains { $0.contains { !$0.isEmpty } }
+    }
+
+    /// Curls the fingers of one hand (nil: both) like a ready-made hand.
+    func setFingers(_ side: Int?, _ preset: HandPreset) {
+        guard let id = selectedModel, let rig = rigs[id], let model = models.first(where: { $0.id == id }) else { return }
+        var pose = model.rigPose ?? rig.poser.restPose
+        if side != 1 { pose.detail.leftFingers = preset.curls }
+        if side != 0 { pose.detail.rightFingers = preset.curls }
+        poseUndo[id, default: []].append(model.rigPose)
+        poseRedo[id] = []
+        setRigPose(pose, id: id)
+        Haptics.tap()
+    }
+
     /// The selected character's pose now (its rest pose if never posed).
     var currentCharacterPose: MannequinPose? {
         guard let id = selectedModel, let rig = rigs[id], let model = models.first(where: { $0.id == id }) else { return nil }
@@ -664,7 +682,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             return
         }
         let scene = SCNScene()
-        scene.rootNode.addChildNode(Mannequin.make(spec.body, pose: spec.pose, height: spec.height))
+        scene.rootNode.addChildNode(Mannequin.make(spec.body, pose: spec.pose, height: spec.height, proportion: spec.proportion))
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("repose-\(UUID().uuidString).usdz")
         guard scene.write(to: temporary, options: nil, delegate: nil, progressHandler: nil) else {
             modelError = "Could not change the pose."
@@ -1857,6 +1875,7 @@ struct ModelOverlay: View {
     @State private var posing = false
     @State private var showsPoses = false
     @State private var savingPose = false
+    @State private var showsHands = false
     @State private var poseName = ""
 
     private static func symbol(_ job: ModelPlacer.CutoutJob) -> String {
@@ -1993,6 +2012,7 @@ struct ModelOverlay: View {
                 MannequinPoseEditor(spec: spec) { placer.repose(id, as: $0) }
             }
         }
+        .sheet(isPresented: $showsHands) { HandsSheet { placer.setFingers($0, $1) } }
         .sheet(isPresented: $showsPoses) { PoseLibrarySheet { placer.applyCharacterPose($0) } }
         .alert("Save pose", isPresented: $savingPose) {
             TextField("Name", text: $poseName)
@@ -2042,6 +2062,7 @@ struct ModelOverlay: View {
             CutoutTool(word: "Reset", symbol: "arrow.counterclockwise") { placer.resetCharacterPose() }
             CutoutTool(word: "Save", symbol: "square.and.arrow.down") { savingPose = true }
             CutoutTool(word: "Poses", symbol: "list.bullet") { showsPoses = true }
+            if placer.selectedHasFingers { CutoutTool(word: "Hands", symbol: "hand.raised") { showsHands = true } }
         }
         .fixedSize()
     }

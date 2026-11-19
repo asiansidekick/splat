@@ -319,6 +319,10 @@ struct RigPoser {
     private let order: [Int]  // parents before children
     private let armFrames: [[simd_quatf]]  // per side: upper, lower, as the mannequin would hold them at rest
     private let legFrames: [[simd_quatf]]
+    /// Per hand (left, right) and finger (thumb to little): the finger's bones from the knuckle out, and the way its
+    /// bones curl (in the model's space). Empty when the character has no finger bones.
+    let fingers: [[[Int]]]
+    private let fingerAxes: [[SIMD3<Float>]]
 
     private static func turn(_ degrees: Float, _ axis: SIMD3<Float>) -> simd_quatf { simd_quatf(angle: degrees * .pi / 180, axis: axis) }
     private static let x = SIMD3<Float>(1, 0, 0), y = SIMD3<Float>(0, 1, 0), z = SIMD3<Float>(0, 0, 1)
@@ -371,6 +375,37 @@ struct RigPoser {
             if index == 0 { pose.leftLeg = leg } else { pose.rightLeg = leg }
         }
         restPose = pose
+        // Finger bones: those below each hand named for a finger, in order from the knuckle.
+        var children = [[Int]](repeating: [], count: nodes.count)
+        for (i, n) in nodes.enumerated() where n.parent >= 0 && n.parent < nodes.count { children[n.parent].append(i) }
+        let names = ["thumb", "index", "middle", "ring", ["pinky", "little"]] as [Any]
+        var chains: [[[Int]]] = [], axes: [[SIMD3<Float>]] = []
+        for hand in [map.armL[2], map.armR[2]] {
+            var sideChains: [[Int]] = [], sideAxes: [SIMD3<Float>] = []
+            for key in names {
+                let words = (key as? [String]) ?? [key as! String]
+                // Walk down from the hand through bones whose names carry the finger's word.
+                var chain: [Int] = []
+                var at = hand
+                while let next = children[at].first(where: { child in
+                    let lower = nodes[child].name.lowercased()
+                    return nodes[child].isBone && words.contains(where: { lower.contains($0) })
+                }) { chain.append(next); at = next; if chain.count > 6 { break } }
+                var axis = SIMD3<Float>(0, 0, 1)
+                if chain.count >= 2 {
+                    let along = nodes[chain[chain.count - 1]].position - nodes[chain[0]].position
+                    // Curls toward the palm, which faces down at rest.
+                    let crossed = simd_cross(simd_normalize(along), SIMD3(0, -1, 0))
+                    axis = simd_length(crossed) > 0.2 ? simd_normalize(crossed) : simd_normalize(simd_cross(simd_normalize(along), SIMD3(0, 0, 1)))
+                }
+                sideChains.append(chain)
+                sideAxes.append(axis)
+            }
+            chains.append(sideChains)
+            axes.append(sideAxes)
+        }
+        fingers = chains
+        fingerAxes = axes
         self.armFrames = armFrames
         self.legFrames = legFrames
     }
@@ -420,6 +455,24 @@ struct RigPoser {
             if foot.point != 0 || foot.turn != 0 {
                 let bent = Self.turn(foot.point, Self.x) * Self.turn(side * foot.turn, Self.y)
                 out[limb[2]] = lower * bent * lower.inverse * shin
+            }
+        }
+        // Fingers (Phil, 2026-11-19): each bone of a finger curls about the same axis, the turns adding up along it.
+        let backward = map.facing < 0 ? simd_quatf(angle: .pi, axis: Self.y) : identity
+        for (index, curls) in [pose.detail.leftFingers, pose.detail.rightFingers].enumerated() {
+            guard let curls, index < fingers.count else { continue }
+            let limb = index == 0 ? map.armL : map.armR
+            let carried = out[limb[2]] ?? out[limb[1]] ?? identity
+            for (finger, chain) in fingers[index].enumerated() where finger < curls.count && !chain.isEmpty {
+                let amount = min(max(curls[finger], 0), 1)
+                guard amount > 0 else { continue }
+                let axis = backward.act(fingerAxes[index][finger])
+                let steps: [Float] = finger == 0 ? [30, 40, 40] : [80, 100, 70]
+                var total: Float = 0
+                for (k, bone) in chain.enumerated() where k < steps.count {
+                    total += steps[k] * amount
+                    out[bone] = simd_quatf(angle: total * .pi / 180, axis: carried.act(axis)) * carried
+                }
             }
         }
         if map.facing < 0 {
