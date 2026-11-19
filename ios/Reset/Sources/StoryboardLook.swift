@@ -118,9 +118,9 @@ final class StoryboardLook: ObservableObject {
     /// Three passes: a tiny one whose size carries the style, the style at half size, then that drawn over the
     /// whole screen. No symbols: values set on a technique never reached the shader on Phil's phone (build 1360).
     static func makeTechnique(_ s: DrawStyle) -> SCNTechnique? {
-        let width = 1 + min(max(s.lines, 0), 4) + 5 * min(max(s.detail, 0), 2) + 15 * min(max(s.shadows, 0), 3)
-        let height = 1 + min(max(s.greys, 0), 5) + 6 * min(max(s.colour, 0), 4) + 30 * min(max(s.dots, 0), 4)
-            + 150 * min(max(s.paper, 0), 3)
+        func step(_ v: Int, _ top: Int) -> Int { min(max(v, 0), top) }
+        let width = 1 + step(s.lines, 4) + 5 * step(s.detail, 3) + 20 * step(s.shadows, 3) + 80 * step(s.brightness, 4)
+        let height = 1 + step(s.greys, 6) + 7 * step(s.colour, 4) + 35 * step(s.dots, 4) + 175 * step(s.paper, 3)
         let definition: [String: Any] = [
             "passes": [
                 "storyLookCode": [

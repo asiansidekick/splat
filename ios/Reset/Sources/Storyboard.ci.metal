@@ -41,9 +41,10 @@ float4 storyLines(sample_t near, sample_t far, float p, float eps, float phi) {
 float4 storyCompose(sample_t smooth, sample_t lines,
                     float levels, float shadow, float colourMode, float saturation,
                     float dotMode, float lineDark, float paper, float splatter,
-                    float unit, destination dest) {
+                    float unit, float gamma, destination dest) {
     float2 xy = dest.coord();
-    float3 colour = clamp(smooth.rgb, 0.0, 1.0);
+    // Brightness (Phil, 2026-11-19): a tone curve before anything is drawn; 1 leaves the picture as it is.
+    float3 colour = pow(clamp(smooth.rgb, 0.0, 1.0), float3(gamma));
     float lum = storyLuma(colour);
 
     // Tone bands. levels < 2 keeps the tones smooth.
