@@ -9,6 +9,9 @@ struct MannequinPoseEditor: View {
     let onDone: (MannequinSpec) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var pose: MannequinPose
+    /// Phil, 2026-11-19 (Magic Poser): undo, redo, flip.
+    @State private var undo: [MannequinPose] = []
+    @State private var redo: [MannequinPose] = []
 
     init(spec: MannequinSpec, onDone: @escaping (MannequinSpec) -> Void) {
         self.spec = spec
@@ -34,8 +37,8 @@ struct MannequinPoseEditor: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             ZStack(alignment: .top) {
-                PoseStage(person: spec.body, height: spec.height, pose: $pose)
-                Text("Drag a dot to pose. Drag elsewhere to turn round.")
+                PoseStage(person: spec.body, height: spec.height, pose: $pose, onBegin: { undo.append(pose); redo = [] })
+                Text("Mint dots reach. Yellow: hips turn and tilt, wrists and ankles bend. Drag elsewhere to turn round.")
                     .font(Theme.caption)
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
@@ -44,10 +47,20 @@ struct MannequinPoseEditor: View {
                     .padding(.top, 8)
                     .allowsHitTesting(false)
             }
+            HStack(spacing: 8) {
+                Button("Undo") { if let last = undo.popLast() { redo.append(pose); pose = last } }.disabled(undo.isEmpty)
+                Button("Redo") { if let next = redo.popLast() { undo.append(pose); pose = next } }.disabled(redo.isEmpty)
+                Button("Mirror") { undo.append(pose); redo = []; pose = pose.mirrored }
+                Button("Reset") { undo.append(pose); redo = []; pose = spec.pose == pose ? .standing : spec.pose }
+            }
+            .font(Theme.footnote.weight(.semibold))
+            .buttonStyle(.bordered)
+            .tint(Theme.accent)
+            .padding(.top, 6)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(MannequinPose.all, id: \.name) { item in
-                        Button(item.name) { pose = item.pose }
+                        Button(item.name) { undo.append(pose); redo = []; pose = item.pose }
                             .font(Theme.footnote.weight(.semibold))
                             .padding(.horizontal, 12)
                             .frame(minHeight: 36)
@@ -69,6 +82,7 @@ private struct PoseStage: UIViewRepresentable {
     let person: Mannequin.Body
     let height: Float
     @Binding var pose: MannequinPose
+    var onBegin: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -132,11 +146,12 @@ private struct PoseStage: UIViewRepresentable {
             for (_, handle) in handles { handle.removeFromParentNode() }
             handles = [:]
             // Phil, 2026-11-10: elbows and knees get their own (smaller) dots.
-            for name in ["end.hand.L", "end.hand.R", "end.foot.L", "end.foot.R", "end.head", "elbow.L", "elbow.R", "knee.L", "knee.R"] {
+            for name in ["end.hand.L", "end.hand.R", "end.foot.L", "end.foot.R", "end.head", "elbow.L", "elbow.R", "knee.L", "knee.R",
+                         "tip.hand.L", "tip.hand.R", "tip.foot.L", "tip.foot.R", "pelvis"] {
                 guard let marker = made.childNode(withName: name, recursively: true) else { continue }
                 let joint = !name.hasPrefix("end.")
                 let dot = SCNNode(geometry: SCNSphere(radius: CGFloat((joint ? 0.032 : 0.045) * parent.height / 1.7)))
-                dot.geometry?.firstMaterial?.diffuse.contents = Theme.accentUI
+                dot.geometry?.firstMaterial?.diffuse.contents = Coordinator.articulates(name) ? UIColor.systemYellow : Theme.accentUI
                 dot.geometry?.firstMaterial?.lightingModel = .constant
                 dot.simdPosition = marker.simdWorldPosition
                 dot.renderingOrder = 10
@@ -144,6 +159,21 @@ private struct PoseStage: UIViewRepresentable {
                 scene.rootNode.addChildNode(dot)
                 handles[name] = dot
             }
+        }
+
+        /// Hips, wrists and ankles bend by how far they are dragged; the rest reach.
+        static func articulates(_ name: String) -> Bool { name == "pelvis" || name.hasPrefix("tip.") }
+
+        private var startPose = MannequinPose()
+        private var startPoint: CGPoint = .zero
+
+        private func articulate(_ handle: String, to point: CGPoint) {
+            let side = handle.hasSuffix("L") ? 0 : 1
+            let joint: PoseDrag.Joint = handle == "pelvis" ? .hips : handle.hasPrefix("tip.hand") ? .wrist(side) : .ankle(side)
+            let pose = PoseDrag.solve(joint, target: .zero, top: .zero, middle: .zero, end: .zero, hips: .zero, from: startPose,
+                                      screen: SIMD2(Float(point.x - startPoint.x), Float(point.y - startPoint.y)))
+            rebuild(pose.limited)
+            parent.pose = pose.limited
         }
 
         private func node(_ name: String) -> SCNNode? { figure?.childNode(withName: name, recursively: true) }
@@ -161,8 +191,13 @@ private struct PoseStage: UIViewRepresentable {
                     if gap < best { best = gap; dragging = name; depth = p.z }
                 }
                 lastPoint = point
+                startPoint = point
+                startPose = shown ?? parent.pose
+                if dragging != nil { parent.onBegin() }
             case .changed:
-                if let dragging {
+                if let dragging, Coordinator.articulates(dragging) {
+                    articulate(dragging, to: point)
+                } else if let dragging {
                     let world = view.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), depth))
                     move(dragging, to: SIMD3(world.x, world.y, world.z))
                 } else {
@@ -228,7 +263,7 @@ private struct PoseStage: UIViewRepresentable {
                 let sign: Float = side == "L" ? 1 : -1
                 // Into the frame the limb hangs from: the spine for arms, the (unturned) pelvis for legs.
                 let frame = isArm ? (node("spine.in")?.simdWorldOrientation ?? simd_quatf(angle: 0, axis: SIMD3(0, 1, 0)))
-                                  : simd_quatf(angle: 0, axis: SIMD3(0, 1, 0))
+                                  : (node("pelvis")?.simdWorldOrientation ?? simd_quatf(angle: 0, axis: SIMD3(0, 1, 0)))
                 let upper = frame.inverse.act(joint - s), lower = frame.inverse.act(hand - joint)
                 let solved = PoseFromSkeleton.aim(upper: upper, lower: lower, bendsForward: isArm)
                 let deg: (Float) -> Float = { $0 * 180 / .pi }
