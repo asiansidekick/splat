@@ -190,6 +190,15 @@ struct LensPreview: UIViewRepresentable {
             turn()
         }
 
+        private var started: NSObjectProtocol?
+        /// The camera joins the preview a moment after it is shown: turn the picture upright once it runs.
+        func watch(_ session: AVCaptureSession) {
+            if let started { NotificationCenter.default.removeObserver(started) }
+            started = NotificationCenter.default.addObserver(forName: AVCaptureSession.didStartRunningNotification, object: session, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.turn() }
+            }
+        }
+
         func turn() {
             let angle = LensCamera.angle
             if let connection = preview?.connection, connection.isVideoRotationAngleSupported(angle), connection.videoRotationAngle != angle {
@@ -203,12 +212,13 @@ struct LensPreview: UIViewRepresentable {
         view.backgroundColor = .black
         view.preview?.videoGravity = .resizeAspectFill
         view.preview?.session = session
+        view.watch(session)
         view.turn()
         return view
     }
 
     func updateUIView(_ view: Holder, context: Context) {
-        if view.preview?.session !== session { view.preview?.session = session }
+        if view.preview?.session !== session { view.preview?.session = session; view.watch(session) }
         view.turn()
     }
 }

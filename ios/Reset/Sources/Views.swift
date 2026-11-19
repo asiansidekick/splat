@@ -2095,6 +2095,9 @@ struct CaptureStage: View {
                     recorder.measurer.attachGestures(to: view)
                     holder.view = view
                 }, storyboardLook: true)
+                // Phil, 2026-11-19: froze on the wide lens. The room view stays drawn over the lens preview behind it
+                // (its last picture, standing still), so it steps aside while another lens is live.
+                .opacity(lensLive.session == nil ? 1 : 0)
                 .overlay(alignment: .top) {
                     StoryboardLookBar {
                         lookPanel = LookPanel.make(from: holder.view, scene: scene, shot: shot)
