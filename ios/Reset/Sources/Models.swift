@@ -2036,6 +2036,9 @@ struct ModelOverlay: View {
             CutoutTool(word: "Undo", symbol: "arrow.uturn.backward", tint: placer.canUndoPose ? .white : .gray) { placer.undoPose() }
             CutoutTool(word: "Redo", symbol: "arrow.uturn.forward", tint: placer.canRedoPose ? .white : .gray) { placer.redoPose() }
             CutoutTool(word: "Mirror", symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right") { placer.mirrorPose() }
+        }
+        .fixedSize()
+        HStack(spacing: 0) {
             CutoutTool(word: "Reset", symbol: "arrow.counterclockwise") { placer.resetCharacterPose() }
             CutoutTool(word: "Save", symbol: "square.and.arrow.down") { savingPose = true }
             CutoutTool(word: "Poses", symbol: "list.bullet") { showsPoses = true }
