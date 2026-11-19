@@ -15,6 +15,11 @@ final class StoryboardLook: ObservableObject {
     private var views = NSHashTable<ARSCNView>.weakObjects()
     private var loggedFrames = false
     private var checked = false
+    /// Phil, 2026-11-19: the app crashed when a wide or telephoto lens was picked with the look on. While another
+    /// lens shows (its picture is drawn by a different camera, behind the room view) the look stays off the room view.
+    var suspended = false {
+        didSet { if suspended != oldValue { refresh() } }
+    }
 
     private init() {
         on = UserDefaults.standard.bool(forKey: "storyLookOn")
@@ -65,7 +70,7 @@ final class StoryboardLook: ObservableObject {
     }
 
     private func apply(_ view: ARSCNView) {
-        guard on else {
+        guard on, !suspended else {
             if view.technique != nil { view.technique = nil }
             return
         }

@@ -2051,6 +2051,7 @@ struct CaptureStage: View {
             if picked != nil, lens != 1 { lens = 1 }
         }
         .onChange(of: lens) { _, picked in
+            StoryboardLook.shared.suspended = picked != 1
             syncLens()
             // Phil, 2026-11-12: say what the other lenses cost, every time one is picked.
             // Phil, 2026-11-19: the lenses stand in Auto scan too; picking one there moves to Manual scan, and says what goes.
