@@ -2103,6 +2103,7 @@ struct CaptureStage: View {
                 // Phil, 2026-11-19: wide and telephoto were black behind the room view. The other lens now draws on top of it.
                 if let session = lensLive.session {
                     LensPreview(session: session).ignoresSafeArea().allowsHitTesting(false)
+                        .id(ObjectIdentifier(session))
                 }
                 // Dots on everything the scan has covered, building up as you walk round.
                 GeometryReader { geometry in

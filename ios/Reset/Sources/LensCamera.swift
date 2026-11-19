@@ -88,6 +88,7 @@ final class LensLive: ObservableObject {
     private var output: AVCapturePhotoOutput?
     private var observer: NSObjectProtocol?
     private var errorObserver: NSObjectProtocol?
+    private var heartbeat: Task<Void, Never>?
     /// Something else took the camera (the app went to the background, for one).
     var onInterrupted: (() -> Void)?
     /// One after another: a lens is fully stopped before the next starts.
@@ -101,6 +102,8 @@ final class LensLive: ObservableObject {
 
     func start(_ lens: LensCamera.Lens) -> Bool {
         stop()
+        // Phil, 2026-11-19: wide worked, then a crash about 20 s after switching straight on to telephoto. The old lens
+        // is gone from the screen first (an empty moment), and the new one opens only after the old one has stopped.
         let session = AVCaptureSession()
         let output = AVCapturePhotoOutput()
         self.session = session
@@ -120,6 +123,17 @@ final class LensLive: ObservableObject {
                         self.onInterrupted?()
                     }
                 }
+            }
+        }
+        heartbeat?.cancel()
+        heartbeat = Task { @MainActor [weak self] in
+            var seconds = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard let self, self.session === session else { return }
+                seconds += 5
+                Diagnostics.log("Lens view: \(lens.label) still showing after \(seconds) s, running \(session.isRunning), interrupted \(session.isInterrupted), heat \(ProcessInfo.processInfo.thermalState.rawValue)")
+                if seconds >= 60 { return }
             }
         }
         Self.queue.async { [weak self] in
@@ -155,6 +169,8 @@ final class LensLive: ObservableObject {
         observer = nil
         if let errorObserver { NotificationCenter.default.removeObserver(errorObserver) }
         errorObserver = nil
+        heartbeat?.cancel()
+        heartbeat = nil
         let old = session
         session = nil
         output = nil
@@ -222,6 +238,10 @@ struct LensPreview: UIViewRepresentable {
         view.watch(session)
         view.turn()
         return view
+    }
+
+    static func dismantleUIView(_ view: Holder, coordinator: ()) {
+        view.preview?.session = nil
     }
 
     func updateUIView(_ view: Holder, context: Context) {
