@@ -607,6 +607,21 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         Haptics.tap()
     }
 
+    /// The selected character's pose now (its rest pose if never posed).
+    var currentCharacterPose: MannequinPose? {
+        guard let id = selectedModel, let rig = rigs[id], let model = models.first(where: { $0.id == id }) else { return nil }
+        return model.rigPose ?? rig.poser.restPose
+    }
+
+    /// Takes a saved or ready-made pose, as one undo step.
+    func applyCharacterPose(_ pose: MannequinPose) {
+        guard let id = selectedModel, let model = models.first(where: { $0.id == id }) else { return }
+        poseUndo[id, default: []].append(model.rigPose)
+        poseRedo[id] = []
+        setRigPose(pose, id: id)
+        Haptics.tap()
+    }
+
     /// Back to the pose the file has.
     func resetCharacterPose() {
         guard let id = selectedModel, let model = models.first(where: { $0.id == id }), model.rigPose != nil else { return }
@@ -1840,6 +1855,9 @@ struct ModelOverlay: View {
     @Environment(\.verticalSizeClass) private var verticalSize
     @State private var showsCutoutHelp = true
     @State private var posing = false
+    @State private var showsPoses = false
+    @State private var savingPose = false
+    @State private var poseName = ""
 
     private static func symbol(_ job: ModelPlacer.CutoutJob) -> String {
         switch job {
@@ -1975,6 +1993,17 @@ struct ModelOverlay: View {
                 MannequinPoseEditor(spec: spec) { placer.repose(id, as: $0) }
             }
         }
+        .sheet(isPresented: $showsPoses) { PoseLibrarySheet { placer.applyCharacterPose($0) } }
+        .alert("Save pose", isPresented: $savingPose) {
+            TextField("Name", text: $poseName)
+            Button("Save") {
+                if let pose = placer.currentCharacterPose { PoseLibrary.shared.save(pose, name: poseName) }
+                poseName = ""
+            }
+            Button("Cancel", role: .cancel) { poseName = "" }
+        } message: {
+            Text("Keep this pose to use again on any character.")
+        }
         .alert("3D model", isPresented: Binding(get: { placer.modelError != nil }, set: { if !$0 { placer.modelError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -2008,6 +2037,8 @@ struct ModelOverlay: View {
             CutoutTool(word: "Redo", symbol: "arrow.uturn.forward", tint: placer.canRedoPose ? .white : .gray) { placer.redoPose() }
             CutoutTool(word: "Mirror", symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right") { placer.mirrorPose() }
             CutoutTool(word: "Reset", symbol: "arrow.counterclockwise") { placer.resetCharacterPose() }
+            CutoutTool(word: "Save", symbol: "square.and.arrow.down") { savingPose = true }
+            CutoutTool(word: "Poses", symbol: "list.bullet") { showsPoses = true }
         }
         .fixedSize()
     }

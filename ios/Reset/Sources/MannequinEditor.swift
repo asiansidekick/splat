@@ -12,6 +12,9 @@ struct MannequinPoseEditor: View {
     /// Phil, 2026-11-19 (Magic Poser): undo, redo, flip.
     @State private var undo: [MannequinPose] = []
     @State private var redo: [MannequinPose] = []
+    @ObservedObject private var library = PoseLibrary.shared
+    @State private var saving = false
+    @State private var poseName = ""
 
     init(spec: MannequinSpec, onDone: @escaping (MannequinSpec) -> Void) {
         self.spec = spec
@@ -52,6 +55,7 @@ struct MannequinPoseEditor: View {
                 Button("Redo") { if let next = redo.popLast() { undo.append(pose); pose = next } }.disabled(redo.isEmpty)
                 Button("Mirror") { undo.append(pose); redo = []; pose = pose.mirrored }
                 Button("Reset") { undo.append(pose); redo = []; pose = spec.pose == pose ? .standing : spec.pose }
+                Button("Save") { saving = true }
             }
             .font(Theme.footnote.weight(.semibold))
             .buttonStyle(.bordered)
@@ -59,6 +63,15 @@ struct MannequinPoseEditor: View {
             .padding(.top, 6)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
+                    ForEach(library.items) { item in
+                        Button(item.name) { undo.append(pose); redo = []; pose = item.pose }
+                            .font(Theme.footnote.weight(.semibold))
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 36)
+                            .background(Theme.accent.opacity(0.25), in: Capsule())
+                            .foregroundStyle(pose == item.pose ? Theme.accent : Color.white)
+                            .contextMenu { Button("Delete", role: .destructive) { library.delete(item) } }
+                    }
                     ForEach(MannequinPose.all, id: \.name) { item in
                         Button(item.name) { undo.append(pose); redo = []; pose = item.pose }
                             .font(Theme.footnote.weight(.semibold))
@@ -74,6 +87,13 @@ struct MannequinPoseEditor: View {
         }
         .background(Color.black.ignoresSafeArea())
         .preferredColorScheme(.dark)
+        .alert("Save pose", isPresented: $saving) {
+            TextField("Name", text: $poseName)
+            Button("Save") { library.save(pose, name: poseName); poseName = "" }
+            Button("Cancel", role: .cancel) { poseName = "" }
+        } message: {
+            Text("Keep this pose to use again on any character. Hold a saved pose to delete it.")
+        }
     }
 }
 
