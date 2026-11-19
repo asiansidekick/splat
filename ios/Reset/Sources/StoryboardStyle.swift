@@ -13,9 +13,11 @@ struct DrawStyle: Codable, Equatable {
     var paper = 0
     var dots = 0
     var splatter = 0
+    /// Phil, 2026-11-19: some pictures came out too dark. 0 Darker to 4 Lighter, 2 as photographed.
+    var brightness = 2
 
     enum Element: String, CaseIterable, Identifiable {
-        case lines, detail, shadows, greys, colour, dots, paper
+        case lines, detail, brightness, shadows, greys, colour, dots, paper
         var id: String { rawValue }
 
         var title: String {
@@ -24,6 +26,7 @@ struct DrawStyle: Codable, Equatable {
             case .detail: return "Detail"
             case .shadows: return "Shadows"
             case .greys: return "Tones"
+            case .brightness: return "Brightness"
             case .colour: return "Colour"
             case .dots: return "Texture"
             case .paper: return "Paper"
@@ -33,9 +36,10 @@ struct DrawStyle: Codable, Equatable {
         var steps: [String] {
             switch self {
             case .lines: return ["Off", "Thin", "Normal", "Bold", "Heavy"]
-            case .detail: return ["Simple", "Normal", "Detailed"]
+            case .detail: return ["Simple", "Normal", "Detailed", "Fine"]
+            case .brightness: return ["Darker", "Dark", "Normal", "Light", "Lighter"]
             case .shadows: return ["Off", "Some", "Strong", "Black"]
-            case .greys: return ["Smooth", "2", "3", "4", "5", "6"]
+            case .greys: return ["Smooth", "2", "3", "4", "5", "6", "7"]
             case .colour: return ["None", "Sepia", "Muted", "Full", "Bold"]
             case .dots: return ["Off", "Dots", "Tone", "Hatch", "Cross"]
             case .paper: return ["Smooth", "Light", "Rough", "Heavy"]
@@ -49,6 +53,7 @@ struct DrawStyle: Codable, Equatable {
             case .detail: return "simpler or more detailed drawing"
             case .shadows: return "fewer or more solid black shadows"
             case .greys: return "fewer or more tone bands"
+            case .brightness: return "a darker or lighter picture"
             case .colour: return "less or more colour"
             case .dots: return "dots, screen tone or hatching"
             case .paper: return "smoother or rougher paper"
@@ -63,6 +68,7 @@ struct DrawStyle: Codable, Equatable {
             case .detail: return detail
             case .shadows: return shadows
             case .greys: return greys
+            case .brightness: return brightness
             case .colour: return colour
             case .dots: return dots
             case .paper: return paper
@@ -75,6 +81,7 @@ struct DrawStyle: Codable, Equatable {
             case .detail: detail = value
             case .shadows: shadows = value
             case .greys: greys = value
+            case .brightness: brightness = value
             case .colour: colour = value
             case .dots: dots = value
             case .paper: paper = value
@@ -83,6 +90,41 @@ struct DrawStyle: Codable, Equatable {
     }
 
     func word(_ element: Element) -> String { element.steps[self[element]] }
+
+    /// The tone curve for `brightness`: the picture is raised to this power before it is drawn.
+    var gamma: Float { [1.6, 1.25, 1.0, 0.75, 0.55][min(max(brightness, 0), 4)] }
+}
+
+/// Styles saved before Light existed have no brightness: they read as Normal.
+extension DrawStyle {
+    private enum Keys: String, CodingKey { case lines, detail, shadows, greys, colour, paper, dots, splatter, brightness }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        self.init()
+        lines = try c.decodeIfPresent(Int.self, forKey: .lines) ?? lines
+        detail = try c.decodeIfPresent(Int.self, forKey: .detail) ?? detail
+        shadows = try c.decodeIfPresent(Int.self, forKey: .shadows) ?? shadows
+        greys = try c.decodeIfPresent(Int.self, forKey: .greys) ?? greys
+        colour = try c.decodeIfPresent(Int.self, forKey: .colour) ?? colour
+        paper = try c.decodeIfPresent(Int.self, forKey: .paper) ?? paper
+        dots = try c.decodeIfPresent(Int.self, forKey: .dots) ?? dots
+        splatter = try c.decodeIfPresent(Int.self, forKey: .splatter) ?? splatter
+        brightness = try c.decodeIfPresent(Int.self, forKey: .brightness) ?? brightness
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(lines, forKey: .lines)
+        try c.encode(detail, forKey: .detail)
+        try c.encode(shadows, forKey: .shadows)
+        try c.encode(greys, forKey: .greys)
+        try c.encode(colour, forKey: .colour)
+        try c.encode(paper, forKey: .paper)
+        try c.encode(dots, forKey: .dots)
+        try c.encode(splatter, forKey: .splatter)
+        try c.encode(brightness, forKey: .brightness)
+    }
 }
 
 /// The ready-made styles. Several are drawn from looks Phil named (2026-11-18) as inspiration, not copies:
@@ -157,7 +199,7 @@ final class StoryboardRenderer: @unchecked Sendable {
 
         // Simplified colour: shrunk, then grown back along the photo's own edges, which keeps outlines
         // crisp while flattening the areas between them (an edge-preserving smoothing).
-        let shrink: CGFloat = [0.16, 0.26, 0.4][style.detail]
+        let shrink: CGFloat = [0.16, 0.26, 0.4, 0.6][style.detail]
         let small = photo.transformed(by: CGAffineTransform(scaleX: shrink, y: shrink))
         var smooth = photo
         if let upsample = CIFilter(name: "CIEdgePreserveUpsampleFilter") {
@@ -171,10 +213,10 @@ final class StoryboardRenderer: @unchecked Sendable {
         // Lines.
         var lines = CIImage(color: .white).cropped(to: frame)
         if style.lines > 0 {
-            let sigma = CGFloat(unit) * [2.0, 1.4, 0.9][style.detail]
+            let sigma = CGFloat(unit) * [2.0, 1.4, 0.9, 0.65][style.detail]
             let near = clamped.applyingGaussianBlur(sigma: Double(sigma)).cropped(to: frame)
             let far = clamped.applyingGaussianBlur(sigma: Double(sigma * 1.6)).cropped(to: frame)
-            let eps: Float = [0.5, 0.55, 0.62][style.detail]
+            let eps: Float = [0.5, 0.55, 0.62, 0.68][style.detail]
             if let drawn = linesKernel.apply(extent: frame, arguments: [near, far, Float(22), eps, Float(12)]) {
                 lines = drawn
                 // Bolder lines: the dark grows.
@@ -196,7 +238,7 @@ final class StoryboardRenderer: @unchecked Sendable {
         // Phil, 2026-11-19: splatter removed (the blots stayed fixed on screen); old saved styles draw none.
         let splatter: Float = 0
         let arguments: [Any] = [smooth, lines, levels, shadow, colourMode, saturation, Float(style.dots),
-                                lineDark, paper, splatter, unit]
+                                lineDark, paper, splatter, unit, style.gamma]
         return composeKernel.apply(extent: frame, arguments: arguments) ?? photo
     }
 
