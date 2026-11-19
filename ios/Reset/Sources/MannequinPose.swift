@@ -14,6 +14,16 @@ struct MannequinPose: Codable, Equatable {
     var headDown: Float = 0
     var left = Arm(), right = Arm()
     var leftLeg = Leg(), rightLeg = Leg()
+    /// Phil, 2026-11-19 (Magic Poser): hips, wrists and ankles. Kept apart so poses saved before them still open.
+    struct Hand: Codable, Equatable { var bend: Float = 0; var side: Float = 0 }
+    struct Foot: Codable, Equatable { var point: Float = 0; var turn: Float = 0 }
+    struct Detail: Codable, Equatable {
+        var hipTilt: Float = 0
+        var hipTurn: Float = 0
+        var leftHand = Hand(), rightHand = Hand()
+        var leftFoot = Foot(), rightFoot = Foot()
+    }
+    var detail = Detail()
 
     static let standing = MannequinPose()
     static let sitting: MannequinPose = {
@@ -61,6 +71,57 @@ struct MannequinPose: Codable, Equatable {
     ]
 }
 
+extension MannequinPose {
+    private enum Keys: String, CodingKey {
+        case spineForward, spineSide, headTurn, headDown, left, right, leftLeg, rightLeg, detail
+    }
+
+    init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: Keys.self)
+        spineForward = try c.decodeIfPresent(Float.self, forKey: .spineForward) ?? 0
+        spineSide = try c.decodeIfPresent(Float.self, forKey: .spineSide) ?? 0
+        headTurn = try c.decodeIfPresent(Float.self, forKey: .headTurn) ?? 0
+        headDown = try c.decodeIfPresent(Float.self, forKey: .headDown) ?? 0
+        left = try c.decodeIfPresent(Arm.self, forKey: .left) ?? Arm()
+        right = try c.decodeIfPresent(Arm.self, forKey: .right) ?? Arm()
+        leftLeg = try c.decodeIfPresent(Leg.self, forKey: .leftLeg) ?? Leg()
+        rightLeg = try c.decodeIfPresent(Leg.self, forKey: .rightLeg) ?? Leg()
+        detail = try c.decodeIfPresent(Detail.self, forKey: .detail) ?? Detail()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(spineForward, forKey: .spineForward)
+        try c.encode(spineSide, forKey: .spineSide)
+        try c.encode(headTurn, forKey: .headTurn)
+        try c.encode(headDown, forKey: .headDown)
+        try c.encode(left, forKey: .left)
+        try c.encode(right, forKey: .right)
+        try c.encode(leftLeg, forKey: .leftLeg)
+        try c.encode(rightLeg, forKey: .rightLeg)
+        try c.encode(detail, forKey: .detail)
+    }
+
+    /// The same pose the other way round (left and right swapped), like Magic Poser's flip.
+    var mirrored: MannequinPose {
+        var p = self
+        p.left = right
+        p.right = left
+        p.leftLeg = rightLeg
+        p.rightLeg = leftLeg
+        p.spineSide = -spineSide
+        p.headTurn = -headTurn
+        p.detail.hipTilt = -detail.hipTilt
+        p.detail.hipTurn = -detail.hipTurn
+        p.detail.leftHand = detail.rightHand
+        p.detail.rightHand = detail.leftHand
+        p.detail.leftFoot = detail.rightFoot
+        p.detail.rightFoot = detail.leftFoot
+        return p
+    }
+}
+
 /// What a placed mannequin is, kept with the model so it can be posed again.
 struct MannequinSpec: Codable, Equatable {
     var body: MannequinBody
@@ -101,6 +162,14 @@ extension MannequinPose {
         p.right = arm(right)
         p.leftLeg = leg(leftLeg)
         p.rightLeg = leg(rightLeg)
+        func hand(_ h: Hand) -> Hand { Hand(bend: clamp(h.bend, -60, 80), side: clamp(h.side, -20, 30)) }
+        func foot(_ f: Foot) -> Foot { Foot(point: clamp(f.point, -20, 50), turn: clamp(f.turn, -25, 25)) }
+        p.detail.hipTilt = clamp(detail.hipTilt, -15, 15)
+        p.detail.hipTurn = clamp(detail.hipTurn, -35, 35)
+        p.detail.leftHand = hand(detail.leftHand)
+        p.detail.rightHand = hand(detail.rightHand)
+        p.detail.leftFoot = foot(detail.leftFoot)
+        p.detail.rightFoot = foot(detail.rightFoot)
         p.spineForward = clamp(spineForward, -30, 60)
         p.spineSide = clamp(spineSide, -30, 30)
         p.headTurn = clamp(headTurn, -80, 80)

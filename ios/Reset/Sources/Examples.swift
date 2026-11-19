@@ -82,6 +82,8 @@ enum Mannequin {
         let root = SCNNode()
         root.name = "pelvis"
         root.simdPosition = SIMD3(0, d.foot + d.shin + d.thigh + 0.04 * k, 0)
+        // Hips (Phil, 2026-11-19): the pelvis tilts to the side and turns, taking the spine and both legs with it.
+        root.eulerAngles = SCNVector3(0, pose.detail.hipTurn * .pi / 180, pose.detail.hipTilt * .pi / 180)
         figure.addChildNode(root)
         // Pelvis: the woman's is rounder and fuller than her waist.
         if body == .woman {
@@ -134,8 +136,13 @@ enum Mannequin {
             elbow.inner.addChildNode(shape(SCNSphere(radius: CGFloat(d.armRadius * 0.95)), at: .zero))
             elbow.inner.addChildNode(limb(d.forearm, radius: d.armRadius * 0.82))
             elbow.inner.addChildNode(marker("end.hand.\(name)", at: SIMD3(0, -d.forearm, 0)))
-            elbow.inner.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, -d.forearm - d.hand * 0.4, 0),
+            // The wrist bends the hand (Phil, 2026-11-19).
+            let hand = side > 0 ? pose.detail.leftHand : pose.detail.rightHand
+            let wrist = joint("wrist.\(name)", at: SIMD3(0, -d.forearm, 0), z: side * hand.side, x: -hand.bend)
+            elbow.inner.addChildNode(wrist.outer)
+            wrist.inner.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, -d.hand * 0.4, 0),
                                            scale: SIMD3(d.armRadius * 0.55, d.hand * 0.45, d.armRadius * 1.0)))
+            wrist.inner.addChildNode(marker("tip.hand.\(name)", at: SIMD3(0, -d.hand * 0.85, 0)))
         }
 
         // Legs.
@@ -149,8 +156,13 @@ enum Mannequin {
             knee.inner.addChildNode(shape(SCNSphere(radius: CGFloat(d.legRadius * 0.8)), at: .zero))
             knee.inner.addChildNode(limb(d.shin, radius: d.legRadius * 0.7))
             knee.inner.addChildNode(marker("end.foot.\(name)", at: SIMD3(0, -d.shin, 0)))
+            // The ankle points and turns the foot (Phil, 2026-11-19).
+            let step = side > 0 ? pose.detail.leftFoot : pose.detail.rightFoot
+            let ankle = joint("ankle.\(name)", at: SIMD3(0, -d.shin, 0), x: step.point, y: side * step.turn)
+            knee.inner.addChildNode(ankle.outer)
             let foot = SCNBox(width: CGFloat(d.legRadius * 1.3), height: CGFloat(d.foot), length: CGFloat(d.foot * 3.2), chamferRadius: CGFloat(d.foot * 0.35))
-            knee.inner.addChildNode(shape(foot, at: SIMD3(0, -d.shin - d.foot * 0.5, d.foot * 0.9)))
+            ankle.inner.addChildNode(shape(foot, at: SIMD3(0, -d.foot * 0.5, d.foot * 0.9)))
+            ankle.inner.addChildNode(marker("tip.foot.\(name)", at: SIMD3(0, -d.foot * 0.5, d.foot * 2.3)))
         }
 
         // Stand it on the floor whatever the pose.

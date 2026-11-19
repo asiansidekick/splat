@@ -4,15 +4,37 @@ import simd
 /// dots, worked on the character's own joint positions, in the space the mannequin angles use (facing +Z, left at +X).
 enum PoseDrag {
     enum Joint: Equatable {
-        case hand(Int), foot(Int), elbow(Int), knee(Int), head  // Int: 0 left, 1 right
+        case hand(Int), foot(Int), elbow(Int), knee(Int), head, wrist(Int), ankle(Int), hips  // Int: 0 left, 1 right
     }
 
     /// The pose after the joint is dragged to `target`. `top`, `middle` and `end` are the limb's joints now (shoulder or hip,
     /// elbow or knee, hand or foot); `hips` is used for the head.
     static func solve(_ joint: Joint, target: SIMD3<Float>, top s: SIMD3<Float>, middle m: SIMD3<Float>, end e: SIMD3<Float>,
-                      hips: SIMD3<Float>, from pose: MannequinPose) -> MannequinPose {
+                      hips: SIMD3<Float>, from pose: MannequinPose, screen: SIMD2<Float> = .zero) -> MannequinPose {
         var pose = pose
         switch joint {
+        case .hips:
+            // Sideways turns the pelvis, up and down tilts it.
+            pose.detail.hipTurn = pose.detail.hipTurn + screen.x * 0.4
+            pose.detail.hipTilt = pose.detail.hipTilt - screen.y * 0.2
+        case .wrist(let side):
+            let sign: Float = side == 0 ? 1 : -1
+            if side == 0 {
+                pose.detail.leftHand.bend -= screen.y * 0.5
+                pose.detail.leftHand.side += screen.x * 0.3 * sign
+            } else {
+                pose.detail.rightHand.bend -= screen.y * 0.5
+                pose.detail.rightHand.side += screen.x * 0.3 * sign
+            }
+        case .ankle(let side):
+            let sign: Float = side == 0 ? 1 : -1
+            if side == 0 {
+                pose.detail.leftFoot.point += screen.y * 0.5
+                pose.detail.leftFoot.turn += screen.x * 0.3 * sign
+            } else {
+                pose.detail.rightFoot.point += screen.y * 0.5
+                pose.detail.rightFoot.turn += screen.x * 0.3 * sign
+            }
         case .head:
             let direction = target - hips
             guard simd_length(direction) > 0.01 else { return pose }
@@ -54,7 +76,9 @@ enum PoseDrag {
         // Arms hang from the spine (as leant now), legs from the unturned pelvis.
         let spine = simd_quatf(angle: pose.spineSide * .pi / 180, axis: SIMD3(0, 0, 1))
             * simd_quatf(angle: pose.spineForward * .pi / 180, axis: SIMD3(1, 0, 0))
-        let frame = isArm ? spine : simd_quatf(angle: 0, axis: SIMD3(0, 1, 0))
+        let hips = simd_quatf(angle: pose.detail.hipTilt * .pi / 180, axis: SIMD3(0, 0, 1))
+            * simd_quatf(angle: pose.detail.hipTurn * .pi / 180, axis: SIMD3(0, 1, 0))
+        let frame = isArm ? hips * spine : hips
         let upper = frame.inverse.act(joint - s), lower = frame.inverse.act(end - joint)
         guard simd_length(upper) > 1e-5, simd_length(lower) > 1e-5 else { return }
         let solved = PoseFromSkeleton.aim(upper: upper, lower: lower, bendsForward: isArm)

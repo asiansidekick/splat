@@ -379,9 +379,13 @@ struct RigPoser {
     func turns(for pose: MannequinPose) -> [Int: simd_quatf] {
         let identity = simd_quatf(angle: 0, axis: Self.y)
         var out: [Int: simd_quatf] = [:]
-        let spine = map.spine.isEmpty ? identity : Self.turn(pose.spineSide, Self.z) * Self.turn(pose.spineForward, Self.x)
+        // The pelvis (Phil, 2026-11-19): tilts and turns, and the spine, head, arms and legs go with it.
+        let hips = Self.turn(pose.detail.hipTilt, Self.z) * Self.turn(pose.detail.hipTurn, Self.y)
+        if pose.detail.hipTilt != 0 || pose.detail.hipTurn != 0 { out[map.hips] = hips }
+        let lean = map.spine.isEmpty ? identity : Self.turn(pose.spineSide, Self.z) * Self.turn(pose.spineForward, Self.x)
+        let spine = hips * lean
         for (k, bone) in map.spine.enumerated() {
-            out[bone] = simd_slerp(identity, spine, Float(k + 1) / Float(map.spine.count))
+            out[bone] = hips * simd_slerp(identity, lean, Float(k + 1) / Float(map.spine.count))
         }
         let look = Self.turn(pose.headDown, Self.x) * Self.turn(pose.headTurn, Self.y)
         if let head = map.head {
@@ -392,15 +396,31 @@ struct RigPoser {
             let side: Float = index == 0 ? 1 : -1
             let limb = index == 0 ? map.armL : map.armR
             let upper = spine * Self.turn(side * arm.out, Self.z) * Self.turn(-arm.forward, Self.x) * Self.turn(-side * arm.inward, Self.y)
+            let lower = upper * Self.turn(-arm.elbow, Self.x)
             out[limb[0]] = upper * armFrames[index][0].inverse
-            out[limb[1]] = upper * Self.turn(-arm.elbow, Self.x) * armFrames[index][1].inverse
+            let forearm = lower * armFrames[index][1].inverse
+            out[limb[1]] = forearm
+            // The wrist bends the hand about the forearm's own axes.
+            let hand = index == 0 ? pose.detail.leftHand : pose.detail.rightHand
+            if hand.bend != 0 || hand.side != 0 {
+                let bent = Self.turn(side * hand.side, Self.z) * Self.turn(-hand.bend, Self.x)
+                out[limb[2]] = lower * bent * lower.inverse * forearm
+            }
         }
         for (index, leg) in [pose.leftLeg, pose.rightLeg].enumerated() {
             let side: Float = index == 0 ? 1 : -1
             let limb = index == 0 ? map.legL : map.legR
-            let upper = Self.turn(side * leg.out, Self.z) * Self.turn(-leg.forward, Self.x) * Self.turn(-side * leg.inward, Self.y)
+            let upper = hips * Self.turn(side * leg.out, Self.z) * Self.turn(-leg.forward, Self.x) * Self.turn(-side * leg.inward, Self.y)
+            let lower = upper * Self.turn(leg.knee, Self.x)
             out[limb[0]] = upper * legFrames[index][0].inverse
-            out[limb[1]] = upper * Self.turn(leg.knee, Self.x) * legFrames[index][1].inverse
+            let shin = lower * legFrames[index][1].inverse
+            out[limb[1]] = shin
+            // The ankle points and turns the foot.
+            let foot = index == 0 ? pose.detail.leftFoot : pose.detail.rightFoot
+            if foot.point != 0 || foot.turn != 0 {
+                let bent = Self.turn(foot.point, Self.x) * Self.turn(side * foot.turn, Self.y)
+                out[limb[2]] = lower * bent * lower.inverse * shin
+            }
         }
         if map.facing < 0 {
             // The character faces the other way in its file: the same turns, seen from behind.
