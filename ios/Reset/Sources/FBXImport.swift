@@ -151,7 +151,7 @@ enum FBXImport {
             let headIndices: UnsafeMutablePointer<UInt16>? = mesh.bone_indices, headWeights: UnsafeMutablePointer<Float>? = mesh.bone_weights
             if !headBones.isEmpty, mesh.bone_count > 0, let boneNodes = headBoneNodes, let indices = headIndices, let weights = headWeights {
                 let isHead = (0..<Int(mesh.bone_count)).map { headBones.contains(Int(boneNodes[$0])) }
-                onHead = (0..<count).map { v in
+                onHead = (0..<count).map { (v: Int) -> Bool in
                     var w: Float = 0
                     for k in 0..<4 {
                         let b = Int(indices[v * 4 + k])
@@ -180,8 +180,11 @@ enum FBXImport {
                 var corners = (start..<(start + length)).map { UInt32($0) }
                 if let onHead {
                     corners = stride(from: start, to: start + length, by: 3)
-                        .filter { t in (onHead[t] ? 1 : 0) + (onHead[t + 1] ? 1 : 0) + (onHead[t + 2] ? 1 : 0) < 2 }
-                        .flatMap { [UInt32($0), UInt32($0 + 1), UInt32($0 + 2)] }
+                        .filter { (t: Int) -> Bool in
+                            let headCorners: Int = [onHead[t], onHead[t + 1], onHead[t + 2]].filter { $0 }.count
+                            return headCorners < 2
+                        }
+                        .flatMap { (t: Int) -> [UInt32] in [UInt32(t), UInt32(t + 1), UInt32(t + 2)] }
                     headTrianglesLeftOut += (length - corners.count) / 3
                 }
                 guard corners.count >= 3 else { continue }
@@ -279,9 +282,10 @@ enum FBXImport {
         var headWords = ""
         if let head = scannedHead, let map = rigMap, let headIndex = map.head {
             let below = rigNodes[headIndex].parent
-            let neck = map.neck.map { rigNodes[$0].position }
-                ?? (below >= 0 && below < rigNodes.count ? rigNodes[below].position : rigNodes[headIndex].position - SIMD3(0, 0.1 / scale, 0))
-            let placed = ScanRig.headPlacement(neck: neck, head: rigNodes[headIndex].position, facing: map.facing, metresPerUnit: scale)
+            let headAt: SIMD3<Float> = rigNodes[headIndex].position
+            var neck: SIMD3<Float> = headAt - SIMD3<Float>(0, 0.1 / scale, 0)
+            if let neckIndex = map.neck { neck = rigNodes[neckIndex].position } else if below >= 0, below < rigNodes.count { neck = rigNodes[below].position }
+            let placed = ScanRig.headPlacement(neck: neck, head: headAt, facing: map.facing, metresPerUnit: scale)
             let holder = headNode(head, textures: textures)
             holder.simdTransform = rigNodes[headIndex].world.inverse * placed
             nodes[headIndex].addChildNode(holder)

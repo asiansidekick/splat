@@ -184,7 +184,8 @@ extension ScanRig {
     static func headPlacement(neck: SIMD3<Float>, head: SIMD3<Float>, facing: Float, metresPerUnit: Float) -> simd_float4x4 {
         let cut = neckCut(neck: neck, head: head)
         let k = 1 / max(1e-6, metresPerUnit), turn: Float = facing < 0 ? -1 : 1
-        return simd_float4x4(SIMD4(turn * k, 0, 0, 0), SIMD4(0, k, 0, 0), SIMD4(0, 0, turn * k, 0), SIMD4(cut.x, cut.y, cut.z, 1))
+        let side: Float = turn * k
+        return simd_float4x4(SIMD4<Float>(side, 0, 0, 0), SIMD4<Float>(0, k, 0, 0), SIMD4<Float>(0, 0, side, 0), SIMD4<Float>(cut.x, cut.y, cut.z, 1))
     }
 
     private struct SavedPart: Codable {

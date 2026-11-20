@@ -119,7 +119,9 @@ final class ScanCharacterMaker: @unchecked Sendable {
         let skin = ScanRig.skin(shape, joints: joints, inside)
         let folder = ModelLibrary.folder
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let base = (title + (donor.map { " with \($0.title)'s head" } ?? "")).replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces) + " person"
+        var named: String = title
+        if let donor { named += " with \(donor.title)'s head" }
+        let base: String = named.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces) + " person"
         var target = folder.appendingPathComponent("\(base).fbx")
         var number = 2
         while FileManager.default.fileExists(atPath: target.path) {
