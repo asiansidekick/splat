@@ -634,8 +634,23 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             screen = SIMD2(Float(finger.x - poseStartFinger.x), Float(finger.y - poseStartFinger.y))
         default: break
         }
+        // Phil, 2026-11-20: limbs hang from the character's own chest and pelvis, and its arms keep out of its torso.
+        let poser = rig.poser
+        let frames = PoseDrag.Frames(arm: { poser.armFrame($0, side: $1) }, leg: { poser.legFrame($0) })
+        var body: BodyVolume?
+        if let torso = poser.torso {
+            let flip = map.facing < 0 ? simd_float4x4(diagonal: SIMD4(-1, 1, -1, 1)) : matrix_identity_float4x4
+            var scale: Float = 1
+            let slabs = torso.slabs.compactMap { slab -> BodySlab? in
+                guard let bone = rig.joint(slab.bone), slab.bone < poser.nodes.count else { return nil }
+                let m = flip * inverse * bone.simdWorldTransform * poser.nodes[slab.bone].world.inverse
+                scale = simd_length(m.columns.0.xyz)
+                return slab.moved(by: m)
+            }
+            body = BodyVolume(slabs: slabs, upperArm: torso.upperArm * scale, forearm: torso.forearm * scale)
+        }
         let pose = PoseDrag.solve(joint, target: local(world), top: at(chain[0]), middle: at(chain[1]), end: at(chain[2]),
-                                  hips: at(map.hips), from: basis, screen: screen)
+                                  hips: at(map.hips), from: basis, screen: screen, frames: frames, body: body)
         guard pose != before else { return }
         rig.apply(pose)
         if let index = models.firstIndex(where: { $0.id == id }) { models[index].rigPose = pose }

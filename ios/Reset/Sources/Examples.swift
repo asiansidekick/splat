@@ -70,7 +70,8 @@ enum Mannequin {
         shape(SCNCapsule(capRadius: CGFloat(radius), height: CGFloat(length + radius)), at: SIMD3(0, -length / 2, 0))
     }
 
-    static func make(_ body: Body, pose: MannequinPose, height: Float? = nil, proportion: MannequinProportion? = nil) -> SCNNode {
+    /// The body's measurements at its height and build, and how much the standard one was scaled.
+    private static func sized(_ body: Body, height: Float?, proportion: MannequinProportion?) -> (d: Build, k: Float) {
         var d = build(body)
         // Phil, 2026-11-19 (Magic Poser): longer or shorter parts; the height below keeps the whole figure the same size.
         if let p = proportion {
@@ -85,6 +86,32 @@ enum Mannequin {
                      \.armRadius, \.legRadius, \.waist, \.chestDepth, \.bust] as [WritableKeyPath<Build, Float>] {
             d[keyPath: path] *= k
         }
+        return (d, k)
+    }
+
+    /// The torso as slabs riding on the "pelvis" and "spine.in" nodes (in their own space), and the arms' thickness,
+    /// to keep the arms out of the body when posing (Phil, 2026-11-20). Matches the shapes `make` builds.
+    static func torso(_ body: Body, height: Float?, proportion: MannequinProportion?) -> (slabs: [(node: String, slab: BodySlab)], upperArm: Float, forearm: Float) {
+        let (d, k) = sized(body, height: height, proportion: proportion)
+        func egg(_ node: String, _ at: SIMD3<Float>, _ size: SIMD3<Float>) -> (node: String, slab: BodySlab) {
+            (node, BodySlab(centre: at, across: SIMD3(size.x, 0, 0), up: SIMD3(0, size.y, 0), depth: SIMD3(0, 0, size.z), round: true))
+        }
+        var slabs: [(node: String, slab: BodySlab)] = []
+        if body == .woman {
+            slabs.append(egg("pelvis", SIMD3(0, -0.03 * k, -0.005 * k), SIMD3(d.hips * 0.56, 0.13 * k, 0.105 * k)))
+            slabs.append(egg("spine.in", SIMD3(0, d.torso * 0.3, 0), SIMD3(d.waist * 1.05, d.torso * 0.25, d.waist * 0.85)))
+            slabs.append(egg("spine.in", SIMD3(0, d.torso * 0.08, -0.003 * k), SIMD3(d.hips * 0.4, d.torso * 0.16, 0.085 * k)))
+            slabs.append(egg("spine.in", SIMD3(0, d.torso * 0.68, 0), SIMD3(d.shoulders * 0.38, d.torso * 0.26, max(d.chestDepth * 0.82, d.chestDepth * 0.45 + d.bust * 0.6))))
+        } else {
+            slabs.append(egg("pelvis", SIMD3(0, -0.02 * k, 0), SIMD3(d.hips * 0.55, 0.11 * k, d.waist * 1.05)))
+            slabs.append(egg("spine.in", SIMD3(0, d.torso * 0.35, 0), SIMD3(d.waist, d.torso * 0.275, d.waist * 0.8)))
+            slabs.append(egg("spine.in", SIMD3(0, d.torso * 0.72, 0), SIMD3(d.shoulders * 0.4, d.torso * 0.3, d.chestDepth)))
+        }
+        return (slabs, d.armRadius, d.armRadius * 0.82)
+    }
+
+    static func make(_ body: Body, pose: MannequinPose, height: Float? = nil, proportion: MannequinProportion? = nil) -> SCNNode {
+        let (d, k) = sized(body, height: height, proportion: proportion)
         let figure = SCNNode()
         figure.name = "Mannequin"
         let root = SCNNode()

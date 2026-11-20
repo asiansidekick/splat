@@ -618,6 +618,7 @@ func runRigTests() {
     expect(codedBack?.rigPose == .sitting && ReferenceSyncLibrary.syncName(modelFile: "models/\(UUID().uuidString).fbx") != nil, "a character's pose is saved with it, and its file syncs")
 }
 runRigTests()
+runPoseLimitTests()
 
 try MainActor.assumeIsolated { try runSyncTests() }
 runFrameTests()

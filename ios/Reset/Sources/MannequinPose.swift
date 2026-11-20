@@ -212,29 +212,19 @@ enum HandPreset: String, CaseIterable {
 
 extension MannequinPose {
     /// Phil, 2026-11-10: hand posing keeps to what a body can do. Elbows and knees bend one way only and
-    /// not fully shut, limbs twist only so far, a hip swings forward more than back or out. A leg raised
-    /// past level (written the other way round, out beyond 90°) keeps its swing.
+    /// not fully shut. Where an arm or leg can point and how far it twists (Phil, 2026-11-20) is kept by HumanLimits
+    /// as each limb is posed, worked out from the limb's direction rather than these angles, which jump about when a
+    /// limb passes level or overhead.
     var limited: MannequinPose {
         func clamp(_ value: Float, _ low: Float, _ high: Float) -> Float { min(max(value, low), high) }
         func arm(_ a: Arm) -> Arm {
             var a = a
-            a.elbow = clamp(a.elbow, 0, 150)
-            a.inward = clamp(a.inward, -80, 110)
+            a.elbow = clamp(a.elbow, 0, HumanLimits.elbowMost)
             return a
         }
         func leg(_ l: Leg) -> Leg {
             var l = l
-            l.knee = clamp(l.knee, 0, 145)
-            // Phil, 2026-11-18: a raised leg twisted unnaturally. The hip turns in and out only a little, and less
-            // the higher the leg is lifted.
-            let lifted = abs(l.out) > 90 || l.forward > 60
-            // A bent knee leaves little room to twist the thigh, and a thigh raised forward can't also swing far out.
-            let twist: Float = l.knee > 60 ? 10 : (lifted ? 12 : 25)
-            l.inward = clamp(l.inward, -twist, min(twist + 5, 30))
-            if abs(l.out) <= 90 {
-                l.forward = clamp(l.forward, -30, 100)
-                l.out = clamp(l.out, -25, l.forward > 45 ? 20 : 45)
-            }
+            l.knee = clamp(l.knee, 0, HumanLimits.kneeMost)
             return l
         }
         var p = self
@@ -254,10 +244,26 @@ extension MannequinPose {
         p.detail.rightHand = hand(detail.rightHand)
         p.detail.leftFoot = foot(detail.leftFoot)
         p.detail.rightFoot = foot(detail.rightFoot)
-        p.spineForward = clamp(spineForward, -30, 60)
+        // Phil, 2026-11-20: a body bends forward a long way (hands to the floor), back only a little.
+        p.spineForward = clamp(spineForward, -30, 120)
         p.spineSide = clamp(spineSide, -30, 30)
         p.headTurn = clamp(headTurn, -80, 80)
         p.headDown = clamp(headDown, -40, 60)
         return p
+    }
+}
+
+extension MannequinPose {
+    /// The lean (forward and to the side, in degrees) that points the body from the hips toward `d`. Leaning past
+    /// level (forward more than 90°) is read from the head going below the hips; nothing jumps as it passes level.
+    static func lean(toward d: SIMD3<Float>) -> (forward: Float, side: Float) {
+        let length = (d.x * d.x + d.y * d.y + d.z * d.z).squareRoot()
+        guard length > 1e-6 else { return (0, 0) }
+        let n = d / length
+        var forward = atan2(n.z, n.y) * 180 / .pi
+        // Straight down and behind reads as bent far forward, not back.
+        if forward < -90 { forward += 360 }
+        let side = asin(min(max(-n.x, -1), 1)) * 180 / .pi
+        return (min(max(forward, -30), 120), min(max(side, -30), 30))
     }
 }

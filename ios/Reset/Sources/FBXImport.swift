@@ -134,6 +134,9 @@ enum FBXImport {
             }
         }
         var headTrianglesLeftOut = 0
+        // Points of the skin with the bone that pulls each most, to measure the torso (Phil, 2026-11-20: arms must not
+        // go through the body).
+        var skinSamples: [(point: SIMD3<Float>, bone: Int)] = []
         for m in 0..<Int(file.mesh_count) {
             let mesh = file.meshes[m]
             let count = Int(mesh.vertex_count)
@@ -246,6 +249,19 @@ enum FBXImport {
                 let skinner = SCNSkinner(baseGeometry: geometry, bones: joints, boneInverseBindTransforms: inverse, boneWeights: weightSource, boneIndices: indexSource)
                 skinner.skeleton = top
                 holder.skinner = skinner
+                let every = max(1, count / 6000)
+                for v in stride(from: 0, to: count, by: every) {
+                    var strongest = -1
+                    var pull: Float = 0
+                    for k in 0..<4 where weights[v * 4 + k] > pull {
+                        pull = weights[v * 4 + k]
+                        strongest = Int(indices[v * 4 + k])
+                    }
+                    guard strongest >= 0, strongest < boneCount else { continue }
+                    let node = Int(boneNodes[strongest])
+                    guard node >= 0, node < rigNodes.count else { continue }
+                    skinSamples.append((SIMD3(positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]), node))
+                }
                 top.addChildNode(holder)
                 skinned += 1
                 bones = max(bones, boneCount)
@@ -296,9 +312,12 @@ enum FBXImport {
         var rig: FBXRig?
         var found = "no skeleton to pose"
         if skinned > 0, let map = rigMap {
-            rig = FBXRig(nodes: nodes, lift: lift, poser: RigPoser(nodes: rigNodes, map: map), height: (high.y - low.y) * scale)
+            var poser = RigPoser(nodes: rigNodes, map: map)
+            poser.torso = TorsoShape.measure(nodes: rigNodes, map: map, samples: skinSamples)
+            rig = FBXRig(nodes: nodes, lift: lift, poser: poser, height: (high.y - low.y) * scale)
             found = "joints from " + (map.fromNames ? "bone names" : "the skeleton's shape") + (map.facing < 0 ? ", facing back" : "")
                 + ", arm \(rigNodes[map.armL[0]].name) > \(rigNodes[map.armL[1]].name), leg \(rigNodes[map.legL[0]].name) > \(rigNodes[map.legL[1]].name)"
+                + (poser.torso.map { String(format: ", torso %d slices, arm %.1f cm thick", $0.slabs.count, $0.upperArm * scale * 200) } ?? ", torso not measured")
         } else if skinned > 0 {
             found = "joints not found"
         }
