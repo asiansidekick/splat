@@ -2135,7 +2135,7 @@ struct CaptureStage: View {
                     TorchDial()
                     MeasureHint(measurer: recorder.measurer)
                     MeasureBar(measurer: recorder.measurer)
-                    ModelOverlay(placer: recorder.placer, onAdd: { choosingModel = true })
+                    ModelOverlay(placer: recorder.placer)
                     if let error = recorder.error {
                         Text(error).font(Theme.callout).padding(10)
                             .background(Color.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
@@ -2145,6 +2145,11 @@ struct CaptureStage: View {
                 .padding(8)
                 .clearOfControls()
                 .hiddenInScreenshots()
+                // Phil, 2026-11-20: the picked model's tools stand round the edges, the middle stays clear.
+                ModelEdgeTools(placer: recorder.placer, onAdd: { choosingModel = true })
+                    .padding(8)
+                    .clearOfControls()
+                    .hiddenInScreenshots()
             }
         } modes: { vertical in
             HStack(spacing: 24) {
@@ -2993,6 +2998,13 @@ struct ResetStage: View {
                 .padding(8)
                 .clearOfControls()
                 .hiddenInScreenshots()
+                if section == .edit || simpleTouch, !restorer.paused {
+                    // Phil, 2026-11-20: the picked model's tools round the edges; the top keeps room for the banners.
+                    ModelEdgeTools(placer: restorer.placer, uprightTop: 120, sidewaysTop: 40)
+                        .padding(8)
+                        .clearOfControls()
+                        .hiddenInScreenshots()
+                }
                 if simpleTouch, !restorer.paused {
                     AddTool(placer: restorer.placer, measurer: restorer.measurer) { showingAdd = true }
                         .padding(.horizontal, 10)
