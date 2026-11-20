@@ -33,6 +33,12 @@ enum ModelImport {
                 continue
             }
             if modelEndings.contains(copy.pathExtension.lowercased()) { models.append(copy) }
+            // Phil, 2026-11-20: people made from scans came out white. A gallery FBX keeps its pictures in
+            // "<name>.textures" beside it; the copy left them behind, so they go along too.
+            let pictures = FBXImport.texturesFolder(for: url)
+            if copy.pathExtension.lowercased() == "fbx", FileManager.default.fileExists(atPath: pictures.path) {
+                try? FileManager.default.copyItem(at: pictures, to: FBXImport.texturesFolder(for: copy))
+            }
         }
         return models
     }
