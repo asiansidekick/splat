@@ -1,0 +1,76 @@
+# Generate the Xcode project with XcodeGen: `brew install xcodegen && xcodegen`
+name: Reset
+options:
+  bundleIdPrefix: com.asiansidekick
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  Reset:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+      # Depth Anything V2 Small (Core ML), fetched by CI: depth from the picture where the LiDAR fails.
+      - path: Models
+        optional: true
+    # A shared scheme, so CI can archive the app for TestFlight.
+    scheme: {}
+    # Storyboard drawing styles: Core Image kernels (*.ci.metal) need their own compile and link flags, so they
+    # build into Storyboard.ci.metallib; ordinary Metal shaders (the live Storyboard look) stay in default.metallib.
+    buildRules:
+      - name: Core Image kernels
+        filePattern: "*.ci.metal"
+        script: |
+          set -e
+          air="${DERIVED_FILE_DIR}/${INPUT_FILE_BASE}.air"
+          mkdir -p "${DERIVED_FILE_DIR}" "${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
+          xcrun -sdk "${PLATFORM_NAME}" metal -c -fcikernel "${INPUT_FILE_PATH}" -o "${air}"
+          xcrun -sdk "${PLATFORM_NAME}" metallib -cikernel "${air}" -o "${SCRIPT_OUTPUT_FILE_0}"
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(INPUT_FILE_BASE).metallib
+    info:
+      path: Info.plist
+      properties:
+        # Nearby sync (MultipeerConnectivity): phone to phone over Wi-Fi and Bluetooth.
+        NSBonjourServices: [_reset-sync._tcp, _reset-sync._udp]
+        # Objects sent by AirDrop open in Reset: USDZ models and Reset's own cut-out files.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: 3D model
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.pixar.universal-scene-description-mobile]
+          - CFBundleTypeName: Reset cut-out
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes: [com.asiansidekick.reset.cutout]
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.asiansidekick.reset.cutout
+            UTTypeDescription: Reset cut-out
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [cutout]
+    settings:
+      base:
+        # Bundle IDs are unique across all of Apple; this one must match the App Store Connect app.
+        PRODUCT_BUNDLE_IDENTIFIER: com.asiansidekick.reset
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: Reset
+        # No custom encryption, so TestFlight skips the export compliance question.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        # Full screen only: the camera view and AR session do not suit iPad split view.
+        INFOPLIST_KEY_UIRequiresFullScreen: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Reset finds your teammates' phones nearby to sync references directly, with no internet."
+        INFOPLIST_KEY_NSCameraUsageDescription: "The camera records the set and shows the reference overlay."
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Shutter photos and references are saved to Photos so you can send them."
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        SWIFT_VERSION: "5.9"
+        # FBX files are read with ufbx (C, Sources/FBX).
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/FBX/Reset-Bridging-Header.h
