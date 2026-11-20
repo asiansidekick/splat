@@ -84,7 +84,12 @@ enum LensCamera {
 @MainActor
 final class LensLive: ObservableObject {
     @Published private(set) var lens: LensCamera.Lens?
+    /// Phil, 2026-11-19: switching lenses froze the screen for 9 s each time (the log showed the main thread standing still).
+    /// Showing or removing a camera's picture waits while that camera starts or stops, and stopping and starting took
+    /// seconds. So `session` (what the screen shows) only ever holds a camera that is already running, and is cleared
+    /// only after it has stopped; `active` is the camera that is wanted right now.
     @Published private(set) var session: AVCaptureSession?
+    private var active: AVCaptureSession?
     private var output: AVCapturePhotoOutput?
     private var observer: NSObjectProtocol?
     private var errorObserver: NSObjectProtocol?
@@ -109,7 +114,7 @@ final class LensLive: ObservableObject {
         // is gone from the screen first (an empty moment), and the new one opens only after the old one has stopped.
         let session = AVCaptureSession()
         let output = AVCapturePhotoOutput()
-        self.session = session
+        self.active = session
         self.output = output
         self.lens = lens
         let asked = Date()
@@ -128,7 +133,7 @@ final class LensLive: ObservableObject {
                 // The room camera letting go can interrupt it for a moment as it starts: only a lasting one counts.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                     MainActor.assumeIsolated {
-                        guard let self, self.session === session, session.isInterrupted else { return }
+                        guard let self, self.active === session, session.isInterrupted else { return }
                         Diagnostics.log("Lens view interrupted")
                         self.onInterrupted?()
                     }
@@ -140,7 +145,7 @@ final class LensLive: ObservableObject {
             var seconds = 0
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
-                guard let self, self.session === session else { return }
+                guard let self, self.active === session else { return }
                 seconds += 5
                 Diagnostics.log("Lens view: \(lens.label) still showing after \(seconds) s, running \(session.isRunning), interrupted \(session.isInterrupted), heat \(ProcessInfo.processInfo.thermalState.rawValue)")
                 if seconds >= 60 { return }
@@ -153,7 +158,7 @@ final class LensLive: ObservableObject {
             guard let device = AVCaptureDevice.default(lens.type, for: .video, position: .back),
                   let input = try? AVCaptureDeviceInput(device: device) else {
                 Diagnostics.log("Lens view: no input for \(lens.label)")
-                DispatchQueue.main.async { MainActor.assumeIsolated { if self?.session === session { self?.onFailed?() } } }
+                DispatchQueue.main.async { MainActor.assumeIsolated { if self?.active === session { self?.onFailed?() } } }
                 return
             }
             session.beginConfiguration()
@@ -161,7 +166,7 @@ final class LensLive: ObservableObject {
             guard session.canAddInput(input), session.canAddOutput(output) else {
                 session.commitConfiguration()
                 Diagnostics.log("Lens view: could not add the camera to its session")
-                DispatchQueue.main.async { MainActor.assumeIsolated { if self?.session === session { self?.onFailed?() } } }
+                DispatchQueue.main.async { MainActor.assumeIsolated { if self?.active === session { self?.onFailed?() } } }
                 return
             }
             session.addInput(input)
@@ -169,6 +174,7 @@ final class LensLive: ObservableObject {
             session.commitConfiguration()
             session.startRunning()
             Diagnostics.log(String(format: "Lens view: %@ running after %.2f s (running %@, interrupted %@)", lens.label, Date().timeIntervalSince(began), session.isRunning.description, session.isInterrupted.description))
+            DispatchQueue.main.async { MainActor.assumeIsolated { if self?.active === session { self?.session = session } } }
         }
         return true
     }
@@ -185,23 +191,27 @@ final class LensLive: ObservableObject {
         startedObserver = nil
         heartbeat?.cancel()
         heartbeat = nil
-        let old = session
-        session = nil
+        let old = active
+        active = nil
         output = nil
         lens = nil
         guard let old else {
+            session = nil
             then?()
             return
         }
-        Self.queue.async {
+        Self.queue.async { [weak self] in
             old.stopRunning()
-            DispatchQueue.main.async { then?() }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { if self?.session === old { self?.session = nil } }
+                then?()
+            }
         }
     }
 
     /// A photo through the live lens, upright for how the phone is held.
     func photo() async -> Data? {
-        guard let output, session != nil else { return nil }
+        guard let output, active != nil, session != nil else { return nil }
         let angle = LensCamera.angle
         if let connection = output.connection(with: .video), connection.isVideoRotationAngleSupported(angle) {
             connection.videoRotationAngle = angle
