@@ -478,6 +478,8 @@ final class ScanCharacterMaker: @unchecked Sendable {
 /// skeleton follows. "Make person" saves it in the gallery.
 struct ScanCharacterScreen: View {
     let folder: ScanFolder
+    /// Turns the room camera off (false) while the person is built again, and on again (true) after.
+    var roomCamera: ((Bool) -> Void)? = nil
     /// Called on closing, with the saved character when one was made, and true to place it in the room straight away.
     let done: (URL?, Bool) -> Void
     @State private var maker: ScanCharacterMaker?
@@ -716,7 +718,11 @@ struct ScanCharacterScreen: View {
         let folder = folder
         let result = await Task.detached(priority: .userInitiated) { ScanCharacterMaker.prepare(folder) }.value
         show(result)
-        if case .success(let made) = result, ScanPersonDetail.canRebuild(folder) { buildInDetail(made) }
+        if ScanPersonDetail.crashedLastTime(folder) {
+            problem = "Building just the person again stopped the app last time, so this uses the scan as it is."
+        } else if case .success(let made) = result, ScanPersonDetail.canRebuild(folder) {
+            buildInDetail(made)
+        }
     }
 
     /// Builds just the person again from the scan's photos, then reads that instead. Skip keeps the scan as it is.
@@ -728,7 +734,11 @@ struct ScanCharacterScreen: View {
             return
         }
         detailProgress = 0
+        roomCamera?(false)
         detailTask = Task {
+            defer { roomCamera?(true) }
+            // Let the room camera let go of its memory before the builder starts.
+            try? await Task.sleep(for: .seconds(0.7))
             do {
                 try await ScanPersonDetail.rebuild(folder, box: box) { fraction in
                     Task { @MainActor in if detailProgress != nil { detailProgress = fraction } }

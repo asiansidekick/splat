@@ -244,7 +244,14 @@ struct AssetGallery: View {
             }
         }
         .fullScreenCover(item: $makingPerson) { folder in
-            ScanCharacterScreen(folder: folder) { made, placeNow in
+            ScanCharacterScreen(folder: folder, roomCamera: { on in
+                // The model builder needs the phone's memory: the room camera rests while it works.
+                if on {
+                    if let configuration = placer.session.configuration { placer.session.run(configuration) }
+                } else {
+                    placer.session.pause()
+                }
+            }) { made, placeNow in
                 makingPerson = nil
                 guard let made else { return }
                 newest = made

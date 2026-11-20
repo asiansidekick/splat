@@ -1,5 +1,6 @@
 import Foundation
 import RealityKit
+import os
 import SceneKit
 import simd
 
@@ -23,6 +24,17 @@ enum ScanPersonDetail {
 
     static func skip(_ folder: ScanFolder) {
         try? Data().write(to: skippedFile(folder))
+    }
+
+    private static func runningFile(_ folder: ScanFolder) -> URL { folder.url.appendingPathComponent("person-detail-running") }
+
+    /// A build that was running when the app last stopped: it is not tried again on its own.
+    static func crashedLastTime(_ folder: ScanFolder) -> Bool {
+        guard FileManager.default.fileExists(atPath: runningFile(folder).path) else { return false }
+        try? FileManager.default.removeItem(at: runningFile(folder))
+        skip(folder)
+        Diagnostics.log("Scan person: the last build in more detail didn't finish (the app stopped), not tried again")
+        return true
     }
 
     /// The box round the person (in the model's metres, as Reset shows it) in the builder's own space, where the
@@ -52,6 +64,9 @@ enum ScanPersonDetail {
     /// Builds the person again inside the box. `progress` gets 0 to 1. Throws on failure; cancelling the task stops it.
     static func rebuild(_ folder: ScanFolder, box: (SIMD3<Float>, SIMD3<Float>), progress: @escaping @Sendable (Double) -> Void) async throws {
         let started = Date()
+        try? Data().write(to: runningFile(folder))
+        defer { try? FileManager.default.removeItem(at: runningFile(folder)) }
+        Diagnostics.log(String(format: "Scan person: memory before building, %.0f MB free", Double(os_proc_available_memory()) / 1_000_000))
         var config = PhotogrammetrySession.Configuration()
         config.checkpointDirectory = folder.checkpoint
         let session = try PhotogrammetrySession(input: folder.images, configuration: config)
@@ -59,11 +74,18 @@ enum ScanPersonDetail {
         try? FileManager.default.removeItem(at: raw)
         let geometry = PhotogrammetrySession.Request.Geometry(bounds: BoundingBox(min: box.0, max: box.1))
         Diagnostics.log("Scan person: building the person in more detail, box \(box.0) to \(box.1)")
+        var logged = 0
         try await withTaskCancellationHandler {
             try session.process(requests: [.modelFile(url: raw, detail: .reduced, geometry: geometry)])
             outputs: for try await output in session.outputs {
                 switch output {
-                case .requestProgress(_, let fraction): progress(fraction)
+                case .requestProgress(_, let fraction):
+                    progress(fraction)
+                    let tenth = Int(fraction * 10)
+                    if tenth > logged {
+                        logged = tenth
+                        Diagnostics.log(String(format: "Scan person: building %d %%, %.0f MB free", tenth * 10, Double(os_proc_available_memory()) / 1_000_000))
+                    }
                 case .requestError(_, let error): throw error
                 case .processingComplete: break outputs
                 case .processingCancelled: throw CancellationError()
