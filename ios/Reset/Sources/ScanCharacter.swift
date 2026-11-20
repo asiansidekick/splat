@@ -360,8 +360,8 @@ final class ScanCharacterMaker: @unchecked Sendable {
 /// skeleton follows. "Make person" saves it in the gallery.
 struct ScanCharacterScreen: View {
     let folder: ScanFolder
-    /// Called on closing, with the saved character when one was made.
-    let done: (URL?) -> Void
+    /// Called on closing, with the saved character when one was made, and true to place it in the room straight away.
+    let done: (URL?, Bool) -> Void
     @State private var maker: ScanCharacterMaker?
     @State private var marks = ScanRig.Marks()
     @State private var working: String? = "Finding the joints…"
@@ -392,7 +392,7 @@ struct ScanCharacterScreen: View {
     private var topBar: some View {
         VStack(spacing: 6) {
             HStack {
-                Button("Cancel") { done(nil) }
+                Button("Cancel") { done(nil, false) }
                     .font(Theme.body.weight(.semibold))
                     .foregroundStyle(.white)
                     .disabled(working != nil && maker != nil)
@@ -411,11 +411,17 @@ struct ScanCharacterScreen: View {
     @ViewBuilder private var bottomBar: some View {
         if let saved {
             VStack(spacing: 10) {
-                Text("Saved as “\(saved.deletingPathExtension().lastPathComponent)” in 3D models. Tap it there to place it, then Pose.")
+                Text("Saved as “\(saved.deletingPathExtension().lastPathComponent)”. It's first in 3D models, marked New.")
                     .font(Theme.footnote).foregroundStyle(.white).multilineTextAlignment(.center)
-                Button { done(saved) } label: {
-                    Text("Done").font(Theme.body.weight(.semibold)).foregroundStyle(Theme.onAccent)
-                        .padding(.horizontal, 28).padding(.vertical, 10).background(Theme.accent, in: Capsule())
+                HStack(spacing: 12) {
+                    Button { done(saved, false) } label: {
+                        Text("Show in 3D models").font(Theme.subheadline.weight(.semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 16).padding(.vertical, 10).background(Color.white.opacity(0.15), in: Capsule())
+                    }
+                    Button { done(saved, true) } label: {
+                        Text("Place it now").font(Theme.body.weight(.semibold)).foregroundStyle(Theme.onAccent)
+                            .padding(.horizontal, 20).padding(.vertical, 10).background(Theme.accent, in: Capsule())
+                    }
                 }
             }
             .padding(16)

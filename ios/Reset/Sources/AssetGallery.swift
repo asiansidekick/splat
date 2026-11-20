@@ -112,6 +112,8 @@ struct AssetGallery: View {
     @State private var trimming: ScanFolder?
     /// Phil, 2026-11-20: a scan of a person made into a posable character (ScanCharacter.swift).
     @State private var makingPerson: ScanFolder?
+    /// Phil, 2026-11-20: "I can't find the posable model I just made". The person just made goes first, marked New.
+    @State private var newest: URL?
     @State private var preview: URL?
     @State private var version = 0
     @State private var renaming: Asset?
@@ -139,7 +141,7 @@ struct AssetGallery: View {
         var kind: String {
             switch self {
             case .scan: return "3D scan"
-            case .model: return "3D model"
+            case .model(let url): return url.pathExtension.lowercased() == "fbx" ? "Posable character" : "3D model"
             case .cutout: return "Cut-out"
             }
         }
@@ -160,7 +162,9 @@ struct AssetGallery: View {
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { scroller in
             ScrollView {
+                Color.clear.frame(height: 0).id("top")
                 if let actions {
                     HStack(spacing: 6) {
                         if canScan { addButton("Scan", "viewfinder") { actions(.scan) } }
@@ -191,12 +195,27 @@ struct AssetGallery: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .overlay {
+                            if let newest, asset.file?.standardizedFileURL == newest.standardizedFileURL {
+                                RoundedRectangle(cornerRadius: 10).stroke(Theme.accent, lineWidth: 3)
+                            }
+                        }
+                        .overlay(alignment: .topLeading) {
+                            if let newest, asset.file?.standardizedFileURL == newest.standardizedFileURL {
+                                Text("New").font(Theme.caption.weight(.bold)).foregroundStyle(Theme.onAccent)
+                                    .padding(.horizontal, 8).padding(.vertical, 3).background(Theme.accent, in: Capsule()).padding(6)
+                            }
+                        }
                         .overlay(alignment: .topTrailing) { editMenu(asset) }
                         .contextMenu { assetOptions(asset) }
                     }
                 }
                 .padding(12)
                 .id(version)
+            }
+            .onChange(of: version) { _, _ in
+                if newest != nil { withAnimation { scroller.scrollTo("top", anchor: .top) } }
+            }
             }
             .gesture(MagnifyGesture().onEnded { value in
                 if value.magnification > 1.2 { columns = max(1, columns - 1) }
@@ -223,12 +242,15 @@ struct AssetGallery: View {
             }
         }
         .fullScreenCover(item: $makingPerson) { folder in
-            ScanCharacterScreen(folder: folder) { made in
+            ScanCharacterScreen(folder: folder) { made, placeNow in
                 makingPerson = nil
-                if made != nil {
-                    refresh()
-                    version += 1
-                }
+                guard let made else { return }
+                newest = made
+                refresh()
+                version += 1
+                Diagnostics.log("Scan person: \(placeNow ? "placed straight away" : "shown first in the gallery")")
+                // After the cover has gone, so the gallery can close behind it.
+                if placeNow { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { place(.model(made)) } }
             }
         }
         .quickLookPreview($preview)
@@ -316,7 +338,11 @@ struct AssetGallery: View {
     }
 
     private func refresh() {
-        assets = ScanFolder.all().filter(\.hasModel).map(Asset.scan) + ModelLibrary.all().map(Asset.model) + CutoutLibrary.all().map(Asset.cutout)
+        var all = ScanFolder.all().filter(\.hasModel).map(Asset.scan) + ModelLibrary.all().map(Asset.model) + CutoutLibrary.all().map(Asset.cutout)
+        if let newest, let index = all.firstIndex(where: { $0.file?.standardizedFileURL == newest.standardizedFileURL }) {
+            all.insert(all.remove(at: index), at: 0)
+        }
+        assets = all
     }
 
     private func place(_ asset: Asset) {
