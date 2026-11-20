@@ -483,7 +483,7 @@ struct ScanCharacterScreen: View {
                 .foregroundStyle(.white)
                 .shadow(color: .black, radius: 2)
                 .fixedSize()
-                .offset(x: [.elbowR, .wristR, .kneeR].contains(name) ? -34 : 34)
+                .offset(x: [ScanRig.Marks.Name.elbowR, .wristR, .kneeR].contains(name) ? -34 : 34)
         }
         .frame(width: 44, height: 44)
         .contentShape(Circle())
