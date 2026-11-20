@@ -205,6 +205,7 @@ enum FBXImport {
                     } else if !key.isEmpty {
                         picture = pictures[key] ?? sized(UIImage(contentsOfFile: textures.appendingPathComponent(key).path))
                         pictures[key] = picture
+                        if picture == nil { Diagnostics.log("FBX: \(name): picture \(key) not found beside it") }
                     }
                 }
                 if let picture {

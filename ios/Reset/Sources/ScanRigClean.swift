@@ -123,13 +123,18 @@ extension ScanRig {
 
     /// The triangles `keep` says yes to, with their points renumbered. `keep` is given the triangle's three corners.
     static func part(of mesh: BodyMesh, keep: ([SIMD3<Float>]) -> Bool) -> BodyMesh {
+        part(of: mesh) { _, corners in keep(corners) }
+    }
+
+    /// The same, `keep` also given the triangle's number.
+    static func part(of mesh: BodyMesh, keep: (Int, [SIMD3<Float>]) -> Bool) -> BodyMesh {
         var newIndex = [Int32](repeating: -1, count: mesh.positions.count)
         var out = BodyMesh(positions: [], normals: [], uvs: mesh.uvs == nil ? nil : [], triangles: [], parts: [])
         for part in mesh.parts {
             let first = out.triangles.count / 3
             for t in part.firstTriangle..<min(mesh.triangleCount, part.firstTriangle + part.triangleCount) {
                 let corners = (0..<3).map { Int(mesh.triangles[t * 3 + $0]) }
-                guard keep(corners.map { mesh.positions[$0] }) else { continue }
+                guard keep(t, corners.map { mesh.positions[$0] }) else { continue }
                 for c in corners {
                     if newIndex[c] < 0 {
                         newIndex[c] = Int32(out.positions.count)

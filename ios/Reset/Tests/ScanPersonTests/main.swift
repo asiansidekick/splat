@@ -331,6 +331,20 @@ expect(abs(smoothedHigh - height) < 0.01, String(format: "still as tall (%.3f m)
 let smoothedSkin = ScanRig.skin(smoothedPerson, joints: joints, voxels)
 expect(smoothedSkin.loose == 0, "every smoothed point reached by a bone")
 
+// MARK: Floor bits apart from the body
+
+var shard = body
+let shardStart = UInt32(shard.positions.count)
+shard.positions += [SIMD3(0.6, 0.01, 0.3), SIMD3(0.7, 0.01, 0.3), SIMD3(0.6, 0.01, 0.4)]
+shard.normals += [SIMD3<Float>](repeating: SIMD3(0, 1, 0), count: 3)
+shard.uvs! += [SIMD2<Float>](repeating: .zero, count: 3)
+shard.triangles += [shardStart, shardStart + 1, shardStart + 2]
+shard.parts[shard.parts.count - 1].triangleCount += 1
+let shardSkin = ScanRig.skin(shard, joints: joints, voxels)
+expect(shardSkin.loose == 3, "a floor bit apart from the body is reached by no bone (\(shardSkin.loose))")
+let noShard = ScanRig.withoutIslands(shard, shardSkin)
+expect(noShard.triangleCount == body.triangleCount && noShard.positions.count == body.positions.count, "the floor bit is left out, the body kept whole")
+
 // MARK: Swapping heads
 
 // A donor: the same person 10% bigger, standing somewhere else. Its head goes on the first body at the first body's

@@ -128,7 +128,14 @@ final class ScanCharacterMaker: @unchecked Sendable {
         }
         var smoothed = 0
         if smoothHead { smoothed = ScanRig.smooth(&shape, ScanRig.headAndShoulders(joints: joints, height: height)) }
-        let skin = ScanRig.skin(shape, joints: joints, inside)
+        var skin = ScanRig.skin(shape, joints: joints, inside)
+        var islands = 0
+        if skin.loose > 0 {
+            let before = shape.triangleCount
+            shape = ScanRig.withoutIslands(shape, skin)
+            islands = before - shape.triangleCount
+            skin = ScanRig.skin(shape, joints: joints, inside)
+        }
         let folder = ModelLibrary.folder
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var named: String = title
@@ -152,6 +159,7 @@ final class ScanCharacterMaker: @unchecked Sendable {
         for (index, part) in mesh.parts.enumerated() {
             guard let name = part.texture else { continue }
             guard let picture = byName[name], let data = Self.jpeg(picture) else {
+                Diagnostics.log("Scan person: picture \(name) \(byName[name] == nil ? "not read from the scan" : "could not be saved"), shown plain")
                 mesh.parts[index].texture = nil
                 continue
             }
@@ -159,7 +167,9 @@ final class ScanCharacterMaker: @unchecked Sendable {
             try FileManager.default.createDirectory(at: textures, withIntermediateDirectories: true)
             try data.write(to: textures.appendingPathComponent(name), options: .atomic)
             written.insert(name)
+            Diagnostics.log(String(format: "Scan person: picture %@ saved, %.0f x %.0f, %.1f MB", name, picture.size.width * picture.scale, picture.size.height * picture.scale, Double(data.count) / 1_000_000))
         }
+        if islands > 0 { Diagnostics.log("Scan person: \(islands) triangles apart from the body left out (floor bits)") }
         let file = ScanRig.fbx(mesh, joints: joints, skin: skin, name: target.deletingPathExtension().lastPathComponent)
         try file.write(to: target, options: .atomic)
         Diagnostics.log(String(format: "Scan person saved: %@ (%d head and shoulder points smoothed, head %@), %d triangles, %.1f MB, %d bones pull the skin, %d loose points, %.1f s",
@@ -212,9 +222,15 @@ final class ScanCharacterMaker: @unchecked Sendable {
 
     private static func jpeg(_ image: UIImage) -> Data? {
         let longest = max(image.size.width * image.scale, image.size.height * image.scale)
-        guard longest > 4096 else { return image.jpegData(compressionQuality: 0.9) }
+        guard longest > 0 else { return nil }
+        // A picture with no bitmap behind it yet is drawn first.
+        guard longest > 4096 else { return image.jpegData(compressionQuality: 0.9) ?? redrawn(image, CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)) }
         let factor = 4096 / longest
         let size = CGSize(width: (image.size.width * image.scale * factor).rounded(), height: (image.size.height * image.scale * factor).rounded())
+        return redrawn(image, size)
+    }
+
+    private static func redrawn(_ image: UIImage, _ size: CGSize) -> Data? {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         return UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }.jpegData(compressionQuality: 0.9)

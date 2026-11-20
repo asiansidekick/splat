@@ -855,6 +855,20 @@ enum ScanRig {
         var weights: [SIMD4<Float>]
         /// Corners no bone could reach through the body (loose bits of the scan): they follow the hips.
         var loose: Int
+        /// Which corners a bone reached.
+        var reached: [Bool] = []
+    }
+
+    /// Phil, 2026-11-20: bits of floor left round the feet stayed behind as white shards. Triangles with a corner no
+    /// bone could reach through the body are islands apart from the person: they are left out.
+    static func withoutIslands(_ mesh: BodyMesh, _ skin: Skin) -> BodyMesh {
+        guard skin.loose > 0, skin.reached.count == mesh.positions.count else { return mesh }
+        let reached = skin.reached
+        var keepTriangle = [Bool](repeating: true, count: mesh.triangleCount)
+        for t in 0..<mesh.triangleCount {
+            keepTriangle[t] = reached[Int(mesh.triangles[t * 3])] && reached[Int(mesh.triangles[t * 3 + 1])] && reached[Int(mesh.triangles[t * 3 + 2])]
+        }
+        return part(of: mesh) { t, _ in keepTriangle[t] }
     }
 
     /// Geodesic voxel binding: each bone's distance through the inside of the body to every cube, then each corner
@@ -918,6 +932,7 @@ enum ScanRig {
         var bones = [SIMD4<UInt16>](repeating: SIMD4(0, 0, 0, 0), count: mesh.positions.count)
         var weights = [SIMD4<Float>](repeating: SIMD4(1, 0, 0, 0), count: mesh.positions.count)
         var loose = 0
+        var reached = [Bool](repeating: false, count: mesh.positions.count)
         let minimum = v.size
         for (corner, p) in mesh.positions.enumerated() {
             let c = v.cell(p)
@@ -955,8 +970,9 @@ enum ScanRig {
             for (n, entry) in kept.enumerated() { bi[n] = UInt16(entry.1); bw[n] = entry.0 / total }
             bones[corner] = bi
             weights[corner] = bw
+            reached[corner] = true
         }
-        return Skin(bones: bones, weights: weights, loose: loose)
+        return Skin(bones: bones, weights: weights, loose: loose, reached: reached)
     }
 
     // MARK: 6. The FBX file
