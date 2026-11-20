@@ -117,11 +117,13 @@ final class ScanCharacterMaker: @unchecked Sendable {
     var startingMarks: ScanRig.Marks {
         var marks = found?.marks ?? ScanRig.averageMarks(height: height, middle: 0)
         // The shoulders start where the joints would put them, so the dots sit on the skeleton.
-        if marks.shoulderL == .zero || marks.shoulderR == .zero {
+        if marks.shoulderL == .zero || marks.shoulderR == .zero || marks.ankleL == .zero || marks.ankleR == .zero {
             let J = ScanRig.joints(marks, voxels, height: height)
-            let left = J[ScanRig.bone("LeftArm")], right = J[ScanRig.bone("RightArm")]
-            marks.shoulderL = SIMD2(left.x, left.y)
-            marks.shoulderR = SIMD2(right.x, right.y)
+            func at(_ name: String) -> SIMD2<Float> { let p = J[ScanRig.bone(name)]; return SIMD2(p.x, p.y) }
+            if marks.shoulderL == .zero { marks.shoulderL = at("LeftArm") }
+            if marks.shoulderR == .zero { marks.shoulderR = at("RightArm") }
+            if marks.ankleL == .zero { marks.ankleL = at("LeftFoot") }
+            if marks.ankleR == .zero { marks.ankleR = at("RightFoot") }
         }
         return marks
     }
@@ -528,7 +530,21 @@ struct ScanCharacterScreen: View {
             }
         }
         .overlay(alignment: .top) { topBar }
-        .overlay(alignment: .bottom) { bottomBar }
+        .overlay(alignment: .bottom) {
+            // Phil, 2026-11-20: words over the head made the chin dot hard to reach. They sit low, above the
+            // buttons, and fingers go through them.
+            VStack(spacing: 8) {
+                if let problem {
+                    Text(problem).font(Theme.footnote).foregroundStyle(.orange).multilineTextAlignment(.center).shadow(color: .black, radius: 3)
+                        .allowsHitTesting(false)
+                } else if maker != nil, saved == nil, working == nil {
+                    Text("Drag any dot that's off its joint").font(Theme.footnote).foregroundStyle(.white).shadow(color: .black, radius: 3)
+                        .allowsHitTesting(false)
+                }
+                bottomBar
+            }
+            .padding(.horizontal, 12)
+        }
         .preferredColorScheme(.dark)
         .task { await start() }
     }
@@ -555,11 +571,7 @@ struct ScanCharacterScreen: View {
                 headChooser
                 Text(smoothHead ? "Head and shoulders smoothed, the rest as scanned" : "The whole scan, as it is")
                     .font(Theme.caption).foregroundStyle(.white.opacity(0.85)).shadow(color: .black, radius: 3)
-            }
-            if let problem {
-                Text(problem).font(Theme.footnote).foregroundStyle(.orange).multilineTextAlignment(.center).shadow(color: .black, radius: 3)
-            } else if maker != nil, saved == nil, working == nil {
-                Text("Drag any dot that's off its joint").font(Theme.footnote).foregroundStyle(.white).shadow(color: .black, radius: 3)
+                    .allowsHitTesting(false)
             }
         }
         .padding(.horizontal, 16)
@@ -681,7 +693,7 @@ struct ScanCharacterScreen: View {
                 .foregroundStyle(.white)
                 .shadow(color: .black, radius: 2)
                 .fixedSize()
-                .offset(x: [ScanRig.Marks.Name.shoulderR, .elbowR, .wristR, .kneeR].contains(name) ? -34 : 34)
+                .offset(x: [ScanRig.Marks.Name.shoulderR, .elbowR, .wristR, .kneeR, .ankleR].contains(name) ? -34 : 34)
         }
         .frame(width: 44, height: 44)
         .contentShape(Circle())

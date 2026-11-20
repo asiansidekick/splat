@@ -524,15 +524,18 @@ enum ScanRig {
         var kneeL = SIMD2<Float>(0, 0), kneeR = SIMD2<Float>(0, 0)
         /// Phil, 2026-11-20: "I can't move the top of the skeleton". Zero: worked out from the chin and the chest.
         var shoulderL = SIMD2<Float>(0, 0), shoulderR = SIMD2<Float>(0, 0)
+        /// Phil, 2026-11-20: "feet are unselectable". Zero: worked out from the knees.
+        var ankleL = SIMD2<Float>(0, 0), ankleR = SIMD2<Float>(0, 0)
 
         enum Name: String, CaseIterable, Identifiable {
-            case chin, shoulderL, shoulderR, groin, elbowL, elbowR, wristL, wristR, kneeL, kneeR
+            case chin, shoulderL, shoulderR, groin, elbowL, elbowR, wristL, wristR, kneeL, kneeR, ankleL, ankleR
             var id: String { rawValue }
             /// What the dot says on screen.
             var word: String {
                 switch self {
                 case .chin: return "Chin"
                 case .shoulderL, .shoulderR: return "Shoulder"
+                case .ankleL, .ankleR: return "Ankle"
                 case .groin: return "Groin"
                 case .elbowL, .elbowR: return "Elbow"
                 case .wristL, .wristR: return "Wrist"
@@ -546,6 +549,8 @@ enum ScanRig {
                 case .chin: return chin
                 case .shoulderL: return shoulderL
                 case .shoulderR: return shoulderR
+                case .ankleL: return ankleL
+                case .ankleR: return ankleR
                 case .groin: return groin
                 case .elbowL: return elbowL
                 case .elbowR: return elbowR
@@ -560,6 +565,8 @@ enum ScanRig {
                 case .chin: chin = newValue
                 case .shoulderL: shoulderL = newValue
                 case .shoulderR: shoulderR = newValue
+                case .ankleL: ankleL = newValue
+                case .ankleR: ankleR = newValue
                 case .groin: groin = newValue
                 case .elbowL: elbowL = newValue
                 case .elbowR: elbowR = newValue
@@ -841,10 +848,12 @@ enum ScanRig {
             set(side + "UpLeg", SIMD3(hipX, hipY, middleZ))
             set(side + "Leg", SIMD3(knee.x, knee.y, depth(knee.x, knee.y, middleZ)))
             // The ankle: on down the thigh-to-knee line to ankle height, then in the middle of the leg.
-            let ankleY = 0.048 * H
+            var ankleY = 0.048 * H
             let thigh = SIMD2(knee.x - hipX, knee.y - hipY)
             var ankleX = abs(thigh.y) > 1e-5 ? knee.x + thigh.x / thigh.y * (ankleY - knee.y) : knee.x
             if let r = v.run(ankleX, ankleY) { ankleX = (r.0 + r.1) / 2 }
+            let givenAnkle = side == "Left" ? marks.ankleL : marks.ankleR
+            if givenAnkle != .zero { ankleX = givenAnkle.x; ankleY = givenAnkle.y }
             let ankleZ = depth(ankleX, ankleY, middleZ)
             set(side + "Foot", SIMD3(ankleX, ankleY, ankleZ))
             // The toes: the furthest forward the body reaches low down on this side.
