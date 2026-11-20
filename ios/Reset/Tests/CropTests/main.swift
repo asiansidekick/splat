@@ -305,5 +305,24 @@ do {
     check(took < 1.5, "edges: fast enough (\(Int(took * 1000)) ms on the test Mac)")
 }
 
+// OutlineStrips: a picked thing's outline (a disc, and a ring with a hole) as strips, exact to the pixel.
+do {
+    let w = 400, h = 300
+    func disc(_ x: Int, _ y: Int) -> Bool { let dx = Float(x) + 0.5 - 200, dy = Float(y) + 0.5 - 150; return dx * dx + dy * dy < 80 * 80 }
+    let strips = OutlineStrips.make(width: w, height: h, stepY: 1, inside: disc)
+    var area = 0, truth = 0
+    for strip in strips { area += (strip.x1 - strip.x0) * (strip.y1 - strip.y0) }
+    for y in 0..<h { for x in 0..<w where disc(x, y) { truth += 1 } }
+    check(area == truth, "strips: every pixel of the outline covered, none outside (\(area) of \(truth))")
+    check(strips.allSatisfy { s in (s.x0..<s.x1).allSatisfy { disc($0, s.y0) } && !disc(s.x0 - 1, s.y0) && !disc(s.x1, s.y0) }, "strips: each strip starts and ends on the outline's edge")
+    func ring(_ x: Int, _ y: Int) -> Bool { let dx = Float(x) + 0.5 - 200, dy = Float(y) + 0.5 - 150; let r = dx * dx + dy * dy; return r < 80 * 80 && r > 30 * 30 }
+    let middle = OutlineStrips.make(width: w, height: h, stepY: 1, inside: ring).filter { $0.y0 == 150 }
+    check(middle.count == 2, "strips: a hole leaves a gap (\(middle.count) strips across the middle)")
+    check(OutlineStrips.make(width: w, height: h, stepY: 2, inside: disc).count * 2 >= strips.count - 2, "strips: every second row halves the strips")
+    check(OutlineStrips.make(width: w, height: h, stepY: 1) { _, _ in false }.isEmpty, "strips: nothing picked, nothing drawn")
+    let edge = OutlineStrips.make(width: 10, height: 1, stepY: 1) { x, _ in x >= 7 }
+    check(edge == [OutlineStrips.Strip(x0: 7, x1: 10, y0: 0, y1: 1)], "strips: a thing at the picture's edge runs to the edge")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

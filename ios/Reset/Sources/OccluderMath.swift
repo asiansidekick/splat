@@ -198,3 +198,27 @@ enum EdgeDepth {
         return out
     }
 }
+
+/// A picked thing's outline as runs of pixels, row by row (LiveOcclusion.swift draws each run as one strip).
+enum OutlineStrips {
+    struct Strip: Equatable { var x0: Int; var x1: Int; var y0: Int; var y1: Int }
+
+    /// `inside(x, y)` says whether a pixel of a `width` by `height` outline is the thing; every `stepY`th row is read.
+    static func make(width: Int, height: Int, stepY: Int, inside: (Int, Int) -> Bool) -> [Strip] {
+        guard width > 0, height > 0, stepY >= 1 else { return [] }
+        var strips: [Strip] = []
+        for y in stride(from: 0, to: height, by: stepY) {
+            var start: Int?
+            for x in 0...width {
+                let isInside = x < width && inside(x, y)
+                if isInside, start == nil { start = x }
+                if !isInside, let from = start {
+                    strips.append(Strip(x0: from, x1: x, y0: y, y1: min(height, y + stepY)))
+                    start = nil
+                }
+            }
+        }
+        return strips
+    }
+}
+

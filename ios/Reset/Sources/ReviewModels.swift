@@ -94,7 +94,8 @@ extension OccluderMesh {
                      imageWidth: Float(frame.imageWidth), imageHeight: Float(frame.imageHeight))
     }
 
-    func geometry() -> SCNGeometry? {
+    /// `readsDepth` false: it hides whatever is drawn after it, nearer or not (the picked things in front, LiveOcclusion).
+    func geometry(readsDepth: Bool = true) -> SCNGeometry? {
         guard !indices.isEmpty else { return nil }
         let data = positions.withUnsafeBufferPointer { Data(buffer: $0) }
         let source = SCNGeometrySource(data: data, semantic: .vertex, vectorCount: positions.count / 3, usesFloatComponents: true,
@@ -104,7 +105,7 @@ extension OccluderMesh {
         let material = SCNMaterial()
         material.colorBufferWriteMask = []
         material.writesToDepthBuffer = true
-        material.readsFromDepthBuffer = true
+        material.readsFromDepthBuffer = readsDepth
         material.isDoubleSided = true
         material.lightingModel = .constant
         geometry.materials = [material]
