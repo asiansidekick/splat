@@ -119,6 +119,18 @@ expect(toes.z > 0.1, String(format: "the toes point to +Z (z %.2f), feet signal 
 var trimmed = body
 expect(ScanRig.trimFloor(&trimmed) == 0, "no floor cut from a person without one")
 
+// Scraps of floor beside the feet go; the feet stay.
+var scrappy = body
+let scrapStart = UInt32(scrappy.positions.count)
+let scrapLow = scrappy.positions.map(\.y).min()!
+scrappy.positions += [SIMD3(0.45, scrapLow + 0.004, 0.0), SIMD3(0.55, scrapLow + 0.006, 0.0), SIMD3(0.45, scrapLow + 0.004, 0.1)]
+scrappy.normals += [SIMD3<Float>](repeating: SIMD3(0, 1, 0), count: 3)
+scrappy.uvs! += [SIMD2<Float>](repeating: .zero, count: 3)
+scrappy.triangles += [scrapStart, scrapStart + 1, scrapStart + 2]
+scrappy.parts[scrappy.parts.count - 1].triangleCount += 1
+let scrapsCut = ScanRig.trimAroundFeet(&scrappy)
+expect(scrapsCut == 1 && scrappy.triangleCount == body.triangleCount, "a scrap of floor beside the feet is cut, the feet kept (\(scrapsCut) cut)")
+
 // MARK: Filling in and finding the marks
 
 guard let voxels = ScanRig.Voxels(body, size: height / 150) else {

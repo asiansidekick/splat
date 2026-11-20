@@ -48,7 +48,9 @@ final class ScanCharacterMaker: @unchecked Sendable {
 
     /// Reads the scan, stands it up and finds the joints. Slow (a second or two): call off the main thread.
     static func prepare(_ folder: ScanFolder, turned: Bool? = nil) -> Result<ScanCharacterMaker, Failure> {
-        guard let loaded = read(folder.model) else { return .failure(.unreadable) }
+        // The person built again in more detail (ScanPersonDetail), when there is one.
+        let source = ScanPersonDetail.has(folder) ? ScanPersonDetail.file(folder) : folder.model
+        guard let loaded = read(source) else { return .failure(.unreadable) }
         let (mesh, pictures) = loaded
         guard mesh.triangleCount >= 100 else { return .failure(.unreadable) }
         guard mesh.triangleCount < 1_500_000 else { return .failure(.tooBig) }
@@ -72,7 +74,10 @@ final class ScanCharacterMaker: @unchecked Sendable {
         }
         if let turned { stance.turned = turned }
         var body = ScanRig.stood(original, stance)
-        let trimmed = ScanRig.trimFloor(&body)
+        var trimmed = ScanRig.trimFloor(&body)
+        trimmed += ScanRig.trimAroundFeet(&body)
+        // Bits the cut left apart from the person.
+        body = ScanRig.mainPiece(body).0
         if trimmed > 0 {
             // Stand it on its feet again, without the floor piece.
             let low = body.positions.map(\.y).min() ?? 0
@@ -101,9 +106,24 @@ final class ScanCharacterMaker: @unchecked Sendable {
                                            found: found, floorTrimmed: trimmed, picture: picture, shown: shown))
     }
 
+    /// The person's box in the scan's own space (as Reset shows it), with a margin.
+    var modelBox: (SIMD3<Float>, SIMD3<Float>) {
+        var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude), high = -low
+        for p in original.positions { low = simd_min(low, p); high = simd_max(high, p) }
+        return (low - SIMD3(0.06, 0.02, 0.06), high + SIMD3(0.06, 0.06, 0.06))
+    }
+
     /// Where the dots start.
     var startingMarks: ScanRig.Marks {
-        found?.marks ?? ScanRig.averageMarks(height: height, middle: 0)
+        var marks = found?.marks ?? ScanRig.averageMarks(height: height, middle: 0)
+        // The shoulders start where the joints would put them, so the dots sit on the skeleton.
+        if marks.shoulderL == .zero || marks.shoulderR == .zero {
+            let J = ScanRig.joints(marks, voxels, height: height)
+            let left = J[ScanRig.bone("LeftArm")], right = J[ScanRig.bone("RightArm")]
+            marks.shoulderL = SIMD2(left.x, left.y)
+            marks.shoulderR = SIMD2(right.x, right.y)
+        }
+        return marks
     }
 
     func joints(_ marks: ScanRig.Marks) -> [SIMD3<Float>] { ScanRig.joints(marks, voxels, height: height) }
@@ -469,12 +489,32 @@ struct ScanCharacterScreen: View {
     @AppStorage("scanPersonSmoothHead") private var smoothHead = true
     /// Phil, 2026-11-20: another scan's head on this body.
     @State private var donor: ScanCharacterMaker?
+    /// Phil, 2026-11-20: facial feature accuracy. Building just the person again, 0 to 1, while it runs.
+    @State private var detailProgress: Double?
+    @State private var detailTask: Task<Void, Never>?
 
     var body: some View {
         ZStack {
             Color(white: 0.12).ignoresSafeArea()
             if let maker {
                 editor(maker)
+            }
+            if let detailProgress, working == nil {
+                VStack(spacing: 12) {
+                    ProgressView(value: detailProgress).tint(Theme.accent).frame(width: 220)
+                    Text("Building just the person again from the scan's photos, for a sharper face. \(Int(detailProgress * 100)) %")
+                        .font(Theme.subheadline).foregroundStyle(.white).multilineTextAlignment(.center)
+                    Button("Skip") {
+                        ScanPersonDetail.skip(folder)
+                        detailTask?.cancel()
+                        self.detailProgress = nil
+                        Diagnostics.log("Scan person: more detail skipped")
+                    }
+                    .font(Theme.body.weight(.semibold)).foregroundStyle(Theme.accent)
+                }
+                .padding(20)
+                .frame(maxWidth: 320)
+                .background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
             }
             if let working {
                 VStack(spacing: 12) {
@@ -494,7 +534,7 @@ struct ScanCharacterScreen: View {
     private var topBar: some View {
         VStack(spacing: 6) {
             HStack {
-                Button("Cancel") { done(nil, false) }
+                Button("Cancel") { detailTask?.cancel(); done(nil, false) }
                     .font(Theme.body.weight(.semibold))
                     .foregroundStyle(.white)
                     .disabled(working != nil && maker != nil)
@@ -577,7 +617,7 @@ struct ScanCharacterScreen: View {
             .padding(16)
             .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 14))
             .padding(.bottom, 12)
-        } else if maker != nil, working == nil {
+        } else if maker != nil, working == nil, detailProgress == nil {
             HStack {
                 Button { turnRound() } label: {
                     Label("Turn round", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right")
@@ -639,7 +679,7 @@ struct ScanCharacterScreen: View {
                 .foregroundStyle(.white)
                 .shadow(color: .black, radius: 2)
                 .fixedSize()
-                .offset(x: [ScanRig.Marks.Name.elbowR, .wristR, .kneeR].contains(name) ? -34 : 34)
+                .offset(x: [ScanRig.Marks.Name.shoulderR, .elbowR, .wristR, .kneeR].contains(name) ? -34 : 34)
         }
         .frame(width: 44, height: 44)
         .contentShape(Circle())
@@ -676,6 +716,43 @@ struct ScanCharacterScreen: View {
         let folder = folder
         let result = await Task.detached(priority: .userInitiated) { ScanCharacterMaker.prepare(folder) }.value
         show(result)
+        if case .success(let made) = result, ScanPersonDetail.canRebuild(folder) { buildInDetail(made) }
+    }
+
+    /// Builds just the person again from the scan's photos, then reads that instead. Skip keeps the scan as it is.
+    private func buildInDetail(_ made: ScanCharacterMaker) {
+        let folder = folder
+        let (low, high) = made.modelBox
+        guard let box = ScanPersonDetail.builderBox(folder, low: low, high: high) else {
+            Diagnostics.log("Scan person: no box for more detail")
+            return
+        }
+        detailProgress = 0
+        detailTask = Task {
+            do {
+                try await ScanPersonDetail.rebuild(folder, box: box) { fraction in
+                    Task { @MainActor in if detailProgress != nil { detailProgress = fraction } }
+                }
+                detailProgress = nil
+                working = "Finding the joints…"
+                let result = await Task.detached(priority: .userInitiated) { ScanCharacterMaker.prepare(folder) }.value
+                if case .failure = result {
+                    // The detailed build didn't read as a person: back to the scan as it was.
+                    try? FileManager.default.removeItem(at: ScanPersonDetail.file(folder))
+                    ScanPersonDetail.skip(folder)
+                    Diagnostics.log("Scan person: the detailed build didn't read as a person, using the scan as it is")
+                    show(await Task.detached(priority: .userInitiated) { ScanCharacterMaker.prepare(folder) }.value)
+                } else {
+                    show(result)
+                }
+            } catch {
+                detailProgress = nil
+                if !(error is CancellationError) {
+                    Diagnostics.log("Scan person: more detail failed: \(error)")
+                    ScanPersonDetail.skip(folder)
+                }
+            }
+        }
     }
 
     private func turnRound() {

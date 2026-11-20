@@ -312,6 +312,37 @@ enum ScanRig {
         return removed
     }
 
+    /// Phil, 2026-11-20: scraps of floor left round the feet after trimFloor (a ragged patch rises a few centimetres
+    /// in places) pulled the joint finder off the feet. Low triangles away from where the legs come down are left out:
+    /// anything under 6 % of the height that is not under a leg or just in front of or behind it, where the feet are.
+    /// Stood up first (feet on y = 0, facing +Z). Returns the number of triangles taken away.
+    static func trimAroundFeet(_ mesh: inout BodyMesh) -> Int {
+        guard let first = mesh.positions.first else { return 0 }
+        var low = first.y, high = first.y
+        for p in mesh.positions { low = min(low, p.y); high = max(high, p.y) }
+        let H = high - low
+        guard H > 0.3 else { return 0 }
+        // Where the legs are, just above the ankles.
+        var legs: [SIMD2<Float>] = []
+        for p in mesh.positions where p.y - low > 0.07 * H && p.y - low < 0.14 * H { legs.append(SIMD2(p.x, p.z)) }
+        guard legs.count >= 8 else { return 0 }
+        if legs.count > 1500 { legs = stride(from: 0, to: legs.count, by: legs.count / 1500 + 1).map { legs[$0] } }
+        let side = 0.06 * H, back = 0.16 * H, ahead = 0.18 * H  // either way round: the front may not be known yet
+        func underLegs(_ p: SIMD3<Float>) -> Bool {
+            legs.contains { l in abs(p.x - l.x) < side && p.z - l.y > -back && p.z - l.y < ahead }
+        }
+        var removed = 0
+        var keep = [Bool](repeating: true, count: mesh.triangleCount)
+        for t in 0..<mesh.triangleCount {
+            let a = mesh.positions[Int(mesh.triangles[t * 3])], b = mesh.positions[Int(mesh.triangles[t * 3 + 1])], c = mesh.positions[Int(mesh.triangles[t * 3 + 2])]
+            guard max(a.y, b.y, c.y) - low < 0.06 * H else { continue }
+            if !underLegs((a + b + c) / 3) { keep[t] = false; removed += 1 }
+        }
+        guard removed > 0 else { return 0 }
+        mesh = part(of: mesh) { t, _ in keep[t] }
+        return removed
+    }
+
     // MARK: 2. Inside the body
 
     /// The space round the body cut into cubes of `size`, each inside the body or not.
@@ -491,14 +522,17 @@ enum ScanRig {
         var elbowL = SIMD2<Float>(0, 0), elbowR = SIMD2<Float>(0, 0)
         var wristL = SIMD2<Float>(0, 0), wristR = SIMD2<Float>(0, 0)
         var kneeL = SIMD2<Float>(0, 0), kneeR = SIMD2<Float>(0, 0)
+        /// Phil, 2026-11-20: "I can't move the top of the skeleton". Zero: worked out from the chin and the chest.
+        var shoulderL = SIMD2<Float>(0, 0), shoulderR = SIMD2<Float>(0, 0)
 
         enum Name: String, CaseIterable, Identifiable {
-            case chin, groin, elbowL, elbowR, wristL, wristR, kneeL, kneeR
+            case chin, shoulderL, shoulderR, groin, elbowL, elbowR, wristL, wristR, kneeL, kneeR
             var id: String { rawValue }
             /// What the dot says on screen.
             var word: String {
                 switch self {
                 case .chin: return "Chin"
+                case .shoulderL, .shoulderR: return "Shoulder"
                 case .groin: return "Groin"
                 case .elbowL, .elbowR: return "Elbow"
                 case .wristL, .wristR: return "Wrist"
@@ -510,6 +544,8 @@ enum ScanRig {
             get {
                 switch name {
                 case .chin: return chin
+                case .shoulderL: return shoulderL
+                case .shoulderR: return shoulderR
                 case .groin: return groin
                 case .elbowL: return elbowL
                 case .elbowR: return elbowR
@@ -522,6 +558,8 @@ enum ScanRig {
             set {
                 switch name {
                 case .chin: chin = newValue
+                case .shoulderL: shoulderL = newValue
+                case .shoulderR: shoulderR = newValue
                 case .groin: groin = newValue
                 case .elbowL: elbowL = newValue
                 case .elbowR: elbowR = newValue
@@ -632,10 +670,11 @@ enum ScanRig {
         let headColumn = tops.isEmpty ? seed % nx : tops[tops.count / 2]
         let headTop = headColumn + nx * top
 
-        // The four ends furthest along the body from the chest and head, and from each other: hands and feet.
+        // The ends furthest along the body from the chest and head, and from each other: hands and feet. A few more
+        // than four are found, so a loose bit (a scrap of floor, a strap) can't push a hand or foot out.
         var found = [seed, headTop]
         var ends: [Int] = []
-        for _ in 0..<4 {
+        for _ in 0..<7 {
             let d = paths(v, from: found).distance
             var best = -1
             var far: Float = -1
@@ -643,13 +682,30 @@ enum ScanRig {
             guard best >= 0 else { break }
             ends.append(best); found.append(best)
         }
-        guard ends.count == 4 else { return nil }
-        ends.sort { $0 / nx < $1 / nx }
-        let feet = ends[0..<2].sorted { $0 % nx < $1 % nx }
-        let hands = ends[2..<4].sorted { $0 % nx < $1 % nx }  // first on the image's left: the person's right
+        guard ends.count >= 4 else { return nil }
         let seedI = seed % nx
-        let handsFound = Float(hands[0] / nx - bottom) > 0.25 * tall && Float(hands[1] / nx - bottom) > 0.25 * tall
-            && hands[0] % nx < seedI && seedI < hands[1] % nx && Float(feet[0] / nx - bottom) < 0.15 * tall
+        func up(_ at: Int) -> Float { Float(at / nx - bottom) / tall }
+        // Ends come furthest first. A hand is the furthest end on its side, up off the floor; a foot the furthest low
+        // end on its side, near the body.
+        let lowEnds = ends.filter { up($0) < 0.15 }
+        let highEnds = ends.filter { up($0) > 0.3 }
+        let width = Float(chest.b - chest.a + 1)
+        let nearFeet = lowEnds.filter { abs(Float($0 % nx - seedI)) < 1.2 * width }
+        var footR = nearFeet.first { $0 % nx < seedI }, footL = nearFeet.first { $0 % nx >= seedI }
+        if footR == nil || footL == nil {
+            // Feet together, or both one side of the middle: the two furthest low ends.
+            let two = Array((nearFeet.isEmpty ? lowEnds : nearFeet).prefix(2)).sorted { $0 % nx < $1 % nx }
+            if two.count == 2 { footR = two[0]; footL = two[1] }
+        }
+        var handR = highEnds.first { $0 % nx < seedI }, handL = highEnds.first { $0 % nx > seedI }
+        let handsFound = handR != nil && handL != nil && footR != nil && footL != nil
+        // A hand not found takes the other hand's place, mirrored across the middle of the chest.
+        func mirrored(_ at: Int) -> Int { min(nx - 1, max(0, 2 * seedI - at % nx)) + nx * (at / nx) }
+        if handR == nil, let other = handL, v.seen(mirrored(other) % nx, mirrored(other) / nx) { handR = mirrored(other) }
+        if handL == nil, let other = handR, v.seen(mirrored(other) % nx, mirrored(other) / nx) { handL = mirrored(other) }
+        guard let handRight = handR, let handLeft = handL, let footRight = footR, let footLeft = footL else { return nil }
+        let feet = [footRight, footLeft]
+        let hands = [handRight, handLeft]  // first on the image's left: the person's right
 
         func point(_ at: Int) -> SIMD2<Float> { SIMD2(Float(at % nx), Float(at / nx)) }
         func metres(_ p: SIMD2<Float>) -> SIMD2<Float> { SIMD2(v.x(p.x), v.y(p.y)) }
@@ -757,6 +813,7 @@ enum ScanRig {
         m.elbowL = SIMD2(middle + 0.19 * height, 0.66 * height); m.elbowR = SIMD2(middle - 0.19 * height, 0.66 * height)
         m.wristL = SIMD2(middle + 0.28 * height, 0.55 * height); m.wristR = SIMD2(middle - 0.28 * height, 0.55 * height)
         m.kneeL = SIMD2(middle + 0.05 * height, 0.29 * height); m.kneeR = SIMD2(middle - 0.05 * height, 0.29 * height)
+        m.shoulderL = SIMD2(middle + 0.11 * height, 0.81 * height); m.shoulderR = SIMD2(middle - 0.11 * height, 0.81 * height)
         return m
     }
 
@@ -830,12 +887,15 @@ enum ScanRig {
             let sign: Float = side == "Left" ? 1 : -1
             let half = across.map { sign > 0 ? $0.1 - gx : gx - $0.0 } ?? 0.12 * H
             let reach = min(max(half - 0.035 * H, 0.06 * H), 0.13 * H)
-            let shoulderX = gx + sign * reach
+            var shoulderX = gx + sign * reach
+            var armY = shoulderY
+            let given = side == "Left" ? marks.shoulderL : marks.shoulderR
+            if given != .zero { shoulderX = given.x; armY = given.y }
             let elbow = side == "Left" ? marks.elbowL : marks.elbowR
             let wrist = side == "Left" ? marks.wristL : marks.wristR
             let chestZ = depth(gx, shoulderY, middleZ)
-            set(side + "Shoulder", SIMD3(gx + sign * 0.02 * H, shoulderY + 0.005 * H, chestZ))
-            let arm = SIMD3(shoulderX, shoulderY, depth(shoulderX, shoulderY, chestZ))
+            set(side + "Shoulder", SIMD3(gx + 0.25 * (shoulderX - gx), armY + 0.005 * H, chestZ))
+            let arm = SIMD3(shoulderX, armY, depth(shoulderX, armY, chestZ))
             set(side + "Arm", arm)
             let fore = SIMD3(elbow.x, elbow.y, depth(elbow.x, elbow.y, arm.z))
             set(side + "ForeArm", fore)

@@ -1,0 +1,86 @@
+import Foundation
+import RealityKit
+import SceneKit
+import simd
+
+/// Phil, 2026-11-20: "Facial feature accuracy is important". The phone's model builder makes every model from about
+/// 25,000 triangles. A scan from Reset's own camera covers the whole area round the person, so the person gets only a
+/// few thousand of them, too few for a face. Building again from the same photos, kept to a box round the person,
+/// puts them all on the person: about four times the detail, with no new scan. The scan itself is not changed; the
+/// person's own model is kept beside it and used for making a posable person.
+enum ScanPersonDetail {
+    static func file(_ folder: ScanFolder) -> URL { folder.url.appendingPathComponent("\(folder.name) person detail.usdz") }
+    private static func skippedFile(_ folder: ScanFolder) -> URL { folder.url.appendingPathComponent("person-detail-skipped") }
+
+    static func has(_ folder: ScanFolder) -> Bool { FileManager.default.fileExists(atPath: file(folder).path) }
+
+    /// Photos from Reset's own camera, the whole area built, the room fit known, and not built or skipped before.
+    static func canRebuild(_ folder: ScanFolder) -> Bool {
+        let manager = FileManager.default
+        return PhotogrammetrySession.isSupported && folder.cameras != nil && folder.fit != nil && folder.hasFull && folder.imageCount >= 10
+            && !has(folder) && !manager.fileExists(atPath: skippedFile(folder).path)
+    }
+
+    static func skip(_ folder: ScanFolder) {
+        try? Data().write(to: skippedFile(folder))
+    }
+
+    /// The box round the person (in the model's metres, as Reset shows it) in the builder's own space, where the
+    /// builder needs it: the turn and size ScanBake gave the model are taken back off.
+    static func builderBox(_ folder: ScanFolder, low: SIMD3<Float>, high: SIMD3<Float>) -> (SIMD3<Float>, SIMD3<Float>)? {
+        guard let fit = folder.fit, fit.scale > 0, let scene = try? SCNScene(url: folder.full, options: nil) else { return nil }
+        // The same steps as ScanBake.bake, to find where it stood the model.
+        let turned = SCNNode()
+        for child in scene.rootNode.childNodes { turned.addChildNode(child) }
+        turned.simdOrientation = fit.quaternion
+        turned.simdScale = SIMD3(repeating: fit.scale)
+        let holder = SCNNode()
+        holder.addChildNode(turned)
+        let (bl, bh) = holder.boundingBox
+        let shift = SIMD3<Float>(-(Float(bl.x) + Float(bh.x)) / 2, -Float(bl.y), -(Float(bl.z) + Float(bh.z)) / 2)
+        let back = fit.quaternion.inverse
+        var outLow = SIMD3<Float>(repeating: .greatestFiniteMagnitude), outHigh = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+        for corner in 0..<8 {
+            let p = SIMD3<Float>(corner & 1 == 0 ? low.x : high.x, corner & 2 == 0 ? low.y : high.y, corner & 4 == 0 ? low.z : high.z)
+            let q = back.act((p - shift) / fit.scale)
+            outLow = simd_min(outLow, q)
+            outHigh = simd_max(outHigh, q)
+        }
+        return (outLow, outHigh)
+    }
+
+    /// Builds the person again inside the box. `progress` gets 0 to 1. Throws on failure; cancelling the task stops it.
+    static func rebuild(_ folder: ScanFolder, box: (SIMD3<Float>, SIMD3<Float>), progress: @escaping @Sendable (Double) -> Void) async throws {
+        let started = Date()
+        var config = PhotogrammetrySession.Configuration()
+        config.checkpointDirectory = folder.checkpoint
+        let session = try PhotogrammetrySession(input: folder.images, configuration: config)
+        let raw = folder.url.appendingPathComponent("person-detail-raw.usdz")
+        try? FileManager.default.removeItem(at: raw)
+        let geometry = PhotogrammetrySession.Request.Geometry(bounds: BoundingBox(min: box.0, max: box.1))
+        Diagnostics.log("Scan person: building the person in more detail, box \(box.0) to \(box.1)")
+        try await withTaskCancellationHandler {
+            try session.process(requests: [.modelFile(url: raw, detail: .reduced, geometry: geometry)])
+            outputs: for try await output in session.outputs {
+                switch output {
+                case .requestProgress(_, let fraction): progress(fraction)
+                case .requestError(_, let error): throw error
+                case .processingComplete: break outputs
+                case .processingCancelled: throw CancellationError()
+                default: break
+                }
+            }
+        } onCancel: {
+            session.cancel()
+        }
+        guard FileManager.default.fileExists(atPath: raw.path) else {
+            throw NSError(domain: "ScanPersonDetail", code: 1, userInfo: [NSLocalizedDescriptionKey: "The builder wrote no model."])
+        }
+        let fit = folder.fit
+        let target = file(folder)
+        let ok = await MainActor.run { ScanBake.bake(raw, to: target, fit: fit) }
+        try? FileManager.default.removeItem(at: raw)
+        guard ok else { throw NSError(domain: "ScanPersonDetail", code: 2, userInfo: [NSLocalizedDescriptionKey: "The model couldn't be saved."]) }
+        Diagnostics.log(String(format: "Scan person: person built in more detail in %.0f s", Date().timeIntervalSince(started)))
+    }
+}
