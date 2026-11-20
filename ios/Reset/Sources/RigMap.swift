@@ -325,6 +325,8 @@ struct RigPoser {
     /// The collar bone of each shoulder (left, right), when the character has one: the parent of the upper arm.
     let collars: [Int?]
     private let fingerAxes: [[SIMD3<Float>]]
+    /// The torso measured from the character's skin, to keep its arms out of it (Phil, 2026-11-20).
+    var torso: TorsoShape?
 
     private static func turn(_ degrees: Float, _ axis: SIMD3<Float>) -> simd_quatf { simd_quatf(angle: degrees * .pi / 180, axis: axis) }
     private static let x = SIMD3<Float>(1, 0, 0), y = SIMD3<Float>(0, 1, 0), z = SIMD3<Float>(0, 0, 1)
@@ -418,17 +420,50 @@ struct RigPoser {
         self.legFrames = legFrames
     }
 
+    /// Bending forward (Phil, 2026-11-20): the first 35° curl the spine; past that most of the bend is at the hips,
+    /// the pelvis tipping forward over the legs, as a real body does (up to about 120°, hands to the floor).
+    static func bend(_ forward: Float) -> (pelvis: Float, spine: Float) {
+        forward <= 35 ? (0, forward) : (0.75 * (forward - 35), 35 + 0.25 * (forward - 35))
+    }
+
+    /// The pelvis: tilted, turned and tipped forward. The spine and head go with it; the legs hang from `legFrame`.
+    func pelvisFrame(_ pose: MannequinPose) -> simd_quatf {
+        let split = map.spine.isEmpty ? (pelvis: pose.spineForward, spine: Float(0)) : Self.bend(pose.spineForward)
+        return legFrame(pose) * Self.turn(split.pelvis, Self.x)
+    }
+
+    /// What the legs hang from: the pelvis tilted and turned, not tipped (the legs stay put when the body bends).
+    func legFrame(_ pose: MannequinPose) -> simd_quatf {
+        Self.turn(pose.detail.hipTilt, Self.z) * Self.turn(pose.detail.hipTurn, Self.y)
+    }
+
+    /// The top of the spine, as it leans.
+    func chestFrame(_ pose: MannequinPose) -> simd_quatf {
+        guard !map.spine.isEmpty else { return pelvisFrame(pose) }
+        return pelvisFrame(pose) * Self.turn(pose.spineSide, Self.z) * Self.turn(Self.bend(pose.spineForward).spine, Self.x)
+    }
+
+    /// What an arm hangs from (0 left, 1 right): the chest, and the collar bone's shrug and roll when it has one.
+    func armFrame(_ pose: MannequinPose, side index: Int) -> simd_quatf {
+        let side: Float = index == 0 ? 1 : -1
+        let lift = index == 0 ? pose.detail.leftShoulder : pose.detail.rightShoulder
+        guard index < collars.count, collars[index] != nil, lift.shrug != 0 || lift.roll != 0 else { return chestFrame(pose) }
+        return chestFrame(pose) * Self.turn(-side * lift.roll, Self.y) * Self.turn(side * lift.shrug, Self.z)
+    }
+
     /// How far each mapped bone turns from rest, in the model's own space.
     func turns(for pose: MannequinPose) -> [Int: simd_quatf] {
         let identity = simd_quatf(angle: 0, axis: Self.y)
         var out: [Int: simd_quatf] = [:]
         // The pelvis (Phil, 2026-11-19): tilts and turns, and the spine, head, arms and legs go with it.
-        let hips = Self.turn(pose.detail.hipTilt, Self.z) * Self.turn(pose.detail.hipTurn, Self.y)
-        if pose.detail.hipTilt != 0 || pose.detail.hipTurn != 0 { out[map.hips] = hips }
-        let lean = map.spine.isEmpty ? identity : Self.turn(pose.spineSide, Self.z) * Self.turn(pose.spineForward, Self.x)
-        let spine = hips * lean
+        let hips = legFrame(pose)
+        let pelvis = pelvisFrame(pose)
+        let tipped = map.spine.isEmpty ? pose.spineForward != 0 : Self.bend(pose.spineForward).pelvis != 0
+        if pose.detail.hipTilt != 0 || pose.detail.hipTurn != 0 || tipped { out[map.hips] = pelvis }
+        let spine = chestFrame(pose)
+        let lean = pelvis.inverse * spine
         for (k, bone) in map.spine.enumerated() {
-            out[bone] = hips * simd_slerp(identity, lean, Float(k + 1) / Float(map.spine.count))
+            out[bone] = pelvis * simd_slerp(identity, lean, Float(k + 1) / Float(map.spine.count))
         }
         let look = Self.turn(pose.detail.headTilt, Self.z) * Self.turn(pose.headDown, Self.x) * Self.turn(pose.headTurn, Self.y)
         if let head = map.head {
@@ -439,13 +474,9 @@ struct RigPoser {
             let side: Float = index == 0 ? 1 : -1
             let limb = index == 0 ? map.armL : map.armR
             // The collar bone shrugs and rolls, and the arm goes with it.
+            let carry = armFrame(pose, side: index)
             let lift = index == 0 ? pose.detail.leftShoulder : pose.detail.rightShoulder
-            var carry = spine
-            if let collar = collars[index], lift.shrug != 0 || lift.roll != 0 {
-                let shift = Self.turn(-side * lift.roll, Self.y) * Self.turn(side * lift.shrug, Self.z)
-                out[collar] = spine * shift
-                carry = spine * shift
-            }
+            if let collar = collars[index], lift.shrug != 0 || lift.roll != 0 { out[collar] = carry }
             let upper = carry * Self.turn(side * arm.out, Self.z) * Self.turn(-arm.forward, Self.x) * Self.turn(-side * arm.inward, Self.y)
             let lower = upper * Self.turn(-arm.elbow, Self.x)
             out[limb[0]] = upper * armFrames[index][0].inverse

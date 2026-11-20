@@ -283,70 +283,30 @@ private struct PoseStage: UIViewRepresentable {
             }
         }
 
-        /// Solves the limb (or the lean) for the dragged dot and shows the new pose.
+        /// Solves the limb (or the lean) for the dragged dot and shows the new pose. The same posing as a character in
+        /// live view (PoseDrag): real joint ranges, the elbow or knee kept pointing where it was, arms kept out of the body.
         private func move(_ handle: String, to target: SIMD3<Float>) {
-            var pose = shown ?? parent.pose
-            if handle.hasPrefix("elbow.") || handle.hasPrefix("knee.") {
-                // Swing the upper arm or thigh so the elbow or knee goes to the finger; the forearm or shin keeps its bend.
-                let isArm = handle.hasPrefix("elbow.")
-                let side = handle.hasSuffix("L") ? "L" : "R"
-                guard let top = node(isArm ? "shoulder.\(side)" : "hip.\(side)"), let middle = node(handle),
-                      let end = node(isArm ? "end.hand.\(side)" : "end.foot.\(side)") else { return }
-                let s = top.simdWorldPosition, m = middle.simdWorldPosition, e = end.simdWorldPosition
-                let a = simd_length(m - s)
-                guard a > 0.01, simd_length(target - s) > 0.01 else { return }
-                let swing = simd_quatf(from: simd_normalize(m - s), to: simd_normalize(target - s))
-                let joint = s + a * simd_normalize(target - s)
-                let hand = joint + swing.act(e - m)
-                solveLimb(isArm: isArm, side: side, shoulder: s, joint: joint, end: hand, into: &pose)
-            } else if handle == "end.head" {
-                guard let pelvis = node("pelvis") else { return }
-                let up = simd_normalize(target - pelvis.simdWorldPosition)
-                pose.spineForward = max(-30, min(60, asin(max(-1, min(1, up.z))) * 180 / .pi))
-                pose.spineSide = max(-30, min(30, atan2(-up.x, up.y) * 180 / .pi))
-            } else {
-                let isArm = handle.hasPrefix("end.hand")
-                let side = handle.hasSuffix("L") ? "L" : "R"
-                guard let top = node(isArm ? "shoulder.\(side)" : "hip.\(side)"),
-                      let middle = node(isArm ? "elbow.\(side)" : "knee.\(side)"),
-                      let end = node(handle) else { return }
-                let s = top.simdWorldPosition, m = middle.simdWorldPosition, e = end.simdWorldPosition
-                let a = simd_length(m - s), b = simd_length(e - m)
-                var toTarget = target - s
-                let reach = min(simd_length(toTarget), (a + b) * 0.995)
-                guard reach > 0.01 else { return }
-                toTarget = simd_normalize(toTarget)
-                // Bend the same way as now, so the elbow or knee keeps pointing where it did.
-                var pole = (m - s) - simd_dot(m - s, toTarget) * toTarget
-                if simd_length(pole) < 0.01 { pole = isArm ? SIMD3(0, -0.3, -1) : SIMD3(0, 0, 1) }
-                pole = simd_normalize(pole - simd_dot(pole, toTarget) * toTarget)
-                let cosAngle = max(-1, min(1, (a * a + reach * reach - b * b) / (2 * a * reach)))
-                let joint = s + a * (cosAngle * toTarget + sqrt(max(0, 1 - cosAngle * cosAngle)) * pole)
-                let hand = s + reach * toTarget
-                solveLimb(isArm: isArm, side: side, shoulder: s, joint: joint, end: hand, into: &pose)
-            }
-            pose = pose.limited
-            rebuild(pose)
-            parent.pose = pose
-        }
-
-        /// Turns a shoulder (or hip), elbow (or knee) and hand (or foot) position into the limb's angles.
-        private func solveLimb(isArm: Bool, side: String, shoulder s: SIMD3<Float>, joint: SIMD3<Float>, end hand: SIMD3<Float>,
-                               into pose: inout MannequinPose) {
-                let sign: Float = side == "L" ? 1 : -1
-                // Into the frame the limb hangs from: the spine for arms, the (unturned) pelvis for legs.
-                let frame = isArm ? (node("spine.in")?.simdWorldOrientation ?? simd_quatf(angle: 0, axis: SIMD3(0, 1, 0)))
-                                  : (node("pelvis")?.simdWorldOrientation ?? simd_quatf(angle: 0, axis: SIMD3(0, 1, 0)))
-                let upper = frame.inverse.act(joint - s), lower = frame.inverse.act(hand - joint)
-                let solved = PoseFromSkeleton.aim(upper: upper, lower: lower, bendsForward: isArm)
-                let deg: (Float) -> Float = { $0 * 180 / .pi }
-                if isArm {
-                    let arm = MannequinPose.Arm(out: deg(solved.z) * sign, forward: -deg(solved.x), inward: -deg(solved.y) * sign, elbow: max(0, -deg(solved.bend)))
-                    if side == "L" { pose.left = arm } else { pose.right = arm }
-                } else {
-                    let leg = MannequinPose.Leg(out: deg(solved.z) * sign, forward: -deg(solved.x), inward: -deg(solved.y) * sign, knee: max(0, deg(solved.bend)))
-                    if side == "L" { pose.leftLeg = leg } else { pose.rightLeg = leg }
-                }
+            let pose = shown ?? parent.pose
+            let side = handle.hasSuffix("L") ? "L" : "R"
+            let index = side == "L" ? 0 : 1
+            let joint: PoseDrag.Joint
+            let isArm = handle.hasPrefix("elbow.") || handle.hasPrefix("end.hand") || handle == "end.head"
+            if handle.hasPrefix("elbow.") { joint = .elbow(index) } else if handle.hasPrefix("knee.") { joint = .knee(index) }
+            else if handle == "end.head" { joint = .head } else if handle.hasPrefix("end.hand") { joint = .hand(index) } else { joint = .foot(index) }
+            guard let top = node(isArm ? "shoulder.\(side)" : "hip.\(side)"), let middle = node(isArm ? "elbow.\(side)" : "knee.\(side)"),
+                  let end = node(isArm ? "end.hand.\(side)" : "end.foot.\(side)"), let pelvis = node("pelvis") else { return }
+            // The arms hang from the spine as it leans from the pelvis; the legs from the pelvis.
+            let hips = pelvis.simdWorldOrientation
+            let frames = PoseDrag.Frames(
+                arm: { p, _ in hips * simd_quatf(angle: p.spineSide * .pi / 180, axis: SIMD3(0, 0, 1)) * simd_quatf(angle: p.spineForward * .pi / 180, axis: SIMD3(1, 0, 0)) },
+                leg: { _ in hips })
+            let shape = Mannequin.torso(parent.person, height: parent.height, proportion: parent.proportion)
+            let slabs = shape.slabs.compactMap { item in node(item.node).map { item.slab.moved(by: $0.simdWorldTransform) } }
+            let body = BodyVolume(slabs: slabs, upperArm: shape.upperArm, forearm: shape.forearm)
+            let solved = PoseDrag.solve(joint, target: target, top: top.simdWorldPosition, middle: middle.simdWorldPosition, end: end.simdWorldPosition,
+                                        hips: pelvis.simdWorldPosition, from: pose, frames: frames, body: body)
+            rebuild(solved)
+            parent.pose = solved
         }
     }
 }

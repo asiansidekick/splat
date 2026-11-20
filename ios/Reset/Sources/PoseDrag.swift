@@ -7,10 +7,27 @@ enum PoseDrag {
         case hand(Int), foot(Int), elbow(Int), knee(Int), head, wrist(Int), ankle(Int), hips, headLook, headTilt, shoulder(Int)  // Int: 0 left, 1 right
     }
 
+    /// What the limbs hang from, for a pose, in the space the joints are given in: the frame each arm hangs from
+    /// (0 left, 1 right) and the frame the legs hang from. The default is the example mannequin's.
+    struct Frames {
+        var arm: (MannequinPose, Int) -> simd_quatf
+        var leg: (MannequinPose) -> simd_quatf
+
+        static var mannequin: Frames {
+            Frames(arm: { pose, _ in Frames.legs(pose) * Frames.turn(pose.spineSide, SIMD3(0, 0, 1)) * Frames.turn(pose.spineForward, SIMD3(1, 0, 0)) },
+                   leg: { Frames.legs($0) })
+        }
+        private static func legs(_ pose: MannequinPose) -> simd_quatf {
+            turn(pose.detail.hipTilt, SIMD3(0, 0, 1)) * turn(pose.detail.hipTurn, SIMD3(0, 1, 0))
+        }
+        private static func turn(_ degrees: Float, _ axis: SIMD3<Float>) -> simd_quatf { simd_quatf(angle: degrees * .pi / 180, axis: axis) }
+    }
+
     /// The pose after the joint is dragged to `target`. `top`, `middle` and `end` are the limb's joints now (shoulder or hip,
-    /// elbow or knee, hand or foot); `hips` is used for the head.
+    /// elbow or knee, hand or foot); `hips` is used for the head. `body` keeps the arms out of the torso.
     static func solve(_ joint: Joint, target: SIMD3<Float>, top s: SIMD3<Float>, middle m: SIMD3<Float>, end e: SIMD3<Float>,
-                      hips: SIMD3<Float>, from pose: MannequinPose, screen: SIMD2<Float> = .zero) -> MannequinPose {
+                      hips: SIMD3<Float>, from pose: MannequinPose, screen: SIMD2<Float> = .zero,
+                      frames: Frames = .mannequin, body: BodyVolume? = nil) -> MannequinPose {
         var pose = pose
         switch joint {
         case .hips:
@@ -52,59 +69,45 @@ enum PoseDrag {
                 pose.detail.rightFoot.turn += screen.x * 0.3 * sign
             }
         case .head:
-            let direction = target - hips
-            guard simd_length(direction) > 0.01 else { return pose }
-            let d = simd_normalize(direction)
-            pose.spineForward = max(-30, min(60, asin(max(-1, min(1, d.z))) * 180 / .pi))
-            pose.spineSide = max(-30, min(30, atan2(-d.x, d.y) * 180 / .pi))
+            // Phil, 2026-11-20: bends forward a long way, from the hips; arms hanging loose keep hanging.
+            let lean = MannequinPose.lean(toward: target - hips)
+            var bent = pose
+            bent.spineForward = lean.forward
+            bent.spineSide = lean.side
+            for side in 0..<2 {
+                let arm = side == 0 ? pose.left : pose.right
+                let kept = HumanLimits.dangle(HumanLimits.Limb(arm), side: side, was: frames.arm(pose, side), now: frames.arm(bent, side)).arm
+                if side == 0 { bent.left = kept } else { bent.right = kept }
+            }
+            pose = bent
         case .elbow(let side), .knee(let side):
             let isArm: Bool
             if case .elbow = joint { isArm = true } else { isArm = false }
-            let a = simd_length(m - s)
-            guard a > 0.001, simd_length(target - s) > 0.01 else { return pose }
-            // Swing the upper arm or thigh so the elbow or knee goes to the finger; the lower part keeps its bend.
-            let swing = simd_quatf(from: simd_normalize(m - s), to: simd_normalize(target - s))
-            let bent = s + a * simd_normalize(target - s)
-            limb(isArm: isArm, side: side, shoulder: s, joint: bent, end: bent + swing.act(e - m), into: &pose)
+            let reach = HumanLimits.Reach(isArm: isArm, side: side, frame: isArm ? frames.arm(pose, side) : frames.leg(pose), top: s,
+                                          upper: simd_length(m - s), lower: simd_length(e - m), body: body)
+            guard reach.upper > 0.001 else { return pose }
+            set(HumanLimits.swing(reach, elbowTo: target, now: limb(isArm, side, of: pose)), isArm, side, in: &pose)
         case .hand(let side), .foot(let side):
             let isArm: Bool
             if case .hand = joint { isArm = true } else { isArm = false }
-            let a = simd_length(m - s), b = simd_length(e - m)
-            var toTarget = target - s
-            let reach = min(simd_length(toTarget), (a + b) * 0.995)
-            guard a > 0.001, reach > 0.01 else { return pose }
-            toTarget = simd_normalize(toTarget)
-            // Bend the same way as now, so the elbow or knee keeps pointing where it did.
-            var pole = (m - s) - simd_dot(m - s, toTarget) * toTarget
-            if !isArm { pole = SIMD3(0, 0, 1) }  // a knee always points forward, so the shin never swings sideways
-            if simd_length(pole) < 0.01 { pole = isArm ? SIMD3(0, -0.3, -1) : SIMD3(0, 0, 1) }
-            pole = simd_normalize(pole - simd_dot(pole, toTarget) * toTarget)
-            let cosAngle = max(-1, min(1, (a * a + reach * reach - b * b) / (2 * a * reach)))
-            let bent = s + a * (cosAngle * toTarget + sqrt(max(0, 1 - cosAngle * cosAngle)) * pole)
-            limb(isArm: isArm, side: side, shoulder: s, joint: bent, end: s + reach * toTarget, into: &pose)
+            let reach = HumanLimits.Reach(isArm: isArm, side: side, frame: isArm ? frames.arm(pose, side) : frames.leg(pose), top: s,
+                                          upper: simd_length(m - s), lower: simd_length(e - m), body: body)
+            guard reach.upper > 0.001, reach.lower > 0.001 else { return pose }
+            set(HumanLimits.reach(reach, to: target, now: limb(isArm, side, of: pose)), isArm, side, in: &pose)
         }
         return pose.limited
     }
 
-    private static func limb(isArm: Bool, side index: Int, shoulder s: SIMD3<Float>, joint: SIMD3<Float>, end: SIMD3<Float>,
-                             into pose: inout MannequinPose) {
-        let sign: Float = index == 0 ? 1 : -1
-        // Arms hang from the spine (as leant now), legs from the unturned pelvis.
-        let spine = simd_quatf(angle: pose.spineSide * .pi / 180, axis: SIMD3(0, 0, 1))
-            * simd_quatf(angle: pose.spineForward * .pi / 180, axis: SIMD3(1, 0, 0))
-        let hips = simd_quatf(angle: pose.detail.hipTilt * .pi / 180, axis: SIMD3(0, 0, 1))
-            * simd_quatf(angle: pose.detail.hipTurn * .pi / 180, axis: SIMD3(0, 1, 0))
-        let frame = isArm ? hips * spine : hips
-        let upper = frame.inverse.act(joint - s), lower = frame.inverse.act(end - joint)
-        guard simd_length(upper) > 1e-5, simd_length(lower) > 1e-5 else { return }
-        let solved = PoseFromSkeleton.aim(upper: upper, lower: lower, bendsForward: isArm)
-        let deg: (Float) -> Float = { $0 * 180 / .pi }
-        if isArm {
-            let arm = MannequinPose.Arm(out: deg(solved.z) * sign, forward: -deg(solved.x), inward: -deg(solved.y) * sign, elbow: max(0, -deg(solved.bend)))
-            if index == 0 { pose.left = arm } else { pose.right = arm }
-        } else {
-            let leg = MannequinPose.Leg(out: deg(solved.z) * sign, forward: -deg(solved.x), inward: -deg(solved.y) * sign, knee: max(0, deg(solved.bend)))
-            if index == 0 { pose.leftLeg = leg } else { pose.rightLeg = leg }
+    private static func limb(_ isArm: Bool, _ side: Int, of pose: MannequinPose) -> HumanLimits.Limb {
+        isArm ? HumanLimits.Limb(side == 0 ? pose.left : pose.right) : HumanLimits.Limb(side == 0 ? pose.leftLeg : pose.rightLeg)
+    }
+
+    private static func set(_ l: HumanLimits.Limb, _ isArm: Bool, _ side: Int, in pose: inout MannequinPose) {
+        switch (isArm, side) {
+        case (true, 0): pose.left = l.arm
+        case (true, _): pose.right = l.arm
+        case (false, 0): pose.leftLeg = l.leg
+        default: pose.rightLeg = l.leg
         }
     }
 }
