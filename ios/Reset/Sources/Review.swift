@@ -90,10 +90,15 @@ struct FrameReview: View {
             MeasureEntry(measurer: measurer)
             VStack {
                 Spacer()
-                ModelOverlay(placer: placer, showsFloor: false)
+                ModelOverlay(placer: placer)
                     .padding(.bottom, showsStrip ? 84 : 8)
                     .padding(.horizontal, 12)
             }
+            // Phil, 2026-11-20: the picked model's tools round the edges, under the top row, the middle clear.
+            ModelEdgeTools(placer: placer, showsFloor: false, uprightTop: 40, sidewaysTop: 0)
+                .padding(.top, 64)
+                .padding(.bottom, showsStrip ? 84 : 8)
+                .padding(.horizontal, 12)
         }
         .fileImporter(isPresented: $importingModel, allowedContentTypes: ModelImport.pickerTypes, allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result, frames.indices.contains(index) else { return }
