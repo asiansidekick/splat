@@ -184,6 +184,81 @@ enum ScanRig {
         return out
     }
 
+    /// Phil, 2026-11-20: a good scan of a standing person was refused. A scan can hold stray bits far from the
+    /// person (a speck of wall, a far piece of floor) and points no triangle uses, which made the box round it too big
+    /// to fill. Keeps the largest connected piece and whatever lies within reach of it; everything else goes.
+    /// Returns the mesh and how many triangles were left out.
+    static func mainPiece(_ mesh: BodyMesh) -> (BodyMesh, Int) {
+        let count = mesh.positions.count
+        guard count > 0, mesh.triangles.count >= 3 else { return (mesh, 0) }
+        // Points at the same place count as joined (a scan splits them where its photo is cut).
+        var key: [SIMD3<Int32>: Int] = [:]
+        var place = [Int](repeating: 0, count: count)
+        for (i, p) in mesh.positions.enumerated() {
+            let k = SIMD3<Int32>(Int32((p.x * 10_000).rounded()), Int32((p.y * 10_000).rounded()), Int32((p.z * 10_000).rounded()))
+            if let found = key[k] { place[i] = found } else { key[k] = i; place[i] = i }
+        }
+        var parent = Array(0..<count)
+        func root(_ a: Int) -> Int {
+            var a = a
+            while parent[a] != a { parent[a] = parent[parent[a]]; a = parent[a] }
+            return a
+        }
+        func join(_ a: Int, _ b: Int) { let ra = root(a), rb = root(b); if ra != rb { parent[ra] = rb } }
+        let triangleCount = mesh.triangles.count / 3
+        for t in 0..<triangleCount {
+            let a = place[Int(mesh.triangles[t * 3])], b = place[Int(mesh.triangles[t * 3 + 1])], c = place[Int(mesh.triangles[t * 3 + 2])]
+            join(a, b); join(b, c)
+        }
+        // Each piece's skin area and box.
+        var area: [Int: Float] = [:]
+        var low: [Int: SIMD3<Float>] = [:], high: [Int: SIMD3<Float>] = [:]
+        var pieceOf = [Int](repeating: 0, count: triangleCount)
+        for t in 0..<triangleCount {
+            let i = Int(mesh.triangles[t * 3]), j = Int(mesh.triangles[t * 3 + 1]), k = Int(mesh.triangles[t * 3 + 2])
+            let a = mesh.positions[i], b = mesh.positions[j], c = mesh.positions[k]
+            let r = root(place[i])
+            pieceOf[t] = r
+            area[r, default: 0] += 0.5 * simd_length(simd_cross(b - a, c - a))
+            low[r] = simd_min(low[r] ?? a, simd_min(a, simd_min(b, c)))
+            high[r] = simd_max(high[r] ?? a, simd_max(a, simd_max(b, c)))
+        }
+        guard let biggest = area.max(by: { $0.value < $1.value })?.key, let bigLow = low[biggest], let bigHigh = high[biggest] else { return (mesh, 0) }
+        // Within reach: a piece whose box comes within a fifth of the main piece's height of the main piece's box
+        // (a hand or foot the scan cut loose, a hat brim).
+        let reach = 0.2 * max(0.2, bigHigh.y - bigLow.y)
+        func near(_ r: Int) -> Bool {
+            guard let l = low[r], let h = high[r] else { return false }
+            return l.x <= bigHigh.x + reach && h.x >= bigLow.x - reach && l.y <= bigHigh.y + reach && h.y >= bigLow.y - reach
+                && l.z <= bigHigh.z + reach && h.z >= bigLow.z - reach
+        }
+        var keepPiece: [Int: Bool] = [:]
+        for r in area.keys { keepPiece[r] = r == biggest || near(r) }
+        // The kept triangles, with only the points they use.
+        var newIndex = [Int32](repeating: -1, count: count)
+        var out = BodyMesh(positions: [], normals: [], uvs: mesh.uvs == nil ? nil : [], triangles: [], parts: [])
+        var removed = 0
+        for part in mesh.parts {
+            let first = out.triangles.count / 3
+            for t in part.firstTriangle..<min(triangleCount, part.firstTriangle + part.triangleCount) {
+                guard keepPiece[pieceOf[t]] == true else { removed += 1; continue }
+                for corner in 0..<3 {
+                    let c = Int(mesh.triangles[t * 3 + corner])
+                    if newIndex[c] < 0 {
+                        newIndex[c] = Int32(out.positions.count)
+                        out.positions.append(mesh.positions[c])
+                        out.normals.append(c < mesh.normals.count ? mesh.normals[c] : SIMD3(0, 1, 0))
+                        if let source = mesh.uvs { out.uvs!.append(c < source.count ? source[c] : .zero) }
+                    }
+                    out.triangles.append(UInt32(newIndex[c]))
+                }
+            }
+            let n = out.triangles.count / 3 - first
+            if n > 0 { out.parts.append(BodyMesh.Part(firstTriangle: first, triangleCount: n, texture: part.texture, color: part.color)) }
+        }
+        return (out, removed)
+    }
+
     /// A scan often keeps a piece of the floor round the feet. When the lowest few centimetres spread much wider than
     /// the ankles, the triangles down there are left out. Returns the number of triangles taken away.
     static func trimFloor(_ mesh: inout BodyMesh) -> Int {
@@ -252,6 +327,22 @@ enum ScanRig {
         func y(_ j: Float) -> Float { origin.y + (j + 0.5) * size }
         func i(_ x: Float) -> Int { Int(floor((x - origin.x) / size)) }
         func j(_ y: Float) -> Int { Int(floor((y - origin.y) / size)) }
+
+        /// Cubes a 150th of the height, or bigger when the scan is very wide (a big piece of floor or arms far out),
+        /// so the box always fits in memory.
+        static func fitting(_ mesh: BodyMesh, height: Float) -> Voxels? {
+            guard let first = mesh.positions.first else { return nil }
+            var lo = first, hi = first
+            for p in mesh.positions { lo = simd_min(lo, p); hi = simd_max(hi, p) }
+            let box = hi - lo
+            var size = height / 150
+            while size < height / 40 {
+                let n = (box + SIMD3(repeating: 5 * size)) / size
+                if (n.x + 1) * (n.y + 1) * (n.z + 1) < 11_500_000 { break }
+                size *= 1.15
+            }
+            return Voxels(mesh, size: size)
+        }
 
         init?(_ mesh: BodyMesh, size: Float) {
             guard size > 0, let first = mesh.positions.first else { return nil }

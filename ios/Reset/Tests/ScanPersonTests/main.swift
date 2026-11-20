@@ -75,6 +75,30 @@ let moved = positions.map { p -> SIMD3<Float> in
 let scan = BodyMesh(positions: moved, normals: BodyMesh.smoothNormals(moved, triangles), uvs: moved.map { SIMD2($0.x, $0.y) },
                     triangles: triangles, parts: [BodyMesh.Part(firstTriangle: 0, triangleCount: triangles.count / 3, texture: "skin0.jpg", color: SIMD3(1, 1, 1))])
 
+// MARK: Leaving out stray bits
+
+// A trimmed scan keeps the room's points that no triangle uses any more, and a speck of wall 4 m away.
+var messy = scan
+let roomPoints: [SIMD3<Float>] = [SIMD3(-6, -1, 5), SIMD3(7, 3, -6), SIMD3(5, 0, 8)]
+messy.positions += roomPoints
+messy.normals += roomPoints.map { _ in SIMD3<Float>(0, 1, 0) }
+messy.uvs! += roomPoints.map { _ in SIMD2<Float>(0, 0) }
+let speck = UInt32(messy.positions.count)
+messy.positions += [SIMD3(5.3, 1.0, -0.7), SIMD3(5.4, 1.0, -0.7), SIMD3(5.3, 1.1, -0.7)]
+messy.normals += [SIMD3<Float>](repeating: SIMD3(0, 0, 1), count: 3)
+messy.uvs! += [SIMD2<Float>](repeating: .zero, count: 3)
+messy.triangles += [speck, speck + 1, speck + 2]
+messy.parts[0].triangleCount += 1
+let (cleaned, strayCount) = ScanRig.mainPiece(messy)
+expect(strayCount == 1 && cleaned.triangleCount == scan.triangleCount, "the stray speck is left out, the person kept (\(strayCount) left out)")
+expect(cleaned.positions.count == scan.positions.count, "points nothing uses are dropped (\(cleaned.positions.count) of \(messy.positions.count))")
+expect(ScanRig.stance(of: messy).map { $0.height > 3.5 } == true && abs(ScanRig.stance(of: cleaned)!.height - ScanRig.stance(of: scan)!.height) < 0.001,
+       "stray points made the scan look 4 m tall; cleaned it's the person's height")
+let cleanedStood = ScanRig.stood(cleaned, ScanRig.stance(of: cleaned)!)
+expect(ScanRig.Voxels.fitting(cleanedStood, height: ScanRig.stance(of: cleaned)!.height) != nil, "the cleaned scan fills in")
+let wide = ScanRig.stood(messy, ScanRig.stance(of: messy)!)
+expect(ScanRig.Voxels.fitting(wide, height: 1.7) != nil, "even a very wide box fits, with bigger cubes")
+
 // MARK: Standing it up
 
 guard let stance = ScanRig.stance(of: scan) else {

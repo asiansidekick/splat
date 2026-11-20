@@ -52,7 +52,11 @@ final class ScanCharacterMaker: @unchecked Sendable {
         let (mesh, pictures) = loaded
         guard mesh.triangleCount >= 100 else { return .failure(.unreadable) }
         guard mesh.triangleCount < 1_500_000 else { return .failure(.tooBig) }
-        return build(title: folder.title, original: mesh, pictures: pictures, turned: turned)
+        // Stray bits away from the person, and points nothing uses, are left out first.
+        let (main, stray) = ScanRig.mainPiece(mesh)
+        if stray > 0 { Diagnostics.log("Scan person: \(folder.title): \(stray) stray triangles away from the person left out") }
+        guard main.triangleCount >= 100 else { return .failure(.unreadable) }
+        return build(title: folder.title, original: main, pictures: pictures, turned: turned)
     }
 
     /// The same scan turned round (when the picture shows the person's back).
@@ -62,7 +66,10 @@ final class ScanCharacterMaker: @unchecked Sendable {
 
     private static func build(title: String, original: BodyMesh, pictures: [UIImage?], turned: Bool?) -> Result<ScanCharacterMaker, Failure> {
         let started = Date()
-        guard var stance = ScanRig.stance(of: original) else { return .failure(.notAPerson) }
+        guard var stance = ScanRig.stance(of: original) else {
+            Diagnostics.log("Scan person: \(title) refused: no standing shape found (\(original.positions.count) points)")
+            return .failure(.notAPerson)
+        }
         if let turned { stance.turned = turned }
         var body = ScanRig.stood(original, stance)
         let trimmed = ScanRig.trimFloor(&body)
@@ -72,7 +79,12 @@ final class ScanCharacterMaker: @unchecked Sendable {
             body.positions = body.positions.map { SIMD3($0.x, $0.y - low, $0.z) }
             stance.height = (body.positions.map(\.y).max() ?? stance.height)
         }
-        guard stance.height > 0.3, let voxels = ScanRig.Voxels(body, size: stance.height / 150) else { return .failure(.notAPerson) }
+        guard stance.height > 0.3, let voxels = ScanRig.Voxels.fitting(body, height: stance.height) else {
+            var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
+            for p in body.positions { lo = simd_min(lo, p); hi = simd_max(hi, p) }
+            Diagnostics.log(String(format: "Scan person: %@ refused: %.2f m tall, box %.2f x %.2f x %.2f m", title, stance.height, hi.x - lo.x, hi.y - lo.y, hi.z - lo.z))
+            return .failure(.notAPerson)
+        }
         let found = ScanRig.findMarks(voxels)
         // What the front view shows: the whole body with a margin.
         var low = SIMD2<Float>(repeating: .greatestFiniteMagnitude), high = SIMD2<Float>(repeating: -.greatestFiniteMagnitude)
@@ -112,7 +124,7 @@ final class ScanCharacterMaker: @unchecked Sendable {
             for (index, part) in donor.body.parts.enumerated() {
                 if let name = part.texture, index < donor.pictures.count, let picture = donor.pictures[index] { extraPictures["head-" + name] = picture }
             }
-            if let filled = ScanRig.Voxels(shape, size: height / 150) { inside = filled }
+            if let filled = ScanRig.Voxels.fitting(shape, height: height) { inside = filled }
         }
         var smoothed = 0
         if smoothHead { smoothed = ScanRig.smooth(&shape, ScanRig.headAndShoulders(joints: joints, height: height)) }
