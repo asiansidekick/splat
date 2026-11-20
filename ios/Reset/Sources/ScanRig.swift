@@ -224,16 +224,26 @@ enum ScanRig {
             high[r] = simd_max(high[r] ?? a, simd_max(a, simd_max(b, c)))
         }
         guard let biggest = area.max(by: { $0.value < $1.value })?.key, let bigLow = low[biggest], let bigHigh = high[biggest] else { return (mesh, 0) }
-        // Within reach: a piece whose box comes within a fifth of the main piece's height of the main piece's box
-        // (a hand or foot the scan cut loose, a hat brim).
-        let reach = 0.2 * max(0.2, bigHigh.y - bigLow.y)
-        func near(_ r: Int) -> Bool {
-            guard let l = low[r], let h = high[r] else { return false }
-            return l.x <= bigHigh.x + reach && h.x >= bigLow.x - reach && l.y <= bigHigh.y + reach && h.y >= bigLow.y - reach
-                && l.z <= bigHigh.z + reach && h.z >= bigLow.z - reach
+        // Within reach: a piece whose box comes within a tenth of the main piece's height of a kept piece's box (a hand
+        // or foot the scan cut loose, a hat brim), and so on outwards; a speck across the room never joins.
+        let reach = 0.1 * max(0.2, bigHigh.y - bigLow.y)
+        func near(_ r: Int, _ k: Int) -> Bool {
+            guard let l = low[r], let h = high[r], let kl = low[k], let kh = high[k] else { return false }
+            return l.x <= kh.x + reach && h.x >= kl.x - reach && l.y <= kh.y + reach && h.y >= kl.y - reach
+                && l.z <= kh.z + reach && h.z >= kl.z - reach
         }
-        var keepPiece: [Int: Bool] = [:]
-        for r in area.keys { keepPiece[r] = r == biggest || near(r) }
+        var keepPiece: [Int: Bool] = [biggest: true]
+        var kept = [biggest]
+        var waiting = area.keys.filter { $0 != biggest }
+        var grew = true
+        while grew, !waiting.isEmpty {
+            grew = false
+            var still: [Int] = []
+            for r in waiting {
+                if kept.contains(where: { near(r, $0) }) { keepPiece[r] = true; kept.append(r); grew = true } else { still.append(r) }
+            }
+            waiting = still
+        }
         // The kept triangles, with only the points they use.
         var newIndex = [Int32](repeating: -1, count: count)
         var out = BodyMesh(positions: [], normals: [], uvs: mesh.uvs == nil ? nil : [], triangles: [], parts: [])
