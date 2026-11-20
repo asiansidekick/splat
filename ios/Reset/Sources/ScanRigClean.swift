@@ -88,4 +88,67 @@ extension ScanRig {
         }
         return changed
     }
+
+    // MARK: Swapping heads (Phil, 2026-11-20: "Swapping heads between bodies is desirable")
+
+    /// Where a person's head is cut from the body: a little above the neck joint, round the head's middle.
+    static func neckCut(joints J: [SIMD3<Float>]) -> SIMD3<Float> {
+        let neck = J[bone("Neck")], head = J[bone("Head")]
+        return SIMD3(head.x, neck.y + 0.45 * max(0.005, head.y - neck.y), head.z)
+    }
+
+    /// The triangles `keep` says yes to, with their points renumbered. `keep` is given the triangle's three corners.
+    static func part(of mesh: BodyMesh, keep: ([SIMD3<Float>]) -> Bool) -> BodyMesh {
+        var newIndex = [Int32](repeating: -1, count: mesh.positions.count)
+        var out = BodyMesh(positions: [], normals: [], uvs: mesh.uvs == nil ? nil : [], triangles: [], parts: [])
+        for part in mesh.parts {
+            let first = out.triangles.count / 3
+            for t in part.firstTriangle..<min(mesh.triangleCount, part.firstTriangle + part.triangleCount) {
+                let corners = (0..<3).map { Int(mesh.triangles[t * 3 + $0]) }
+                guard keep(corners.map { mesh.positions[$0] }) else { continue }
+                for c in corners {
+                    if newIndex[c] < 0 {
+                        newIndex[c] = Int32(out.positions.count)
+                        out.positions.append(mesh.positions[c])
+                        out.normals.append(c < mesh.normals.count ? mesh.normals[c] : SIMD3(0, 1, 0))
+                        if let source = mesh.uvs { out.uvs!.append(c < source.count ? source[c] : .zero) }
+                    }
+                    out.triangles.append(UInt32(newIndex[c]))
+                }
+            }
+            let count = out.triangles.count / 3 - first
+            if count > 0 { out.parts.append(BodyMesh.Part(firstTriangle: first, triangleCount: count, texture: part.texture, color: part.color)) }
+        }
+        return out
+    }
+
+    /// One mesh from two. Picture coordinates are kept when both have them (a plain mesh gets zeros).
+    static func joined(_ a: BodyMesh, _ b: BodyMesh) -> BodyMesh {
+        var out = a
+        let offset = UInt32(a.positions.count), firstTriangle = a.triangleCount
+        out.positions += b.positions
+        out.normals += b.normals
+        if a.uvs != nil || b.uvs != nil {
+            out.uvs = (a.uvs ?? [SIMD2<Float>](repeating: .zero, count: a.positions.count)) + (b.uvs ?? [SIMD2<Float>](repeating: .zero, count: b.positions.count))
+        }
+        out.triangles += b.triangles.map { $0 + offset }
+        out.parts += b.parts.map { BodyMesh.Part(firstTriangle: $0.firstTriangle + firstTriangle, triangleCount: $0.triangleCount, texture: $0.texture, color: $0.color) }
+        return out
+    }
+
+    /// `body` with its own head taken off and the head of `donor` put on, its neck cut standing on this body's neck cut.
+    /// Both stand facing +Z (stood up by ScanRig.stood). The donor head keeps its own size: it is that person's head.
+    /// `rename` gives the donor's pictures their new file names, so they don't clash with the body's.
+    static func swapHead(body: BodyMesh, joints: [SIMD3<Float>], donor: BodyMesh, donorJoints: [SIMD3<Float>],
+                         rename: (String) -> String) -> BodyMesh {
+        let cut = neckCut(joints: joints), donorCut = neckCut(joints: donorJoints)
+        // The body keeps every triangle that reaches below its cut; the head is the donor's triangles wholly above its.
+        let headless = part(of: body) { corners in corners.contains { $0.y <= cut.y } }
+        var head = part(of: donor) { corners in corners.allSatisfy { $0.y > donorCut.y } }
+        let shift = cut - donorCut
+        head.positions = head.positions.map { $0 + shift }
+        for i in head.parts.indices { head.parts[i].texture = head.parts[i].texture.map(rename) }
+        return joined(headless, head)
+    }
 }
+

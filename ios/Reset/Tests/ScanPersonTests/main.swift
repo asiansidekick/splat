@@ -290,19 +290,62 @@ expect(abs(afterMean - beforeMean) < 0.003, String(format: "smoothing keeps the 
 let region = ScanRig.headAndShoulders(joints: joints, height: height)
 expect(region.fullFrom > region.noneBelow && region.noneBelow > joint("Spine1").y, String(format: "smoothing from %.2f m up, none below %.2f m", region.fullFrom, region.noneBelow))
 var smoothedPerson = body
-let moved = ScanRig.smooth(&smoothedPerson, region)
+let smoothedCount = ScanRig.smooth(&smoothedPerson, region)
 var untouched = true, headMoved = false
 for i in body.positions.indices {
     if body.positions[i].y <= region.noneBelow, smoothedPerson.positions[i] != body.positions[i] || smoothedPerson.normals[i] != body.normals[i] { untouched = false }
     if body.positions[i].y > region.fullFrom, simd_distance(smoothedPerson.positions[i], body.positions[i]) > 1e-5 { headMoved = true }
 }
 expect(untouched, "the body and costume below the shoulders stay exactly as scanned")
-expect(headMoved && moved > 0, "the head and shoulders were smoothed (\(moved) points)")
+expect(headMoved && smoothedCount > 0, "the head and shoulders were smoothed (\(smoothedCount) points)")
 expect(smoothedPerson.triangles == body.triangles && smoothedPerson.uvs! == body.uvs!, "triangles and photo kept as they were")
 let smoothedHigh = smoothedPerson.positions.map(\.y).max()!
 expect(abs(smoothedHigh - height) < 0.01, String(format: "still as tall (%.3f m)", smoothedHigh))
 let smoothedSkin = ScanRig.skin(smoothedPerson, joints: joints, voxels)
 expect(smoothedSkin.loose == 0, "every smoothed point reached by a bone")
+
+// MARK: Swapping heads
+
+// A donor: the same person 10% bigger, standing somewhere else. Its head goes on the first body at the first body's
+// neck, keeping its own (bigger) size; the body below the cut stays exactly as scanned.
+let donorShift = SIMD3<Float>(0.5, 0.03, 0.2)
+var donor = body
+donor.positions = body.positions.map { $0 * 1.1 + donorShift }
+let donorJoints = joints.map { $0 * 1.1 + donorShift }
+let cut = ScanRig.neckCut(joints: joints)
+expect(cut.y > joint("Neck").y && cut.y < joint("Head").y, String(format: "head cut at %.2f m, between neck and head", cut.y))
+let swapped = ScanRig.swapHead(body: body, joints: joints, donor: donor, donorJoints: donorJoints, rename: { "head-" + $0 })
+let bodyPoints = Set(body.positions.map { SIMD3<Int32>(Int32(($0.x * 10_000).rounded()), Int32(($0.y * 10_000).rounded()), Int32(($0.z * 10_000).rounded())) })
+var lowKept = true, lowCount = 0
+for p in swapped.positions where p.y < cut.y - 0.01 {
+    lowCount += 1
+    if !bodyPoints.contains(SIMD3<Int32>(Int32((p.x * 10_000).rounded()), Int32((p.y * 10_000).rounded()), Int32((p.z * 10_000).rounded()))) { lowKept = false }
+}
+expect(lowKept && lowCount > 0, "every point below the cut is the body's own, unmoved (\(lowCount))")
+let lowBefore = body.positions.filter { $0.y < cut.y - 0.01 }.count
+expect(lowBefore == lowCount, "no body point below the cut lost (\(lowBefore) before, \(lowCount) after)")
+let swappedTop = swapped.positions.map(\.y).max()!, ownTop = body.positions.map(\.y).max()!
+let ratio = (swappedTop - cut.y) / (ownTop - cut.y)
+expect(abs(ratio - 1.1) < 0.03, String(format: "the new head keeps its own size (%.2f times the old)", ratio))
+let headXs = swapped.positions.filter { $0.y > cut.y + 0.02 }.map(\.x)
+expect(abs((headXs.min()! + headXs.max()!) / 2 - cut.x) < 0.02, "the new head stands over the neck")
+expect(swapped.parts.count == 2 && swapped.parts[0].texture == "skin0.jpg" && swapped.parts[1].texture == "head-skin0.jpg", "the head brings its own picture, renamed (\(swapped.parts.map { $0.texture ?? "-" }))")
+expect(swapped.uvs?.count == swapped.positions.count && swapped.normals.count == swapped.positions.count, "photo and normals for every point")
+expect(swapped.triangles.allSatisfy { Int($0) < swapped.positions.count }, "triangles point at real points")
+expect(swapped.parts.reduce(0) { $0 + $1.triangleCount } == swapped.triangleCount, "parts cover every triangle")
+if let swappedVoxels = ScanRig.Voxels(swapped, size: height / 150) {
+    let swappedSkin = ScanRig.skin(swapped, joints: joints, swappedVoxels)
+    expect(swappedSkin.loose == 0, "every point of the swapped person reached by a bone (\(swappedSkin.loose) loose)")
+    let swappedData = ScanRig.fbx(swapped, joints: joints, skin: swappedSkin, name: "Swapped person")
+    let swappedFile = FileManager.default.temporaryDirectory.appendingPathComponent("swapped-\(UUID().uuidString).fbx")
+    try swappedData.write(to: swappedFile)
+    let swappedScene: UnsafeMutablePointer<rs_scene>? = rs_fbx_load(swappedFile.path)
+    expect(swappedScene != nil && swappedScene!.pointee.mesh_count == 1, "swapped person's FBX reads back")
+    rs_fbx_free(swappedScene)
+    try? FileManager.default.removeItem(at: swappedFile)
+} else {
+    expect(false, "swapped person filled in")
+}
 
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

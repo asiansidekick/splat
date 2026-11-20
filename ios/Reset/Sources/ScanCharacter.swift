@@ -99,16 +99,27 @@ final class ScanCharacterMaker: @unchecked Sendable {
     /// Skins the scan to the joints and saves it in the gallery as "<scan> person.fbx". With `smoothHead`, the head
     /// and shoulders lose their scanning lumps; the rest stays exactly as scanned (ScanRigClean.swift). Slow: off the
     /// main thread.
-    func make(_ marks: ScanRig.Marks, smoothHead: Bool) throws -> URL {
+    func make(_ marks: ScanRig.Marks, smoothHead: Bool, headFrom donor: ScanCharacterMaker? = nil) throws -> URL {
         let started = Date()
         let joints = joints(marks)
         var shape = body
+        var inside = voxels
+        var extraPictures: [String: UIImage] = [:]
+        if let donor {
+            // Phil, 2026-11-20: swap heads between bodies. The other scan's head goes on this body's neck.
+            let donorJoints = donor.joints(donor.startingMarks)
+            shape = ScanRig.swapHead(body: shape, joints: joints, donor: donor.body, donorJoints: donorJoints, rename: { "head-" + $0 })
+            for (index, part) in donor.body.parts.enumerated() {
+                if let name = part.texture, index < donor.pictures.count, let picture = donor.pictures[index] { extraPictures["head-" + name] = picture }
+            }
+            if let filled = ScanRig.Voxels(shape, size: height / 150) { inside = filled }
+        }
         var smoothed = 0
         if smoothHead { smoothed = ScanRig.smooth(&shape, ScanRig.headAndShoulders(joints: joints, height: height)) }
-        let skin = ScanRig.skin(shape, joints: joints, voxels)
+        let skin = ScanRig.skin(shape, joints: joints, inside)
         let folder = ModelLibrary.folder
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let base = title.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces) + " person"
+        let base = (title + (donor.map { " with \($0.title)'s head" } ?? "")).replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces) + " person"
         var target = folder.appendingPathComponent("\(base).fbx")
         var number = 2
         while FileManager.default.fileExists(atPath: target.path) {
@@ -119,7 +130,7 @@ final class ScanCharacterMaker: @unchecked Sendable {
         try? FileManager.default.removeItem(at: textures)
         var mesh = shape
         // Each picture by its file name.
-        var byName: [String: UIImage] = [:]
+        var byName = extraPictures
         for (index, part) in body.parts.enumerated() {
             if let name = part.texture, index < pictures.count, let picture = pictures[index] { byName[name] = picture }
         }
@@ -137,8 +148,8 @@ final class ScanCharacterMaker: @unchecked Sendable {
         }
         let file = ScanRig.fbx(mesh, joints: joints, skin: skin, name: target.deletingPathExtension().lastPathComponent)
         try file.write(to: target, options: .atomic)
-        Diagnostics.log(String(format: "Scan person saved: %@ (%d head and shoulder points smoothed), %d triangles, %.1f MB, %d bones pull the skin, %d loose points, %.1f s",
-                               target.lastPathComponent, smoothed, mesh.triangleCount,
+        Diagnostics.log(String(format: "Scan person saved: %@ (%d head and shoulder points smoothed, head %@), %d triangles, %.1f MB, %d bones pull the skin, %d loose points, %.1f s",
+                               target.lastPathComponent, smoothed, donor?.title ?? "own", mesh.triangleCount,
                                Double(file.count) / 1_000_000, ScanRig.skinBones.count, skin.loose, Date().timeIntervalSince(started)))
         return target
     }
@@ -384,6 +395,8 @@ struct ScanCharacterScreen: View {
     @State private var saved: URL?
     /// Phil, 2026-11-20: smooth the head and shoulders, keep the body and costume as scanned. Remembered.
     @AppStorage("scanPersonSmoothHead") private var smoothHead = true
+    /// Phil, 2026-11-20: another scan's head on this body.
+    @State private var donor: ScanCharacterMaker?
 
     var body: some View {
         ZStack {
@@ -425,6 +438,7 @@ struct ScanCharacterScreen: View {
                 }
             }
             if maker != nil, saved == nil, working == nil {
+                headChooser
                 Text(smoothHead ? "Head and shoulders smoothed, the rest as scanned" : "The whole scan, as it is")
                     .font(Theme.caption).foregroundStyle(.white.opacity(0.85)).shadow(color: .black, radius: 3)
             }
@@ -436,6 +450,40 @@ struct ScanCharacterScreen: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
+    }
+
+    /// Whose head goes on the body: its own, or another person scan's.
+    private var headChooser: some View {
+        Menu {
+            Button { donor = nil } label: { Label("Own head", systemImage: donor == nil ? "checkmark" : "person") }
+            ForEach(ScanFolder.all().filter { $0.hasModel && $0 != folder }) { other in
+                Button { takeHead(from: other) } label: {
+                    Label("Head from \(other.title)", systemImage: donor?.title == other.title ? "checkmark" : "person.crop.circle")
+                }
+            }
+        } label: {
+            Text(donor.map { "Head from \($0.title)" } ?? "Own head")
+                .font(Theme.subheadline.weight(.semibold)).foregroundStyle(.white)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(Color.black.opacity(0.55), in: Capsule())
+                .overlay(Capsule().stroke(Theme.accent, lineWidth: donor == nil ? 0 : 2))
+        }
+    }
+
+    private func takeHead(from other: ScanFolder) {
+        working = "Reading the other head…"
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { ScanCharacterMaker.prepare(other) }.value
+            working = nil
+            switch result {
+            case .success(let made):
+                donor = made
+                problem = made.found?.handsFound == true ? nil : "The other scan's joints are a guess, so its head may sit a little off."
+                Diagnostics.log("Scan person: head from \(made.title)")
+            case .failure(let failure):
+                problem = "Couldn't take that head: " + failure.words
+            }
+        }
     }
 
     @ViewBuilder private var bottomBar: some View {
@@ -591,11 +639,12 @@ struct ScanCharacterScreen: View {
         working = "Making the person…"
         let chosen = marks
         let smooth = smoothHead
+        let head = donor
         let moved = ScanRig.Marks.Name.allCases.filter { simd_distance(chosen[$0], maker.startingMarks[$0]) > 0.01 }.map(\.rawValue)
         Diagnostics.log("Scan person: making, dots moved: \(moved.isEmpty ? "none" : moved.joined(separator: ", "))")
         Task {
             let result = await Task.detached(priority: .userInitiated) { () -> Result<URL, Error> in
-                do { return .success(try maker.make(chosen, smoothHead: smooth)) } catch { return .failure(error) }
+                do { return .success(try maker.make(chosen, smoothHead: smooth, headFrom: head)) } catch { return .failure(error) }
             }.value
             working = nil
             switch result {
