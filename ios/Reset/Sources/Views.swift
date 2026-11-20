@@ -2143,7 +2143,9 @@ struct CaptureStage: View {
                         Text(error).font(Theme.callout).padding(10)
                             .background(Color.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
                     }
-                    if verticalSize == .compact { statusBanner }
+                    // Phil's drawing on 1396: on its side this ran under Delete along the bottom. While a model's tools
+                    // hold the edges the saving line waits.
+                    if verticalSize == .compact, !editingModel { statusBanner }
                 }
                 .padding(8)
                 .clearOfControls()
