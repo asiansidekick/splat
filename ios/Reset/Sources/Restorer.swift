@@ -156,6 +156,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
         let config = ARWorldTrackingConfiguration()
         config.planeDetection = [.horizontal, .vertical]
         if Recorder.lidarAvailable { config.frameSemantics.insert(.sceneDepth) }
+        BehindReal.addPeople(to: config)
         pendingPlaceHere = true
         status = .relocalizing
         relocalizingSince = Date()
@@ -559,6 +560,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
             config.planeDetection = [.horizontal, .vertical]
             // Depth for measuring, even with no depth saved in the reference.
             if Recorder.lidarAvailable { config.frameSemantics.insert(.sceneDepth) }
+            BehindReal.addPeople(to: config)
             session.delegate = self
             session.run(config, options: [.resetTracking, .removeExistingAnchors])
             Torch.shared.applySoon()
@@ -585,6 +587,7 @@ final class Restorer: NSObject, ObservableObject, ARSessionDelegate {
                     config.frameSemantics.insert(.smoothedSceneDepth)
                 }
             }
+            BehindReal.addPeople(to: config)
             session.delegate = self
             session.run(config, options: [.resetTracking, .removeExistingAnchors])
             Torch.shared.applySoon()

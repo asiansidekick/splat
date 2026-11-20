@@ -169,5 +169,66 @@ do {
     check(PinMath.stepNeeded(distance: 0.5) == 0.12 && PinMath.stepNeeded(distance: 10) == 0.5, "pin: step needed stays between 12 and 50 cm")
 }
 
+// OccluderMesh: a depth picture of a room (floor, wall 3 m away, a box 1.5 m away) as an invisible mesh.
+do {
+    let w = 256, h = 192
+    let k = simd_float3x3(SIMD3(200, 0, 0), SIMD3(0, 200, 0), SIMD3(128, 96, 1))
+    var depth = [Float](repeating: 3, count: w * h)
+    for y in 0..<h {
+        for x in 0..<w {
+            let u = Float(x) + 0.5, v = Float(y) + 0.5
+            var d: Float = 3
+            let down = (v - 96) / 200
+            if down > 0 { d = min(d, 1 / down) }  // floor 1 m below the camera
+            if abs(u - 128) < 30, abs(v - 96) < 30 { d = 1.5 }  // a box
+            depth[y * w + x] = d
+        }
+    }
+    func triangles(_ mesh: OccluderMesh) -> [[SIMD3<Float>]] {
+        stride(from: 0, to: mesh.indices.count, by: 3).map { t in
+            (0..<3).map { j in
+                let i = Int(mesh.indices[t + j]) * 3
+                return SIMD3(mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2])
+            }
+        }
+    }
+    func flatLow(_ t: [SIMD3<Float>]) -> Bool {
+        let n = simd_cross(t[1] - t[0], t[2] - t[0])
+        let length = simd_length(n)
+        return length > 0 && abs(n.y) / length > 0.8 && t.map(\.y).reduce(0, +) / 3 < -0.95
+    }
+    let pose = matrix_identity_float4x4
+    if let mesh = OccluderMesh.build(depth: depth, width: w, height: h, intrinsics: k, pose: pose, imageWidth: Float(w), imageHeight: Float(h)) {
+        let all = triangles(mesh)
+        check(!all.isEmpty, "occluder: a mesh is made")
+        check(!all.contains { t in t.contains { $0.z > -2 } && t.contains { $0.z < -2.5 } }, "occluder: no skin from the box to the wall")
+        check(all.contains { t in t.allSatisfy { abs($0.z + 1.595) < 0.01 } }, "occluder: the box is there, pushed back 9.5 cm")
+        check(!all.contains(where: flatLow), "occluder: the floor hides nothing")
+        check(mesh.seenFloor.map { $0 < -1.0 && $0 > -1.1 } ?? false, "occluder: floor found (\(mesh.seenFloor ?? 0))")
+    } else {
+        check(false, "occluder: a mesh is made")
+    }
+    if let kept = OccluderMesh.build(depth: depth, width: w, height: h, intrinsics: k, pose: pose, imageWidth: Float(w), imageHeight: Float(h), floor: -10) {
+        check(triangles(kept).contains(where: flatLow), "occluder: a floor given lower keeps this one")
+    } else {
+        check(false, "occluder: a floor given lower keeps this one")
+    }
+    let unsure = [UInt8](repeating: 0, count: w * h)
+    check(OccluderMesh.build(depth: depth, confidence: unsure, minConfidence: 1, width: w, height: h, intrinsics: k, pose: pose,
+                             imageWidth: Float(w), imageHeight: Float(h)) == nil, "occluder: unsure depth makes nothing")
+    let full = OccluderMesh.build(depth: depth, width: w, height: h, intrinsics: k, pose: pose, imageWidth: 1920, imageHeight: 1440)
+    let coarse = OccluderMesh.build(depth: depth, width: w, height: h, intrinsics: k, pose: pose, imageWidth: 1920, imageHeight: 1440, step: 2)
+    check((coarse?.indices.count ?? 0) > 0 && (coarse?.indices.count ?? 0) < (full?.indices.count ?? 0) / 3, "occluder: every second pixel makes a lighter mesh")
+    // The camera moved and turned: the box lands where the pose says.
+    var moved = simd_float4x4(simd_quatf(angle: .pi / 2, axis: SIMD3(0, 1, 0)))
+    moved.columns.3 = SIMD4(1, 2, 3, 1)
+    if let turned = OccluderMesh.build(depth: depth, width: w, height: h, intrinsics: k, pose: moved, imageWidth: Float(w), imageHeight: Float(h)) {
+        // Looking down -z turned left a quarter is looking down -x: the box 1.595 m away at x = 1 - 1.595.
+        check(triangles(turned).contains { t in t.allSatisfy { abs($0.x - (1 - 1.595)) < 0.01 && abs($0.z - 3) < 0.4 } }, "occluder: the camera's place and turn are used")
+    } else {
+        check(false, "occluder: the camera's place and turn are used")
+    }
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)
