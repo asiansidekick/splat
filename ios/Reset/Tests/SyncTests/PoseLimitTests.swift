@@ -231,6 +231,19 @@ func runPoseLimitTests() {
     }
     expect(footJump < 0.03 && kneeBack > -0.02, "posing limits: the foot swept round moves the knee smoothly, never bending it backwards (step \(footJump), \(kneeBack))")
 
+    // Phil, build 1392: a leg dragged out to the side stops at about 45° unless brought well forward; it never sticks
+    // out sideways at level.
+    var sideways: Float = 0
+    pose = poser.restPose
+    for k in 0...40 {
+        let a = Float(k) / 40 * 100 * .pi / 180
+        pose = drag(.foot(0), to: hip + SIMD3(sin(a), -cos(a), 0) * 0.8, from: pose)
+        let thighNow = simd_normalize(spots(pose)[legL[1]] - spots(pose)[legL[0]])
+        // How far out to the side the thigh points, while it is not brought much forward.
+        sideways = max(sideways, atan2(thighNow.x, -thighNow.y) * 180 / .pi * (thighNow.z < 0.3 ? 1 : 0))
+    }
+    expect(sideways < 52, "posing limits: a leg dragged out to the side stops at about 45° (\(sideways)°)")
+
     // A foot dragged far behind swings the thigh back no more than a hip goes.
     pose = poser.restPose
     pose = drag(.foot(0), to: hip + SIMD3(0, -0.3, -0.8), from: pose)

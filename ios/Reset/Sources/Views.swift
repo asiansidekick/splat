@@ -2277,8 +2277,11 @@ struct CaptureStage: View {
 
     /// The camera view as it looks, with any 3D models in it.
     private func takePhoto() {
-        guard let image = Screenshot.capture(camera: holder.view) else { return }
-        onPhoto(image)
+        let camera = holder.view
+        Task { @MainActor in
+            guard let image = await Screenshot.captureClean(camera: camera) else { return }
+            onPhoto(image)
+        }
     }
 
     private var shutterStyle: ShutterButton.Style {
@@ -3241,7 +3244,10 @@ struct ResetStage: View {
         guard let shot = restorer.takeSnapshot(label: count == 0 ? label : "\(label) (\(count + 1))") else { return }
         reference.snapshots.append(shot)
         save()
-        if let image = Screenshot.capture(camera: holder.view) { onPhoto(image) }
+        let camera = holder.view
+        Task { @MainActor in
+            if let image = await Screenshot.captureClean(camera: camera) { onPhoto(image) }
+        }
         showToast("Snapshot saved. Compare it from the ••• menu.")
     }
 

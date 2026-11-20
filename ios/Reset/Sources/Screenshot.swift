@@ -1,4 +1,5 @@
 import ARKit
+import SceneKit
 import SwiftUI
 import UIKit
 
@@ -17,6 +18,27 @@ enum Screenshot {
             Diagnostics.log("Screenshot: window capture was black, using the camera view's own picture")
             return camera.snapshot()
         }
+        return image
+    }
+
+    /// The handles drawn on a model while posing or turning it (Phil, 2026-11-20: they showed in snapshots).
+    static let handleNames: Set<String> = ["posedot", "turnicon"]
+
+    /// Hides the posing handles in the camera view and gives back what puts them back.
+    @MainActor static func hideHandles(in camera: SCNView?) -> () -> Void {
+        guard let root = camera?.scene?.rootNode else { return {} }
+        let hidden = root.childNodes { node, _ in handleNames.contains(node.name ?? "") && !node.isHidden }
+        for node in hidden { node.isHidden = true }
+        return { for node in hidden { node.isHidden = false } }
+    }
+
+    /// The screen as `capture` takes it, with the posing handles hidden for the moment it takes.
+    @MainActor static func captureClean(camera: ARSCNView?) async -> UIImage? {
+        let restore = hideHandles(in: camera)
+        // A frame or two for the camera view to draw without them.
+        try? await Task.sleep(for: .milliseconds(70))
+        let image = capture(camera: camera)
+        restore()
         return image
     }
 
@@ -211,8 +233,10 @@ struct ScreenshotButton: View {
                 }
                 // Hide the controls, give the screen a moment to redraw, take the picture, bring them back.
                 ScreenshotMode.shared.clean = true
+                let restore = Screenshot.hideHandles(in: camera())
                 try? await Task.sleep(for: .milliseconds(180))
                 let image = Screenshot.capture(camera: camera())
+                restore()
                 ScreenshotMode.shared.clean = false
                 guard let image else {
                     toast("Could not take the screenshot")

@@ -214,7 +214,9 @@ enum HumanLimits {
             // Shoulder: back 60° hanging, 45° behind level to the side, little behind overhead or across the back.
             ? [(-180, -15), (-150, -15), (-120, 10), (-90, 30), (-60, 10), (-30, -30), (0, -60), (45, -55), (90, -45), (120, -40), (150, -30), (180, -15)]
             // Hip: back 25°, out 45°, across 25°; above level only when well forward (up to 125° with the knee bent).
-            : [(-180, 55), (-135, 55), (-90, 40), (-60, 25), (-40, 10), (-25, -5), (-10, -20), (0, -25), (30, -20), (45, -10), (60, 10), (90, 35), (135, 55), (180, 55)]
+            // Phil, 2026-11-20 (build 1392): a thigh raised out to the side near level is not a standing body's: out
+            // past 45° needs the thigh well forward (as when sitting cross-legged).
+            : [(-180, 55), (-135, 55), (-90, 40), (-60, 25), (-40, 10), (-25, -5), (-10, -20), (0, -25), (30, -18), (40, -10), (50, 15), (90, 60), (135, 70), (180, 55)]
         var g = table[0].1
         for k in 1..<table.count where a <= table[k].0 {
             let (a0, g0) = table[k - 1], (a1, g1) = table[k]
