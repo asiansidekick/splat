@@ -2011,7 +2011,6 @@ struct ModelOverlay: View {
                     }
                 }
                 .frame(maxWidth: .infinity, minHeight: 42, alignment: .bottom)
-                .overlay(alignment: .center) { ObjectNudge(placer: placer).offset(y: -110) }
                 .task(id: "\(placer.selectedModel?.uuidString ?? "")-\(placer.cutoutJob.rawValue)") {
                     withAnimation { showsCutoutHelp = true }
                     try? await Task.sleep(for: .seconds(4))
@@ -2096,6 +2095,9 @@ struct ModelEdgeTools: View {
                 EdgeColumn(leading: false, top: top, middle: 124) { actionTools(cutout: cutout) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Phil, 2026-11-20 (the ring): the "hold, then drag" bubble and the size hints stand at the top edge, not
+            // over the middle of the picture.
+            .overlay(alignment: .top) { ObjectNudge(placer: placer).padding(.top, verticalSize == .compact ? 0 : 36) }
             .fullScreenCover(isPresented: $posing) {
                 if let id = placer.selectedModel, let spec = placer.selectedPoseSpec {
                     MannequinPoseEditor(spec: spec) { placer.repose(id, as: $0) }
