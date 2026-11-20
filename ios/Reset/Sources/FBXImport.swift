@@ -131,7 +131,7 @@ enum FBXImport {
                 guard length >= 3, start + length <= count else { continue }
                 elements.append(SCNGeometryElement(indices: (start..<(start + length)).map { UInt32($0) }, primitiveType: .triangles))
                 let material = SCNMaterial()
-                material.lightingModel = scanned ? .constant : .physicallyBased
+                material.lightingModel = .physicallyBased
                 material.roughness.contents = 0.7
                 material.isDoubleSided = true
                 var picture: UIImage?
@@ -149,6 +149,8 @@ enum FBXImport {
                     }
                 }
                 if let picture {
+                    // A scanned person's photo is shown unlit, as photographed; plain parts are lit.
+                    if scanned { material.lightingModel = .constant }
                     material.diffuse.contents = picture
                 } else {
                     let c = floats(part.color)

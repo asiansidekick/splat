@@ -242,5 +242,67 @@ if let scene = opened?.pointee {
     expect(false, "the FBX opened")
 }
 
+// MARK: Smoothing the head and shoulders, nothing else
+
+// A lumpy ball, smoothed everywhere, comes out rounder and about the same size.
+var ball = BodyMesh(positions: [], normals: [], uvs: nil, triangles: [], parts: [])
+do {
+    let rings = 24, around = 32
+    var seed: UInt64 = 7
+    func noise() -> Float { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Float(seed >> 40) / Float(1 << 24) - 0.5 }
+    ball.positions.append(SIMD3(0, 0.1, 0))
+    for i in 1..<rings {
+        let lat = Float.pi / 2 - Float.pi * Float(i) / Float(rings)
+        for k in 0..<around {
+            let lon = 2 * Float.pi * Float(k) / Float(around)
+            let r: Float = 0.1 + 0.006 * noise()
+            ball.positions.append(SIMD3(r * cos(lat) * cos(lon), r * sin(lat), r * cos(lat) * sin(lon)))
+        }
+    }
+    ball.positions.append(SIMD3(0, -0.1, 0))
+    let last = UInt32(ball.positions.count - 1)
+    for k in 0..<around { ball.triangles += [0, UInt32(1 + (k + 1) % around), UInt32(1 + k)] }
+    for i in 0..<(rings - 2) {
+        for k in 0..<around {
+            let a0 = UInt32(1 + i * around + k), a1 = UInt32(1 + i * around + (k + 1) % around)
+            ball.triangles += [a0, a1, a0 + UInt32(around), a1, a1 + UInt32(around), a0 + UInt32(around)]
+        }
+    }
+    let bottom = UInt32(1 + (rings - 2) * around)
+    for k in 0..<around { ball.triangles += [last, bottom + UInt32(k), bottom + UInt32((k + 1) % around)] }
+    ball.normals = BodyMesh.smoothNormals(ball.positions, ball.triangles)
+    ball.parts = [BodyMesh.Part(firstTriangle: 0, triangleCount: ball.triangles.count / 3, texture: nil, color: SIMD3(1, 1, 1))]
+}
+func roughness(_ m: BodyMesh) -> (Float, Float) {
+    let radii = m.positions.map { simd_length($0) }
+    let mean = radii.reduce(0, +) / Float(radii.count)
+    let spread = (radii.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Float(radii.count)).squareRoot()
+    return (mean, spread)
+}
+let (beforeMean, beforeSpread) = roughness(ball)
+var smoothedBall = ball
+ScanRig.smooth(&smoothedBall, ScanRig.Smoothing(fullFrom: -1, noneBelow: -2, rounds: 8))
+let (afterMean, afterSpread) = roughness(smoothedBall)
+expect(afterSpread < beforeSpread * 0.5, String(format: "smoothing takes the lumps out (spread %.2f mm to %.2f mm)", beforeSpread * 1000, afterSpread * 1000))
+expect(abs(afterMean - beforeMean) < 0.003, String(format: "smoothing keeps the size (%.1f mm to %.1f mm)", beforeMean * 1000, afterMean * 1000))
+
+// The person: the head and shoulders may move, everything below stays exactly as scanned.
+let region = ScanRig.headAndShoulders(joints: joints, height: height)
+expect(region.fullFrom > region.noneBelow && region.noneBelow > joint("Spine1").y, String(format: "smoothing from %.2f m up, none below %.2f m", region.fullFrom, region.noneBelow))
+var smoothedPerson = body
+let moved = ScanRig.smooth(&smoothedPerson, region)
+var untouched = true, headMoved = false
+for i in body.positions.indices {
+    if body.positions[i].y <= region.noneBelow, smoothedPerson.positions[i] != body.positions[i] || smoothedPerson.normals[i] != body.normals[i] { untouched = false }
+    if body.positions[i].y > region.fullFrom, simd_distance(smoothedPerson.positions[i], body.positions[i]) > 1e-5 { headMoved = true }
+}
+expect(untouched, "the body and costume below the shoulders stay exactly as scanned")
+expect(headMoved && moved > 0, "the head and shoulders were smoothed (\(moved) points)")
+expect(smoothedPerson.triangles == body.triangles && smoothedPerson.uvs! == body.uvs!, "triangles and photo kept as they were")
+let smoothedHigh = smoothedPerson.positions.map(\.y).max()!
+expect(abs(smoothedHigh - height) < 0.01, String(format: "still as tall (%.3f m)", smoothedHigh))
+let smoothedSkin = ScanRig.skin(smoothedPerson, joints: joints, voxels)
+expect(smoothedSkin.loose == 0, "every smoothed point reached by a bone")
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

@@ -96,11 +96,16 @@ final class ScanCharacterMaker: @unchecked Sendable {
 
     func joints(_ marks: ScanRig.Marks) -> [SIMD3<Float>] { ScanRig.joints(marks, voxels, height: height) }
 
-    /// Skins the scan to the joints and saves it in the gallery as "<scan> person.fbx". Slow: off the main thread.
-    func make(_ marks: ScanRig.Marks) throws -> URL {
+    /// Skins the scan to the joints and saves it in the gallery as "<scan> person.fbx". With `smoothHead`, the head
+    /// and shoulders lose their scanning lumps; the rest stays exactly as scanned (ScanRigClean.swift). Slow: off the
+    /// main thread.
+    func make(_ marks: ScanRig.Marks, smoothHead: Bool) throws -> URL {
         let started = Date()
         let joints = joints(marks)
-        let skin = ScanRig.skin(body, joints: joints, voxels)
+        var shape = body
+        var smoothed = 0
+        if smoothHead { smoothed = ScanRig.smooth(&shape, ScanRig.headAndShoulders(joints: joints, height: height)) }
+        let skin = ScanRig.skin(shape, joints: joints, voxels)
         let folder = ModelLibrary.folder
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let base = title.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces) + " person"
@@ -112,19 +117,29 @@ final class ScanCharacterMaker: @unchecked Sendable {
         }
         let textures = FBXImport.texturesFolder(for: target)
         try? FileManager.default.removeItem(at: textures)
-        var mesh = body
+        var mesh = shape
+        // Each picture by its file name.
+        var byName: [String: UIImage] = [:]
+        for (index, part) in body.parts.enumerated() {
+            if let name = part.texture, index < pictures.count, let picture = pictures[index] { byName[name] = picture }
+        }
+        var written = Set<String>()
         for (index, part) in mesh.parts.enumerated() {
-            guard let name = part.texture, index < pictures.count, let picture = pictures[index], let data = Self.jpeg(picture) else {
+            guard let name = part.texture else { continue }
+            guard let picture = byName[name], let data = Self.jpeg(picture) else {
                 mesh.parts[index].texture = nil
                 continue
             }
+            guard !written.contains(name) else { continue }
             try FileManager.default.createDirectory(at: textures, withIntermediateDirectories: true)
             try data.write(to: textures.appendingPathComponent(name), options: .atomic)
+            written.insert(name)
         }
         let file = ScanRig.fbx(mesh, joints: joints, skin: skin, name: target.deletingPathExtension().lastPathComponent)
         try file.write(to: target, options: .atomic)
-        Diagnostics.log(String(format: "Scan person saved: %@, %.1f MB, %d bones pull the skin, %d loose points, %.1f s",
-                               target.lastPathComponent, Double(file.count) / 1_000_000, ScanRig.skinBones.count, skin.loose, Date().timeIntervalSince(started)))
+        Diagnostics.log(String(format: "Scan person saved: %@ (%d head and shoulder points smoothed), %d triangles, %.1f MB, %d bones pull the skin, %d loose points, %.1f s",
+                               target.lastPathComponent, smoothed, mesh.triangleCount,
+                               Double(file.count) / 1_000_000, ScanRig.skinBones.count, skin.loose, Date().timeIntervalSince(started)))
         return target
     }
 
@@ -367,6 +382,8 @@ struct ScanCharacterScreen: View {
     @State private var working: String? = "Finding the joints…"
     @State private var problem: String?
     @State private var saved: URL?
+    /// Phil, 2026-11-20: smooth the head and shoulders, keep the body and costume as scanned. Remembered.
+    @AppStorage("scanPersonSmoothHead") private var smoothHead = true
 
     var body: some View {
         ZStack {
@@ -397,6 +414,19 @@ struct ScanCharacterScreen: View {
                     .foregroundStyle(.white)
                     .disabled(working != nil && maker != nil)
                 Spacer()
+                if maker != nil, saved == nil {
+                    Button { smoothHead.toggle() } label: {
+                        Text(smoothHead ? "Smooth head" : "Head as scanned")
+                            .font(Theme.subheadline.weight(.semibold)).foregroundStyle(smoothHead ? Theme.onAccent : .white)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .background(smoothHead ? Theme.accent : Color.black.opacity(0.55), in: Capsule())
+                    }
+                    .disabled(working != nil)
+                }
+            }
+            if maker != nil, saved == nil, working == nil {
+                Text(smoothHead ? "Head and shoulders smoothed, the rest as scanned" : "The whole scan, as it is")
+                    .font(Theme.caption).foregroundStyle(.white.opacity(0.85)).shadow(color: .black, radius: 3)
             }
             if let problem {
                 Text(problem).font(Theme.footnote).foregroundStyle(.orange).multilineTextAlignment(.center).shadow(color: .black, radius: 3)
@@ -560,11 +590,12 @@ struct ScanCharacterScreen: View {
         guard let maker else { return }
         working = "Making the person…"
         let chosen = marks
+        let smooth = smoothHead
         let moved = ScanRig.Marks.Name.allCases.filter { simd_distance(chosen[$0], maker.startingMarks[$0]) > 0.01 }.map(\.rawValue)
         Diagnostics.log("Scan person: making, dots moved: \(moved.isEmpty ? "none" : moved.joined(separator: ", "))")
         Task {
             let result = await Task.detached(priority: .userInitiated) { () -> Result<URL, Error> in
-                do { return .success(try maker.make(chosen)) } catch { return .failure(error) }
+                do { return .success(try maker.make(chosen, smoothHead: smooth)) } catch { return .failure(error) }
             }.value
             working = nil
             switch result {

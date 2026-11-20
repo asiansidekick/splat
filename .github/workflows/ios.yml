@@ -81,7 +81,7 @@ jobs:
           clang -O2 -c Sources/FBX/FBXShim.c -o fbxshim.o
           if ! swiftc -O -import-objc-header Sources/FBX/FBXShim.h Sources/ReferenceModel.swift Sources/MannequinPose.swift Sources/RigMap.swift Sources/CallSheet.swift Sources/Cutout.swift \
             Sources/FrameMath.swift Sources/ReferenceSync.swift Sources/Shared/PhotoPrivacy.swift Sources/Shared/SecurePack.swift Sources/Shared/SyncEngine.swift \
-            Sources/ScanRig.swift Tests/ScanPersonTests/main.swift ufbx.o fbxshim.o -o scan-person-tests > person-compile.log 2>&1; then
+            Sources/ScanRig.swift Sources/ScanRigClean.swift Tests/ScanPersonTests/main.swift ufbx.o fbxshim.o -o scan-person-tests > person-compile.log 2>&1; then
             grep -E ": error: " person-compile.log | sort -u | head -10 \
               | sed -E 's#^(.*/)?((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Reset/\2,line=\4,col=\5::\6#'
             tail -40 person-compile.log
