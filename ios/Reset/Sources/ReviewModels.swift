@@ -18,10 +18,9 @@ final class ReviewStage: ObservableObject {
     private var cache: [String: SCNGeometry] = [:]
     private var cacheOrder: [String] = []
 
-    private static let hidesKey = "review.hidesBehindSet"
     @Published var hidesBehindSet: Bool {
         didSet {
-            UserDefaults.standard.set(hidesBehindSet, forKey: Self.hidesKey)
+            UserDefaults.standard.set(hidesBehindSet, forKey: BehindReal.key)
             occluder.isHidden = !hidesBehindSet
         }
     }
@@ -32,7 +31,7 @@ final class ReviewStage: ObservableObject {
         camera.zFar = 30
         cameraNode.camera = camera
         scene.rootNode.addChildNode(cameraNode)
-        hidesBehindSet = UserDefaults.standard.object(forKey: Self.hidesKey) as? Bool ?? true
+        hidesBehindSet = BehindReal.on
         occluder.name = "review.occluder"
         occluder.renderingOrder = -10
         occluder.categoryBitMask = ReviewPick.occluderMask
@@ -84,71 +83,15 @@ enum ReviewPick {
     static var options: [SCNHitTestOption: Any] { [.categoryBitMask: ~occluderMask] }
 }
 
-/// The saved depth of one frame as a mesh in room coordinates, pushed back (5 cm, more far away where the
-/// depth is rougher) so a model standing against a wall is not cut by it. Jumps in depth (the edge of a
-/// pillar) are left open. Phil, 2026-11-11: feet and legs were chopped into blocks by the floor, so the
-/// floor itself never hides anything (a table top still does), and the mesh uses every depth reading.
-struct OccluderMesh: Sendable {
-    var positions: [Float] = []
-    var indices: [UInt32] = []
-
+/// The saved depth of one frame as an invisible mesh (OccluderMath.swift), and SceneKit geometry for any occluder.
+extension OccluderMesh {
     static func build(frame: Keyframe, folder: URL) -> OccluderMesh? {
         guard let depthFile = frame.depthFile, frame.depthWidth > 8, frame.depthHeight > 8,
               frame.imageWidth > 0, frame.imageHeight > 0, frame.intrinsics.count >= 9,
               let data = try? Data(contentsOf: folder.appendingPathComponent(depthFile)) else { return nil }
-        let depth = DepthMap.floats(data)
-        let dw = frame.depthWidth, dh = frame.depthHeight
-        guard depth.count >= dw * dh else { return nil }
-        let k = frame.cameraIntrinsics
-        let pose = frame.cameraToWorld
-        let w = Float(frame.imageWidth), h = Float(frame.imageHeight)
-        let step = 1
-        let cols = (dw - 1) / step + 1, rows = (dh - 1) / step + 1
-        var mesh = OccluderMesh()
-        mesh.positions.reserveCapacity(cols * rows * 3)
-        var valid = [Bool](repeating: false, count: cols * rows)
-        var values = [Float](repeating: 0, count: cols * rows)
-        for gy in 0..<rows {
-            for gx in 0..<cols {
-                let x = gx * step, y = gy * step
-                let d = depth[y * dw + x]
-                var p = SIMD3<Float>.zero
-                if d.isFinite, d > 0.12, d < 8 {
-                    let back = d + 0.05 + 0.03 * d
-                    let u = (Float(x) + 0.5) / Float(dw) * w, v = (Float(y) + 0.5) / Float(dh) * h
-                    let world = pose * SIMD4((u - k[2][0]) / k[0][0] * back, -(v - k[2][1]) / k[1][1] * back, -back, 1)
-                    p = SIMD3(world.x, world.y, world.z)
-                    valid[gy * cols + gx] = true
-                    values[gy * cols + gx] = d
-                }
-                mesh.positions.append(contentsOf: [p.x, p.y, p.z])
-            }
-        }
-        // The floor: the lowest level that much of the picture sits on.
-        var heights: [Float] = []
-        heights.reserveCapacity(cols * rows / 4)
-        for i in stride(from: 0, to: cols * rows, by: 4) where valid[i] { heights.append(mesh.positions[i * 3 + 1]) }
-        heights.sort()
-        let floor: Float? = heights.count > 50 ? heights[heights.count / 50] : nil
-        func point(_ i: Int) -> SIMD3<Float> { SIMD3(mesh.positions[i * 3], mesh.positions[i * 3 + 1], mesh.positions[i * 3 + 2]) }
-        for gy in 0..<(rows - 1) {
-            for gx in 0..<(cols - 1) {
-                let a = gy * cols + gx, b = a + 1, c = a + cols, e = c + 1
-                guard valid[a], valid[b], valid[c], valid[e] else { continue }
-                let ds = [values[a], values[b], values[c], values[e]]
-                let low = ds.min() ?? 0, high = ds.max() ?? 0
-                guard high - low < 0.03 + 0.05 * low else { continue }
-                if let floor {
-                    let pa = point(a), pe = point(e)
-                    let normal = simd_cross(point(c) - pa, point(b) - pa)
-                    let length = simd_length(normal)
-                    let flat = length > 0 && abs(normal.y) / length > 0.8
-                    if flat, (pa.y + pe.y) / 2 < floor + 0.12 { continue }
-                }
-                mesh.indices.append(contentsOf: [UInt32(a), UInt32(c), UInt32(b), UInt32(b), UInt32(c), UInt32(e)])
-            }
-        }
-        return mesh.indices.isEmpty ? nil : mesh
+        return build(depth: DepthMap.floats(data), width: frame.depthWidth, height: frame.depthHeight,
+                     intrinsics: frame.cameraIntrinsics, pose: frame.cameraToWorld,
+                     imageWidth: Float(frame.imageWidth), imageHeight: Float(frame.imageHeight))
     }
 
     func geometry() -> SCNGeometry? {

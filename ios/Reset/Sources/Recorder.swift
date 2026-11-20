@@ -149,6 +149,7 @@ final class Recorder: NSObject, ObservableObject, ARSessionDelegate {
         if useLiDAR && Recorder.lidarAvailable {
             config.frameSemantics.insert(.sceneDepth)
         }
+        BehindReal.addPeople(to: config)
         session.delegate = self
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
         Torch.shared.applySoon()

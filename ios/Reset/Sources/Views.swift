@@ -2088,6 +2088,7 @@ struct CaptureStage: View {
                 CameraView(session: recorder.session, content: recorder.modelsNode, onMake: { view in
                     recorder.placer.attachGestures(to: view)
                     recorder.measurer.attachGestures(to: view)
+                    LiveOccluder.attach(to: view, placer: recorder.placer)
                     holder.view = view
                 }, storyboardLook: true)
                 // Phil, 2026-11-19: froze on the wide lens. The room view stays drawn over the lens preview behind it
@@ -2858,6 +2859,10 @@ struct ResetStage: View {
                     restorer.placer.attachGestures(to: view)
                     restorer.measurer.attachGestures(to: view)
                     restorer.attachLookGestures(to: view)
+                    LiveOccluder.attach(to: view, placer: restorer.placer) { [weak restorer] in
+                        guard let restorer else { return true }
+                        return restorer.backdropOn || restorer.look != .ghost
+                    }
                     holder.view = view
                 }, storyboardLook: true)
                 .overlay(alignment: .top) {
