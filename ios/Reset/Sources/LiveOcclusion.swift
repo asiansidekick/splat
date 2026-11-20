@@ -393,6 +393,25 @@ final class LiveOccluder {
         let height: Int
         var count: Int { observation.allInstances.count }
 
+        /// The thing covering most of an outline (cells across the whole picture), if it covers at least 30% of it.
+        /// Finds a picked thing again even when the tapped point has slid off it (an anchor at the wrong depth).
+        func label(covering cells: [Bool], width cw: Int, height ch: Int) -> UInt8? {
+            guard cw > 0, ch > 0, cells.count == cw * ch else { return nil }
+            var counts = [Int](repeating: 0, count: 256)
+            var total = 0
+            for y in stride(from: 0, to: ch, by: 2) {
+                let ly = min(height - 1, y * height / ch)
+                for x in stride(from: 0, to: cw, by: 2) where cells[y * cw + x] {
+                    total += 1
+                    counts[Int(labels[ly * width + min(width - 1, x * width / cw)])] += 1
+                }
+            }
+            guard total > 0 else { return nil }
+            var best = 0, most = 0
+            for label in 1..<256 where counts[label] > most { best = label; most = counts[label] }
+            return best > 0 && most * 10 >= total * 3 ? UInt8(best) : nil
+        }
+
         /// The thing at a point (0 to 1 each way), or the nearest one within a little of it.
         func label(at n: CGPoint) -> UInt8? {
             let x = Int(n.x * CGFloat(width)), y = Int(n.y * CGFloat(height))
@@ -541,7 +560,12 @@ final class LiveOccluder {
                 let held = pick.held?.seen(from: pose, lens: lens)
                 var fresh: [Bool]?
                 var width = 0
-                if let found, let n = Self.imagePoint(of: pick.anchor, camera: camera), let label = found.label(at: n),
+                // The thing under the held outline, else under the tapped point.
+                let label = found.flatMap { found in
+                    held.flatMap { found.label(covering: $0, width: pick.held!.width, height: pick.held!.height) }
+                        ?? Self.imagePoint(of: pick.anchor, camera: camera).flatMap { found.label(at: $0) }
+                }
+                if let found, let label,
                    let mask = try? found.observation.generateScaledMaskForImage(forInstances: IndexSet(integer: Int(label)), from: found.handler),
                    let cells = Self.cells(of: mask) {
                     fresh = cells.inside
