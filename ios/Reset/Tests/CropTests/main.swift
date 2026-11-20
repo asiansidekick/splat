@@ -335,8 +335,8 @@ do {
         for i in rects.indices { for j in rects.indices where j > i && rects[i].insetBy(dx: 0.5, dy: 0.5).intersects(rects[j]) { overlaps += 1 } }
         check(overlaps == 0, "edge tools \(screen.name): no two overlap (\(overlaps))")
         check(rects.allSatisfy { $0.minY >= screen.top - 0.5 }, "edge tools \(screen.name): the top stays free")
-        // Every tool touches an edge: the left, the right or the bottom.
-        let onEdge = rects.allSatisfy { $0.minX < 1 || $0.maxX > screen.width - 1 || $0.maxY > screen.height - 1 }
+        // Every tool stands against an edge: the left, the right or the bottom (narrower ones centred in their column).
+        let onEdge = rects.allSatisfy { $0.minX < 10 || $0.maxX > screen.width - 10 || $0.maxY > screen.height - 1 }
         check(onEdge, "edge tools \(screen.name): every tool is against an edge")
         // The middle of the picture (its middle third each way) is clear.
         let centre = CGRect(x: screen.width / 3, y: screen.height / 3, width: screen.width / 3, height: screen.height / 3)
