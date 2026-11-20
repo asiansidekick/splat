@@ -324,5 +324,29 @@ do {
     check(edge == [OutlineStrips.Strip(x0: 7, x1: 10, y0: 0, y1: 1)], "strips: a thing at the picture's edge runs to the edge")
 }
 
+// Holding still: an edge that flickers between pictures settles on the side it is on most of the time.
+do {
+    // 6 pictures of a row of 10 pixels: box (1.5 m) on the left 5, wall (3 m) on the right; pixel 4 and 5 flicker.
+    var history: [[Float]] = []
+    for k in 0..<6 {
+        var row = [Float](repeating: 3, count: 10)
+        for i in 0..<5 { row[i] = 1.5 }
+        if k == 2 { row[4] = 3 }          // the box's last pixel lost once
+        if k == 1 || k == 4 { row[5] = 1.5 }  // the wall's first pixel taken twice
+        if k == 3 { row[8] = 0 }          // a missing reading once
+        history.append(row)
+    }
+    let steady = EdgeDepth.steady(history)
+    check(steady[4] == 1.5 && steady[5] == 3, "still: the flickering edge settles where it is most often (\(steady[4]), \(steady[5]))")
+    check(steady[8] == 3, "still: a reading missing once is filled from the others")
+    check(EdgeDepth.steady([history[0]]) == history[0], "still: one picture is kept as it is")
+    var gone = history
+    for k in 0..<4 { gone[k][9] = 0 }
+    check(EdgeDepth.steady(gone)[9] == 0, "still: a pixel missing in most pictures stays empty")
+    let masks: [[Bool]] = [[true, true, false], [true, false, false], [true, true, false], [true, true, true], [true, true, false]]
+    check(OutlineVote.steady(masks) == [true, true, false], "still: a picked outline keeps the shape it has most often")
+    check(OutlineVote.steady([[false, true]]) == [false, true], "still: one outline is kept as it is")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

@@ -88,6 +88,21 @@ final class LiveOccluder {
     private var lastPickLog: TimeInterval = 0
     private var pickFound = true
     private var lastPickSeen: TimeInterval = 0
+    /// The last few sharpened depths and picked outlines while the camera holds still (EdgeDepth.steady, OutlineVote).
+    private var depthHistory: [[Float]] = []
+    private var depthHistoryPose: simd_float4x4?
+    private var maskHistory: [[Bool]] = []
+    private var maskHistoryPose: simd_float4x4?
+    nonisolated static let historyLength = 6
+
+    /// Whether the camera is where it was (within 1.5 cm and 0.8°).
+    nonisolated static func still(_ a: simd_float4x4?, _ b: simd_float4x4) -> Bool {
+        guard let a else { return false }
+        let moved = simd_length(a.columns.3.xyz - b.columns.3.xyz)
+        let turned = acos(min(1, max(-1, simd_dot(-a.columns.2.xyz, -b.columns.2.xyz))))
+        let rolled = acos(min(1, max(-1, simd_dot(a.columns.0.xyz, b.columns.0.xyz))))
+        return moved < 0.015 && turned < 0.014 && rolled < 0.014
+    }
     nonisolated static let sheetDistance: Float = 0.3
 
     /// Starts hiding models behind real things in this camera view, for as long as the view lives.
@@ -186,16 +201,24 @@ final class LiveOccluder {
         let models = placer?.worldPositions ?? []
         let logNow = frame.timestamp - lastLog > 10
         let timestamp = frame.timestamp
+        if !Self.still(depthHistoryPose, pose) {
+            depthHistory = []
+            depthHistoryPose = pose
+        }
+        let history = depthHistory
         Task.detached(priority: .userInitiated) {
             let started = Date()
             let mesh: OccluderMesh?
+            var latest: [Float]?
             if let guide {
                 let clean = OccluderMesh.median3(values, width: width, height: height)
                 let sharp = EdgeDepth.refine(depth: clean, width: width, height: height, guide: guide.values,
                                              guideWidth: guide.width, guideHeight: guide.height)
+                latest = sharp
+                let steady = EdgeDepth.steady(history + [sharp])
                 // The guide covers the whole picture less any odd pixels at the right and bottom.
                 let step = Float(image.width) / Float(guide.width)
-                mesh = OccluderMesh.build(depth: sharp, width: guide.width, height: guide.height, intrinsics: intrinsics, pose: pose,
+                mesh = OccluderMesh.build(depth: steady, width: guide.width, height: guide.height, intrinsics: intrinsics, pose: pose,
                                           imageWidth: Float(guide.width) * step, imageHeight: Float(guide.height) * step, step: 1,
                                           floor: floor, pushBack: 0.08, pushPerMetre: 0.04)
             } else {
@@ -210,6 +233,10 @@ final class LiveOccluder {
                 guard let self else { return }
                 self.building = false
                 guard self.wasOn else { self.clear(); return }
+                if let latest, Self.still(self.depthHistoryPose, pose) {
+                    self.depthHistory.append(latest)
+                    if self.depthHistory.count > Self.historyLength { self.depthHistory.removeFirst() }
+                }
                 if let mesh, let seen = mesh.seenFloor, seen < cameraY - 0.6 {
                     self.seenFloors.append(seen)
                     if self.seenFloors.count > 31 { self.seenFloors.removeFirst() }
@@ -218,7 +245,7 @@ final class LiveOccluder {
                 self.built += 1
                 if timestamp - self.lastLog > 10 {
                     self.lastLog = timestamp
-                    Diagnostics.log("Behind real things: \((mesh?.indices.count ?? 0) / 3) triangles from \(width)x\(height) depth\(guide.map { ", sharpened to \($0.width)x\($0.height)" } ?? ""), \(Int(seconds * 1000)) ms, floor \(floor.map { String(format: "%.2f", $0) } ?? "none"), \(self.built) made\(report)")
+                    Diagnostics.log("Behind real things: \((mesh?.indices.count ?? 0) / 3) triangles from \(width)x\(height) depth, \(history.count + 1) still pictures\(guide.map { ", sharpened to \($0.width)x\($0.height)" } ?? ""), \(Int(seconds * 1000)) ms, floor \(floor.map { String(format: "%.2f", $0) } ?? "none"), \(self.built) made\(report)")
                 }
             }
         }
@@ -402,16 +429,27 @@ final class LiveOccluder {
         let anchors = picks.map(\.anchor)
         let timestamp = frame.timestamp
         let logNow = timestamp - lastPickLog > 10
+        let pose = camera.transform
+        if !Self.still(maskHistoryPose, pose) {
+            maskHistory = []
+            maskHistoryPose = pose
+        }
+        let history = maskHistory
         Task.detached(priority: .userInitiated) {
             let started = Date()
             var geometry: OccluderMesh?
+            var latest: [Bool]?
             var labels = IndexSet()
             if let found = Self.instances(in: image) {
                 for anchor in anchors {
                     if let n = Self.imagePoint(of: anchor, camera: camera), let label = found.label(at: n) { labels.insert(Int(label)) }
                 }
                 if !labels.isEmpty, let mask = try? found.observation.generateScaledMaskForImage(forInstances: labels, from: found.handler) {
-                    geometry = Self.sheet(mask: mask, camera: camera)
+                    if let cells = Self.cells(of: mask) {
+                        latest = cells.inside
+                        let steady = OutlineVote.steady(history + [cells.inside])
+                        geometry = Self.sheet(cells: steady, width: cells.width, height: cells.height, camera: camera)
+                    }
                 }
             }
             let seconds = Date().timeIntervalSince(started)
@@ -420,6 +458,10 @@ final class LiveOccluder {
                 guard let self else { return }
                 self.pickBusy = false
                 guard !self.picks.isEmpty else { self.pickNode.geometry = nil; return }
+                if let latest, Self.still(self.maskHistoryPose, pose) {
+                    self.maskHistory.append(latest)
+                    if self.maskHistory.count > Self.historyLength { self.maskHistory.removeFirst() }
+                }
                 let found = geometry != nil
                 // A picture or two where Vision misses the thing keeps the last outline, so it doesn't blink.
                 if found || timestamp - self.lastPickSeen > 0.5 {
@@ -436,26 +478,35 @@ final class LiveOccluder {
         }
     }
 
-    /// The outline (Vision's mask, at the camera picture's size) as rows of strips on a sheet 30 cm in front of the
-    /// camera, in the camera's own coordinates, every 2 pixels down and to the pixel across.
-    nonisolated private static func sheet(mask: CVPixelBuffer, camera: ARCamera) -> OccluderMesh? {
+    /// Vision's mask (at the camera picture's size) as cells every 2 pixels each way: inside or not.
+    nonisolated private static func cells(of mask: CVPixelBuffer) -> (inside: [Bool], width: Int, height: Int)? {
         CVPixelBufferLockBaseAddress(mask, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(mask, .readOnly) }
         let w = CVPixelBufferGetWidth(mask), h = CVPixelBufferGetHeight(mask), row = CVPixelBufferGetBytesPerRow(mask)
-        guard let base = CVPixelBufferGetBaseAddress(mask), w > 1, h > 1 else { return nil }
+        guard let base = CVPixelBufferGetBaseAddress(mask), w > 3, h > 3 else { return nil }
+        let float = CVPixelBufferGetPixelFormatType(mask) == kCVPixelFormatType_OneComponent32Float
+        let cw = w / 2, ch = h / 2
+        var inside = [Bool](repeating: false, count: cw * ch)
+        for y in 0..<ch {
+            let line = base.advanced(by: (y * 2) * row)
+            for x in 0..<cw {
+                inside[y * cw + x] = float ? line.assumingMemoryBound(to: Float.self)[x * 2] > 0.5 : line.assumingMemoryBound(to: UInt8.self)[x * 2] > 127
+            }
+        }
+        return (inside, cw, ch)
+    }
+
+    /// The outline's cells as rows of strips on a sheet 30 cm in front of the camera, in the camera's own coordinates.
+    nonisolated private static func sheet(cells: [Bool], width: Int, height: Int, camera: ARCamera) -> OccluderMesh? {
         let image = camera.imageResolution
         let k = camera.intrinsics
-        let sx = Float(image.width) / Float(w), sy = Float(image.height) / Float(h)
+        let sx = Float(image.width) / Float(width), sy = Float(image.height) / Float(height)
         let d = sheetDistance
         var mesh = OccluderMesh()
         func vertex(_ u: Float, _ v: Float) {
             mesh.positions.append(contentsOf: [(u * sx - k[2][0]) / k[0][0] * d, -(v * sy - k[2][1]) / k[1][1] * d, -d])
         }
-        let float = CVPixelBufferGetPixelFormatType(mask) == kCVPixelFormatType_OneComponent32Float
-        let strips = OutlineStrips.make(width: w, height: h, stepY: max(1, h / 720)) { x, y in
-            let line = base.advanced(by: y * row)
-            return float ? line.assumingMemoryBound(to: Float.self)[x] > 0.5 : line.assumingMemoryBound(to: UInt8.self)[x] > 127
-        }
+        let strips = OutlineStrips.make(width: width, height: height, stepY: 1) { x, y in cells[y * width + x] }
         for strip in strips {
             let first = UInt32(mesh.positions.count / 3)
             let top = Float(strip.y0), bottom = Float(strip.y1), left = Float(strip.x0), right = Float(strip.x1)

@@ -185,6 +185,31 @@ enum EdgeDepth {
         return out
     }
 
+    /// Phil, 2026-11-20: "reduce the flickering ... assume a continuous edge if the camera is relatively still". While the
+    /// camera holds still the same pixel shows the same thing, so each pixel takes the middle of its last few depths:
+    /// an edge pixel that flips between near and far now and then stays on the side it is on most of the time.
+    /// Readings of 0 (none) count as none; a pixel with readings in fewer than half the pictures has none.
+    static func steady(_ history: [[Float]]) -> [Float] {
+        guard let last = history.last else { return [] }
+        let frames = history.filter { $0.count == last.count }
+        guard frames.count > 1 else { return last }
+        var out = [Float](repeating: 0, count: last.count)
+        var values = [Float](repeating: 0, count: frames.count)
+        for i in 0..<last.count {
+            var n = 0
+            for frame in frames where frame[i] > 0 { values[n] = frame[i]; n += 1 }
+            guard n * 2 >= frames.count, n > 0 else { continue }
+            for a in 1..<max(n, 1) {
+                let v = values[a]
+                var b = a - 1
+                while b >= 0, values[b] > v { values[b + 1] = values[b]; b -= 1 }
+                values[b + 1] = v
+            }
+            out[i] = values[n / 2]
+        }
+        return out
+    }
+
     /// The nearest LiDAR reading for each finer pixel: what the edges looked like before (for the tests to compare).
     static func nearest(depth: [Float], width dw: Int, height dh: Int, guideWidth gw: Int, guideHeight gh: Int) -> [Float] {
         var out = [Float](repeating: 0, count: gw * gh)
@@ -194,6 +219,22 @@ enum EdgeDepth {
                 let i = min(dw - 1, Int((Float(x) + 0.5) * Float(dw) / Float(gw)))
                 out[y * gw + x] = depth[j * dw + i]
             }
+        }
+        return out
+    }
+}
+
+/// Outlines from the last few pictures while the camera holds still: a pixel is inside if it was in most of them.
+enum OutlineVote {
+    static func steady(_ history: [[Bool]]) -> [Bool] {
+        guard let last = history.last else { return [] }
+        let frames = history.filter { $0.count == last.count }
+        guard frames.count > 1 else { return last }
+        var out = [Bool](repeating: false, count: last.count)
+        for i in 0..<last.count {
+            var n = 0
+            for frame in frames where frame[i] { n += 1 }
+            out[i] = n * 2 > frames.count
         }
         return out
     }
