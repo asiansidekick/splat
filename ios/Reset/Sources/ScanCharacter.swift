@@ -370,9 +370,9 @@ final class ScanCharacterMaker: @unchecked Sendable {
             return UIImage(contentsOfFile: url.path) ?? (try? Data(contentsOf: url)).flatMap { UIImage(data: $0) }
         }
         if let path = contents as? String { return UIImage(contentsOfFile: path) }
-        if let texture = contents as? MDLTexture, let cg = texture.imageFromTexture()?.takeUnretainedValue() { return UIImage(cgImage: cg) }
+        if let texture = contents as? MDLTexture, let cg = texture.imageFromTexture()?.takeUnretainedValue() { return copied(cg) }
         let object = contents as AnyObject
-        if CFGetTypeID(object) == CGImage.typeID { return UIImage(cgImage: object as! CGImage) }
+        if CFGetTypeID(object) == CGImage.typeID { return copied(object as! CGImage) }
         return nil
     }
 
@@ -391,10 +391,24 @@ final class ScanCharacterMaker: @unchecked Sendable {
                 guard let property = submesh.material?.property(with: .baseColor), property.type == .texture,
                       let cg = property.textureSamplerValue?.texture?.imageFromTexture()?.takeUnretainedValue()
                 else { continue }
-                return UIImage(cgImage: cg)
+                return copied(cg)
             }
         }
         return nil
+    }
+
+    /// Phil, 2026-11-20: people came out white. ModelIO's picture belongs to its texture, which goes when the file is
+    /// closed, and may be 16-bit or floating point, which JPEG saving refuses. Drawn at once into a plain 8-bit copy
+    /// the app owns.
+    private static func copied(_ cg: CGImage) -> UIImage? {
+        let width = cg.width, height = cg.height
+        guard width > 0, height > 0, let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let made = context.makeImage() else { return nil }
+        Diagnostics.log("Scan person: picture copied from the scan, \(width) x \(height), \(cg.bitsPerComponent) bits")
+        return UIImage(cgImage: made)
     }
 
     // MARK: The front view
