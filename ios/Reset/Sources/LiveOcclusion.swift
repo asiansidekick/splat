@@ -151,13 +151,29 @@ final class LiveOccluder {
         }.min()
         if let low = seenFloors.min(), cameraY < low + 0.2 { seenFloors = [] }
         let floor = planeFloor ?? (seenFloors.count >= 3 ? seenFloors.sorted()[seenFloors.count / 2] : nil)
+        // The camera picture's brightness at about a quarter of its size, to sharpen the edges with (EdgeDepth).
+        let guide = Self.luma(frame.capturedImage, step: max(2, Int(image.width) / 480))
         let models = placer?.worldPositions ?? []
         let logNow = frame.timestamp - lastLog > 10
         let timestamp = frame.timestamp
         Task.detached(priority: .userInitiated) {
-            let mesh = OccluderMesh.build(depth: values, width: width, height: height, intrinsics: intrinsics, pose: pose,
+            let started = Date()
+            let mesh: OccluderMesh?
+            if let guide {
+                let clean = OccluderMesh.median3(values, width: width, height: height)
+                let sharp = EdgeDepth.refine(depth: clean, width: width, height: height, guide: guide.values,
+                                             guideWidth: guide.width, guideHeight: guide.height)
+                // The guide covers the whole picture less any odd pixels at the right and bottom.
+                let step = Float(image.width) / Float(guide.width)
+                mesh = OccluderMesh.build(depth: sharp, width: guide.width, height: guide.height, intrinsics: intrinsics, pose: pose,
+                                          imageWidth: Float(guide.width) * step, imageHeight: Float(guide.height) * step, step: 1,
+                                          floor: floor, pushBack: 0.08, pushPerMetre: 0.04)
+            } else {
+                mesh = OccluderMesh.build(depth: values, width: width, height: height, intrinsics: intrinsics, pose: pose,
                                           imageWidth: Float(image.width), imageHeight: Float(image.height), step: 1, floor: floor,
                                           pushBack: 0.08, pushPerMetre: 0.04, denoise: true)
+            }
+            let seconds = Date().timeIntervalSince(started)
             let report = logNow ? Self.report(models, depth: values, width: width, height: height, intrinsics: intrinsics,
                                                      pose: pose, image: image) : ""
             await MainActor.run { [weak self] in
@@ -172,7 +188,7 @@ final class LiveOccluder {
                 self.built += 1
                 if timestamp - self.lastLog > 10 {
                     self.lastLog = timestamp
-                    Diagnostics.log("Behind real things: \((mesh?.indices.count ?? 0) / 3) triangles from \(width)x\(height) depth, floor \(floor.map { String(format: "%.2f", $0) } ?? "none"), \(self.built) made\(report)")
+                    Diagnostics.log("Behind real things: \((mesh?.indices.count ?? 0) / 3) triangles from \(width)x\(height) depth\(guide.map { ", sharpened to \($0.width)x\($0.height)" } ?? ""), \(Int(seconds * 1000)) ms, floor \(floor.map { String(format: "%.2f", $0) } ?? "none"), \(self.built) made\(report)")
                 }
             }
         }
@@ -197,5 +213,27 @@ final class LiveOccluder {
                                 real > 0.12 && real + 0.1 < distance ? " (hidden: it stands behind it)" : ""))
         }
         return parts.isEmpty ? "" : "; " + parts.joined(separator: "; ")
+    }
+
+    /// The brightness of a camera picture, `step` times smaller each way (each value the average of a 2 by 2 patch).
+    nonisolated static func luma(_ buffer: CVPixelBuffer, step: Int) -> (values: [UInt8], width: Int, height: Int)? {
+        guard step >= 2, CVPixelBufferGetPlaneCount(buffer) >= 1 else { return nil }
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return nil }
+        let w = CVPixelBufferGetWidthOfPlane(buffer, 0), h = CVPixelBufferGetHeightOfPlane(buffer, 0)
+        let row = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+        let ow = w / step, oh = h / step
+        guard ow > 8, oh > 8 else { return nil }
+        let pixels = base.assumingMemoryBound(to: UInt8.self)
+        var out = [UInt8](repeating: 0, count: ow * oh)
+        for y in 0..<oh {
+            let a = pixels + y * step * row, b = a + row
+            for x in 0..<ow {
+                let i = x * step
+                out[y * ow + x] = UInt8((Int(a[i]) + Int(a[i + 1]) + Int(b[i]) + Int(b[i + 1])) / 4)
+            }
+        }
+        return (out, ow, oh)
     }
 }

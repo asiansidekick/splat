@@ -245,5 +245,65 @@ do {
     }
 }
 
+// EdgeDepth: LiDAR-sized depth sharpened with the camera picture. A dark box 1.5 m away in front of a light wall
+// 3 m away, its edges between pixels of both pictures; slight noise in the picture, as a camera has.
+do {
+    let dw = 256, dh = 192, gw = 480, gh = 360
+    let left: Float = 173.3, right: Float = 301.7, top: Float = 100.2, bottom: Float = 250.6  // in guide pixels
+    func inBox(_ x: Float, _ y: Float) -> Bool { x >= left && x < right && y >= top && y < bottom }
+    var rng = Rng(s: 7)
+    func picture(box: UInt8, wall: UInt8) -> [UInt8] {
+        var g = [UInt8](repeating: 0, count: gw * gh)
+        for y in 0..<gh { for x in 0..<gw {
+            let base = inBox(Float(x) + 0.5, Float(y) + 0.5) ? Float(box) : Float(wall)
+            g[y * gw + x] = UInt8(max(0, min(255, base + rng.range(-6, 6))))
+        } }
+        return g
+    }
+    // LiDAR reads the depth at the middle of each of its pixels.
+    var depth = [Float](repeating: 0, count: dw * dh)
+    for j in 0..<dh { for i in 0..<dw {
+        let x = (Float(i) + 0.5) * Float(gw) / Float(dw), y = (Float(j) + 0.5) * Float(gh) / Float(dh)
+        depth[j * dw + i] = inBox(x, y) ? 1.5 : 3
+    } }
+    func wrong(_ out: [Float]) -> Int {
+        var n = 0
+        for y in 0..<gh { for x in 0..<gw {
+            let truth: Float = inBox(Float(x) + 0.5, Float(y) + 0.5) ? 1.5 : 3
+            if abs(out[y * gw + x] - truth) > 0.2 { n += 1 }
+        } }
+        return n
+    }
+    let guide = picture(box: 60, wall: 200)
+    let started = Date()
+    let sharp = EdgeDepth.refine(depth: depth, width: dw, height: dh, guide: guide, guideWidth: gw, guideHeight: gh)
+    let took = Date().timeIntervalSince(started)
+    let blocky = EdgeDepth.nearest(depth: depth, width: dw, height: dh, guideWidth: gw, guideHeight: gh)
+    let sharpWrong = wrong(sharp), blockyWrong = wrong(blocky)
+    print(String(format: "edges: %d pixels on the wrong side sharpened, %d before, %.0f ms", sharpWrong, blockyWrong, took * 1000))
+    check(blockyWrong > 0, "edges: the LiDAR-sized edge is off (\(blockyWrong) pixels)")
+    check(sharpWrong * 10 <= blockyWrong, "edges: sharpening puts at least 90% of those pixels right (\(sharpWrong) left)")
+    // Along the middle row the edge lands on the box's real edge, within a pixel.
+    let row = 175
+    let firstNear = (0..<gw).first { sharp[row * gw + $0] < 2.2 } ?? -1
+    let lastNear = (0..<gw).last { sharp[row * gw + $0] < 2.2 } ?? -1
+    check(abs(Float(firstNear) + 0.5 - left) <= 1 && abs(Float(lastNear) + 0.5 - right) <= 1.5,
+          "edges: the box's sides land within a pixel (\(firstNear)...\(lastNear), truth \(left)...\(right))")
+    let column = 240
+    let topNear = (0..<gh).first { sharp[$0 * gw + column] < 2.2 } ?? -1
+    check(abs(Float(topNear) + 0.5 - top) <= 1, "edges: the box's top lands within a pixel (\(topNear), truth \(top))")
+    check(!sharp.contains { $0 > 1.7 && $0 < 2.8 }, "edges: no depth halfway between the box and the wall")
+    // Box and wall the same brightness: nothing to follow, so no worse than before.
+    let flat = picture(box: 128, wall: 128)
+    let flatWrong = wrong(EdgeDepth.refine(depth: depth, width: dw, height: dh, guide: flat, guideWidth: gw, guideHeight: gh))
+    check(Double(flatWrong) <= Double(blockyWrong) * 1.3, "edges: a picture with no edge to follow is no worse (\(flatWrong) vs \(blockyWrong))")
+    // A missing reading in the box is filled from its neighbours.
+    var holed = depth
+    holed[80 * dw + 100] = 0
+    let filled = EdgeDepth.refine(depth: holed, width: dw, height: dh, guide: guide, guideWidth: gw, guideHeight: gh)
+    check(abs(filled[(80 * gh / dh) * gw + 100 * gw / dw] - 1.5) < 0.01, "edges: a missing reading is filled from its neighbours")
+    check(took < 1.5, "edges: fast enough (\(Int(took * 1000)) ms on the test Mac)")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

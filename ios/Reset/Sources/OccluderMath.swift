@@ -113,3 +113,88 @@ struct OccluderMesh: Sendable {
         return out
     }
 }
+
+/// Phil, 2026-11-20: "Edges and perspective are key to this app". LiDAR depth is 256 by 192 for the whole view, so an
+/// edge made from it alone is blocky and wanders by about 10 screen pixels. The camera picture is much sharper: each
+/// finer pixel takes its depth from the nearby LiDAR readings whose brightness in the picture matches its own (joint
+/// bilateral upsampling, Kopf et al. 2007), and never a blend of a near and a far thing, so the edge of a pillar
+/// follows the pillar's outline in the picture. Pure maths, so CI can test it (CropTests).
+enum EdgeDepth {
+    /// `depth` is `dw` by `dh` metres (0 = no reading); `guide` the camera picture's brightness, `gw` by `gh`, covering
+    /// the same view. Returns depth at the guide's size.
+    static func refine(depth: [Float], width dw: Int, height dh: Int, guide: [UInt8], guideWidth gw: Int, guideHeight gh: Int,
+                       lumaSpread: Float = 14) -> [Float] {
+        guard dw > 1, dh > 1, gw > 1, gh > 1, depth.count >= dw * dh, guide.count >= gw * gh else { return [] }
+        // The brightness of the picture where each LiDAR reading is (the average over its patch of the picture).
+        var lumaAt = [Float](repeating: 0, count: dw * dh)
+        let sx = Float(gw) / Float(dw), sy = Float(gh) / Float(dh)
+        for j in 0..<dh {
+            let y0 = Int(Float(j) * sy), y1 = max(y0 + 1, min(gh, Int(Float(j + 1) * sy)))
+            for i in 0..<dw {
+                let x0 = Int(Float(i) * sx), x1 = max(x0 + 1, min(gw, Int(Float(i + 1) * sx)))
+                var sum = 0, n = 0
+                for y in y0..<y1 { for x in x0..<x1 { sum += Int(guide[y * gw + x]); n += 1 } }
+                lumaAt[j * dw + i] = Float(sum) / Float(max(n, 1))
+            }
+        }
+        var rangeWeight = [Float](repeating: 0, count: 256)
+        for k in 0..<256 { rangeWeight[k] = exp(-Float(k * k) / (2 * lumaSpread * lumaSpread)) + 0.0005 }
+        var out = [Float](repeating: 0, count: gw * gh)
+        var ds = [Float](repeating: 0, count: 16), ws = [Float](repeating: 0, count: 16)
+        for y in 0..<gh {
+            let fy = (Float(y) + 0.5) / sy - 0.5
+            let jy = Int(fy.rounded(.down))
+            for x in 0..<gw {
+                let fx = (Float(x) + 0.5) / sx - 0.5
+                let ix = Int(fx.rounded(.down))
+                let luma = Int(guide[y * gw + x])
+                var n = 0
+                for j in (jy - 1)...(jy + 2) where j >= 0 && j < dh {
+                    let dyy = Float(j) - fy
+                    for i in (ix - 1)...(ix + 2) where i >= 0 && i < dw {
+                        let d = depth[j * dw + i]
+                        guard d.isFinite, d > 0 else { continue }
+                        let dxx = Float(i) - fx
+                        let spatial = max(0, 1 - (dxx * dxx + dyy * dyy) / 6.25)
+                        let difference = min(255, abs(luma - Int(lumaAt[j * dw + i])))
+                        ds[n] = d
+                        ws[n] = spatial * rangeWeight[difference]
+                        n += 1
+                    }
+                }
+                guard n > 0 else { continue }
+                // Sort by depth, then split at the biggest jump (a near and a far thing): the side that matches best wins.
+                for a in 1..<n {
+                    let d = ds[a], w = ws[a]
+                    var b = a - 1
+                    while b >= 0, ds[b] > d { ds[b + 1] = ds[b]; ws[b + 1] = ws[b]; b -= 1 }
+                    ds[b + 1] = d; ws[b + 1] = w
+                }
+                var split = n, gap: Float = 0
+                for a in 1..<n {
+                    let jump = ds[a] - ds[a - 1]
+                    if jump > 0.05 + 0.05 * ds[a - 1], jump > gap { gap = jump; split = a }
+                }
+                var nearW: Float = 0, nearD: Float = 0, farW: Float = 0, farD: Float = 0
+                for a in 0..<n {
+                    if a < split { nearW += ws[a]; nearD += ws[a] * ds[a] } else { farW += ws[a]; farD += ws[a] * ds[a] }
+                }
+                if nearW >= farW { if nearW > 0 { out[y * gw + x] = nearD / nearW } } else { out[y * gw + x] = farD / farW }
+            }
+        }
+        return out
+    }
+
+    /// The nearest LiDAR reading for each finer pixel: what the edges looked like before (for the tests to compare).
+    static func nearest(depth: [Float], width dw: Int, height dh: Int, guideWidth gw: Int, guideHeight gh: Int) -> [Float] {
+        var out = [Float](repeating: 0, count: gw * gh)
+        for y in 0..<gh {
+            let j = min(dh - 1, Int((Float(y) + 0.5) * Float(dh) / Float(gh)))
+            for x in 0..<gw {
+                let i = min(dw - 1, Int((Float(x) + 0.5) * Float(dw) / Float(gw)))
+                out[y * gw + x] = depth[j * dw + i]
+            }
+        }
+        return out
+    }
+}
