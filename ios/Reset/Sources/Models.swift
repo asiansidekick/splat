@@ -2005,66 +2005,15 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 }
 
 /// Over the camera: the selected model's controls, and any error adding models.
+/// What shows over the picture while models are out: the find button, and for a picked model the finger picture
+/// and the pose bar in the middle of the bottom. The model's tools themselves stand round the edges (ModelEdgeTools).
 struct ModelOverlay: View {
     @ObservedObject var placer: ModelPlacer
-    /// Off in Review, where there is no live LiDAR to find the floor with.
-    var showsFloor = true
-    /// Opens the add menu. On its side the 3D models button gives its corner to these tools, so the way to add
-    /// another model is the first of them (Phil, 2026-11-11: could not add cut-outs in landscape).
-    var onAdd: (() -> Void)? = nil
-    @Environment(\.verticalSizeClass) private var verticalSize
     @State private var showsCutoutHelp = true
-    @State private var posing = false
     @State private var showsPoses = false
     @State private var savingPose = false
     @State private var showsHands = false
     @State private var poseName = ""
-
-    private static func symbol(_ job: ModelPlacer.CutoutJob) -> String {
-        switch job {
-        case .move: return "arrow.up.and.down.and.arrow.left.and.right"
-        case .turn: return "arrow.triangle.2.circlepath"
-        case .size: return "arrow.up.left.and.arrow.down.right"
-        case .tilt: return "rotate.3d"
-        case .lift: return "arrow.up.and.down"
-        case .pose: return "figure.arms.open"
-        }
-    }
-
-    /// The tools for the model itself: bring it here, pin its distance, stand it, size it.
-    @ViewBuilder private func modelTools(cutout: Bool) -> some View {
-        CutoutTool(word: "Place here", symbol: "scope") { placer.bringToView() }
-        // Sets its true distance from two views, so it stays put as the camera moves. Live camera only.
-        if showsFloor {
-            let isPinned = placer.selectedModel.map { placer.pinned.contains($0) } ?? false
-            CutoutTool(word: isPinned ? "Pinned" : "Pin", symbol: "pin", tint: isPinned ? .white : Theme.accent, on: placer.pinStep != nil) { placer.startPin() }
-            if placer.onPickInFront != nil {
-                CutoutTool(word: placer.inFrontCount > 0 ? "In front \(placer.inFrontCount)" : "In front", symbol: "square.3.layers.3d.top.filled",
-                           on: placer.pickingInFront) { placer.pickingInFront.toggle() }
-                if let id = placer.selectedModel, placer.inFrontCount > 0 {
-                    let layer = placer.layer(of: id)
-                    if layer > 0 { CutoutTool(word: "Bring forward", symbol: "square.2.layers.3d.top.filled") { placer.moveSelectedLayer(by: -1) } }
-                    if layer < placer.inFrontCount { CutoutTool(word: "Push back", symbol: "square.2.layers.3d.bottom.filled") { placer.moveSelectedLayer(by: 1) } }
-                }
-            }
-        }
-        if cutout {
-            CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }
-        } else {
-            CutoutTool(word: "True size", symbol: "1.square") { placer.resetSelectedModelSize() }
-            if placer.selectedTilted { CutoutTool(word: "Upright", symbol: "arrow.up.to.line", tint: Theme.accent) { placer.makeUpright() } }
-        }
-    }
-
-    /// The tools for the list of models: add another, show sizes, delete, finish.
-    @ViewBuilder private func listTools(onAdd: (() -> Void)?) -> some View {
-        if let onAdd {
-            CutoutTool(word: "Add", symbol: "plus", tint: Theme.accent, action: onAdd)
-        }
-        CutoutTool(word: placer.showDimensions ? "Sizes " + ModelDimensions.textStepNames[min(max(placer.dimensionStep, 0), 3)] : "Sizes", symbol: "ruler") { placer.cycleDimensions() }
-        CutoutTool(word: "Delete", symbol: "trash", tint: .red) { placer.deleteSelectedModel() }
-        CutoutTool(word: "Done", symbol: "checkmark") { placer.selectedModel = nil }
-    }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -2088,80 +2037,23 @@ struct ModelOverlay: View {
                     .background(.ultraThinMaterial, in: Capsule())
             }
             else if placer.selectedModelName != nil {
-                // Phil, 2026-11-08: the cut-out controls covered too much of the middle of the picture. One slim row
-                // along the bottom, a small picture with its word under it (the words stay whole), no panel; the
-                // help line shows for a few seconds when a model is picked, then goes.
-                // Phil, 2026-11-09: gestures were not intuitive. Pick one job and one finger does only that; hold the object
-                // and walk to take it along. Phil, 2026-11-10: the same for USDZ and every other model, with Lift
-                // in place of Tilt (only a flat cut-out tips).
-                // Phil, 2026-11-10: tools pushed to the screen's edges, jobs down the left and actions down the right,
-                // so the middle stays clear; the help is a small picture of the finger's move, not a sentence.
+                // Phil, 2026-11-10: the help is a small picture of the finger's move, not a sentence, and it goes after a few seconds.
                 let cutout = placer.selectedIsCutout
-                HStack(alignment: .bottom, spacing: 0) {
-                    // Phil, 2026-11-19: on its side the model-jobs column ran up into the top bar, so it stands in two shorter ones.
-                    HStack(alignment: .bottom, spacing: 0) {
-                        VStack(spacing: 0) {
-                            // Phil, 2026-11-11: Lift for cut-outs too. 2026-11-17: Tilt for every model ("rotate any object"): tip and lean.
-                            ForEach(ModelPlacer.CutoutJob.allCases.filter { $0 != .pose }, id: \.self) { job in
-                                CutoutTool(word: job == .tilt && !cutout ? "Rotate" : job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
-                            }
-                            if verticalSize != .compact { leftExtras(cutout: cutout) }
-                        }
-                        .fixedSize(horizontal: true, vertical: false)
-                        if verticalSize == .compact {
-                            VStack(spacing: 0) { leftExtras(cutout: cutout) }
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                    }
-                    // Phil's 1275 screenshot: "Place here" and "Straighten" ran off the screen's edge. The columns keep
-                    // the width of their longest word whatever sits between them.
-                    .layoutPriority(1)
-                    Spacer(minLength: 0)
-                    if showsCutoutHelp || placer.carrying || placer.pinStep != nil || placer.pickingInFront || (placer.cutoutJob == .pose && placer.selectedHasRig) {
-                        VStack(spacing: 4) {
-                            if placer.cutoutJob == .pose, placer.selectedHasRig { poseBar }
-                            if showsCutoutHelp || placer.carrying || placer.pinStep != nil || placer.pickingInFront {
-                                MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText, pin: placer.pinStep, cutout: cutout,
-                                         picking: placer.pickingInFront)
-                                    .transition(.opacity)
-                            }
-                        }
-                    }
-                    Spacer(minLength: 0)
-                    // Phil, 2026-11-17: eight tools in one column ran up into the top row. On its side they stand in two
-                    // short columns instead (the first column's tools about the model, the second's about the list).
-                    if verticalSize == .compact {
-                        // Phil, 2026-11-19: these two stand higher, toward the top right.
-                        HStack(alignment: .bottom, spacing: 0) {
-                            VStack(spacing: 0) { modelTools(cutout: cutout) }
-                                .fixedSize(horizontal: true, vertical: false)
-                            VStack(spacing: 0) { listTools(onAdd: onAdd) }
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                        .frame(maxHeight: .infinity, alignment: .top)
-                        .padding(.top, 76)
-                        .layoutPriority(1)
-                    } else {
-                        VStack(spacing: 0) {
-                            modelTools(cutout: cutout)
-                            listTools(onAdd: nil)
-                        }
-                        .fixedSize(horizontal: true, vertical: false)
-                        .layoutPriority(1)
+                VStack(spacing: 4) {
+                    if placer.cutoutJob == .pose, placer.selectedHasRig { poseBar }
+                    if showsCutoutHelp || placer.carrying || placer.pinStep != nil || placer.pickingInFront {
+                        MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText, pin: placer.pinStep, cutout: cutout,
+                                 picking: placer.pickingInFront)
+                            .transition(.opacity)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, minHeight: 42, alignment: .bottom)
                 .overlay(alignment: .center) { ObjectNudge(placer: placer).offset(y: -110) }
                 .task(id: "\(placer.selectedModel?.uuidString ?? "")-\(placer.cutoutJob.rawValue)") {
                     withAnimation { showsCutoutHelp = true }
                     try? await Task.sleep(for: .seconds(4))
                     withAnimation { showsCutoutHelp = false }
                 }
-            }
-        }
-        .fullScreenCover(isPresented: $posing) {
-            if let id = placer.selectedModel, let spec = placer.selectedPoseSpec {
-                MannequinPoseEditor(spec: spec) { placer.repose(id, as: $0) }
             }
         }
         .sheet(isPresented: $showsHands) { HandsSheet { placer.setFingers($0, $1) } }
@@ -2183,25 +2075,6 @@ struct ModelOverlay: View {
         }
     }
 
-    /// Carry, Floor and Pose: the rest of the model-jobs column.
-    @ViewBuilder private func leftExtras(cutout: Bool) -> some View {
-        // Carry walks it along with the live camera, so not over a saved frame (Review).
-        if showsFloor {
-            CutoutTool(word: placer.carrying ? "Carrying" : "Carry", symbol: "figure.walk", on: placer.carrying) {}
-                .simultaneousGesture(DragGesture(minimumDistance: 0)
-                    .onChanged { _ in placer.startCarrying() }
-                    .onEnded { _ in placer.stopCarrying() })
-        }
-        // Phil, 2026-11-18: the right column ran long, so Floor stands here under Carry.
-        if showsFloor, !cutout { CutoutTool(word: "Floor", symbol: "arrow.down.to.line") { placer.dropToFloor() } }
-        if placer.selectedHasRig {
-            // Phil, 2026-11-18: pose it right in the live view, by its joints.
-            CutoutTool(word: "Pose", symbol: "figure.arms.open", on: placer.cutoutJob == .pose) { placer.cutoutJob = .pose }
-        } else if placer.selectedPoseSpec != nil {
-            CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
-        }
-    }
-
     /// Phil, 2026-11-19 (Magic Poser): undo, redo, flip left and right, and back to the file's pose.
     @ViewBuilder private var poseBar: some View {
         HStack(spacing: 0) {
@@ -2217,6 +2090,136 @@ struct ModelOverlay: View {
             if placer.selectedHasFingers { CutoutTool(word: "Hands", symbol: "hand.raised") { showsHands = true } }
         }
         .fixedSize()
+    }
+}
+
+/// The picked model's tools, round the edges of the picture so the middle stays clear (Phil, 2026-11-20: "fill more
+/// of the edge of the screen and not obscure as much of the centre as possible ... open to the UI being a ring").
+/// The jobs run down the left edge and the actions down the right; when a side is too short for its tools, the rest
+/// turn the corner and carry on along the bottom toward the middle, which stays free for the finger picture.
+/// Lay it over the whole picture (same insets as the other overlays): it fills the space and lets taps through
+/// everywhere but on its buttons.
+struct ModelEdgeTools: View {
+    @ObservedObject var placer: ModelPlacer
+    /// Off in Review, where there is no live LiDAR to find the floor with.
+    var showsFloor = true
+    /// Opens the add menu, where the screen's own add button gives way to these tools.
+    var onAdd: (() -> Void)? = nil
+    /// Room left free at the top of the sides, upright, for the instruction line and the Storyboard bar.
+    var uprightTop: CGFloat = 90
+    /// The same on its side, where the top row is shorter.
+    var sidewaysTop: CGFloat = 0
+    @Environment(\.verticalSizeClass) private var verticalSize
+    @State private var posing = false
+
+    private static func symbol(_ job: ModelPlacer.CutoutJob) -> String {
+        switch job {
+        case .move: return "arrow.up.and.down.and.arrow.left.and.right"
+        case .turn: return "arrow.triangle.2.circlepath"
+        case .size: return "arrow.up.left.and.arrow.down.right"
+        case .tilt: return "rotate.3d"
+        case .lift: return "arrow.up.and.down"
+        case .pose: return "figure.arms.open"
+        }
+    }
+
+    var body: some View {
+        if placer.selectedModelName != nil {
+            let cutout = placer.selectedIsCutout
+            let top = verticalSize == .compact ? sidewaysTop : uprightTop
+            // The middle of the bottom edge stays free for the finger picture and the pose bar (about 240 points).
+            HStack(spacing: 0) {
+                EdgeColumn(leading: true, top: top, middle: 124) { jobTools(cutout: cutout) }
+                EdgeColumn(leading: false, top: top, middle: 124) { actionTools(cutout: cutout) }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .fullScreenCover(isPresented: $posing) {
+                if let id = placer.selectedModel, let spec = placer.selectedPoseSpec {
+                    MannequinPoseEditor(spec: spec) { placer.repose(id, as: $0) }
+                }
+            }
+        }
+    }
+
+    /// Down the left edge: what one finger does to the model (pick one), then Carry, Floor and Pose.
+    @ViewBuilder private func jobTools(cutout: Bool) -> some View {
+        // Phil, 2026-11-11: Lift for cut-outs too. 2026-11-17: Tilt for every model ("rotate any object"): tip and lean.
+        ForEach(ModelPlacer.CutoutJob.allCases.filter { $0 != .pose }, id: \.self) { job in
+            CutoutTool(word: job == .tilt && !cutout ? "Rotate" : job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
+        }
+        // Carry walks it along with the live camera, so not over a saved frame (Review).
+        if showsFloor {
+            CutoutTool(word: placer.carrying ? "Carrying" : "Carry", symbol: "figure.walk", on: placer.carrying) {}
+                .simultaneousGesture(DragGesture(minimumDistance: 0)
+                    .onChanged { _ in placer.startCarrying() }
+                    .onEnded { _ in placer.stopCarrying() })
+        }
+        if showsFloor, !cutout { CutoutTool(word: "Floor", symbol: "arrow.down.to.line") { placer.dropToFloor() } }
+        if placer.selectedHasRig {
+            // Phil, 2026-11-18: pose it right in the live view, by its joints.
+            CutoutTool(word: "Pose", symbol: "figure.arms.open", on: placer.cutoutJob == .pose) { placer.cutoutJob = .pose }
+        } else if placer.selectedPoseSpec != nil {
+            CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
+        }
+    }
+
+    /// Down the right edge: add another, bring it here, pin it, stand it, size it, show sizes, finish, delete.
+    /// Delete comes last, so it is the one furthest from the others when the column turns the corner.
+    @ViewBuilder private func actionTools(cutout: Bool) -> some View {
+        if let onAdd {
+            CutoutTool(word: "Add", symbol: "plus", tint: Theme.accent, action: onAdd)
+        }
+        CutoutTool(word: "Place here", symbol: "scope") { placer.bringToView() }
+        // Sets its true distance from two views, so it stays put as the camera moves. Live camera only.
+        if showsFloor {
+            let isPinned = placer.selectedModel.map { placer.pinned.contains($0) } ?? false
+            CutoutTool(word: isPinned ? "Pinned" : "Pin", symbol: "pin", tint: isPinned ? .white : Theme.accent, on: placer.pinStep != nil) { placer.startPin() }
+            if placer.onPickInFront != nil {
+                CutoutTool(word: placer.inFrontCount > 0 ? "In front \(placer.inFrontCount)" : "In front", symbol: "square.3.layers.3d.top.filled",
+                           on: placer.pickingInFront) { placer.pickingInFront.toggle() }
+                if let id = placer.selectedModel, placer.inFrontCount > 0 {
+                    let layer = placer.layer(of: id)
+                    if layer > 0 { CutoutTool(word: "Bring forward", symbol: "square.2.layers.3d.top.filled") { placer.moveSelectedLayer(by: -1) } }
+                    if layer < placer.inFrontCount { CutoutTool(word: "Push back", symbol: "square.2.layers.3d.bottom.filled") { placer.moveSelectedLayer(by: 1) } }
+                }
+            }
+        }
+        if cutout {
+            CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }
+        } else {
+            CutoutTool(word: "True size", symbol: "1.square") { placer.resetSelectedModelSize() }
+            if placer.selectedTilted { CutoutTool(word: "Upright", symbol: "arrow.up.to.line", tint: Theme.accent) { placer.makeUpright() } }
+        }
+        CutoutTool(word: placer.showDimensions ? "Sizes " + ModelDimensions.textStepNames[min(max(placer.dimensionStep, 0), 3)] : "Sizes", symbol: "ruler") { placer.cycleDimensions() }
+        CutoutTool(word: "Done", symbol: "checkmark") { placer.selectedModel = nil }
+        CutoutTool(word: "Delete", symbol: "trash", tint: .red) { placer.deleteSelectedModel() }
+    }
+}
+
+/// Tools down one side of the picture, spread out along it from the bottom corner up, a little apart so they are
+/// easy to hit. Those that do not fit on the side turn the corner and carry on along the bottom toward the middle,
+/// stopping `middle` points short of it. Each tool keeps its own width, so no word is ever cut short.
+struct EdgeColumn: Layout {
+    /// The left side (otherwise the right).
+    var leading: Bool
+    /// Room left free at the top of the side.
+    var top: CGFloat = 0
+    /// Room left free along the bottom at the inner edge (the middle of the screen).
+    var middle: CGFloat = 0
+    /// The most room between two tools.
+    var maxGap: CGFloat = 18
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 200, height: 400))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let points = EdgeLayoutMath.places(sizes: sizes, width: bounds.width, height: bounds.height, leading: leading, top: top, middle: middle, maxGap: maxGap)
+        for (index, subview) in subviews.enumerated() where index < points.count {
+            let point = points[index]
+            subview.place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), anchor: .center, proposal: ProposedViewSize(sizes[index]))
+        }
     }
 }
 
@@ -2255,8 +2258,12 @@ private struct MoveHint: View {
                 Image(systemName: parts.arrow).font(.system(size: 16, weight: .bold))
             }
             .font(.system(size: 22, weight: .semibold))
+            // Phil, 2026-11-20: the middle stays clear, so the help wraps into a narrow block rather than one wide line.
             Text(parts.words).font(.system(size: 12, weight: .semibold))
-            if pin == nil, !picking, let size, !size.isEmpty { Text(size).font(.system(size: 11, weight: .semibold).monospacedDigit()) }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 200)
+                .fixedSize(horizontal: false, vertical: true)
+            if pin == nil, let size, !size.isEmpty { Text(size).font(.system(size: 11, weight: .semibold).monospacedDigit()) }
         }
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.85), radius: 2, y: 1)

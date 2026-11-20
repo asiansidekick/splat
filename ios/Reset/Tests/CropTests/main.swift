@@ -1,5 +1,6 @@
 import Foundation
 import simd
+import CoreGraphics
 
 // Synthetic scans for CropMath: a floor patch with an object on it, clutter, and noise.
 var failures = 0
@@ -385,6 +386,54 @@ do {
     check(!HeldOutline.agrees(half, with: cells), "held: half the thing is not taken (the held outline stays)")
     check(!HeldOutline.agrees(shifted, with: cells), "held: something else is not taken")
     check(!HeldOutline.agrees([Bool](repeating: false, count: 20 * 16), with: cells), "held: an empty picture is not taken")
+}
+
+// The picked model's tools round the edges (EdgeLayoutMath): on the screen, apart, clear of the middle.
+do {
+    func tools(_ words: [CGFloat]) -> [CGSize] { words.map { CGSize(width: max(58, $0), height: 42) } }
+    // Left: Move Turn Size Rotate Lift Carry Floor Pose. Right: Add, Place here, Pin, In front, True size, Upright, Sizes, Done, Delete.
+    let left = tools([58, 58, 58, 58, 58, 58, 58, 58])
+    let right = tools([58, 62, 58, 62, 58, 58, 58, 58, 58])
+    // iPhone 14 Pro: upright, on its side in the live view, on its side on the Reset screen (more room kept at the top),
+    // iPhone SE on its side, iPad.
+    let screens: [(name: String, width: CGFloat, height: CGFloat, top: CGFloat)] = [
+        ("14 Pro upright", 377, 591, 90), ("14 Pro sideways", 677, 312, 0), ("14 Pro sideways Reset", 677, 312, 40),
+        ("SE sideways", 551, 315, 0), ("iPad", 818, 1050, 90),
+    ]
+    for screen in screens {
+        let half = screen.width / 2
+        var rects: [CGRect] = []
+        // The Reset screen has no Add among them (its own add button waits until Done).
+        for (leading, sizes) in [(true, left), (false, screen.top == 40 ? Array(right.dropFirst()) : right)] {
+            let points = EdgeLayoutMath.places(sizes: sizes, width: half, height: screen.height, leading: leading, top: screen.top, middle: 124, maxGap: 18)
+            check(points.count == sizes.count, "edge tools \(screen.name): every tool has a place")
+            for (point, size) in zip(points, sizes) {
+                let x = leading ? point.x : point.x + half
+                rects.append(CGRect(x: x - size.width / 2, y: point.y - size.height / 2, width: size.width, height: size.height))
+            }
+        }
+        let bounds = CGRect(x: 0, y: 0, width: screen.width, height: screen.height)
+        check(rects.allSatisfy { bounds.insetBy(dx: -0.5, dy: -0.5).contains($0) }, "edge tools \(screen.name): all on the screen")
+        var overlaps = 0
+        for i in rects.indices { for j in rects.indices where j > i && rects[i].insetBy(dx: 0.5, dy: 0.5).intersects(rects[j]) { overlaps += 1 } }
+        check(overlaps == 0, "edge tools \(screen.name): no two overlap (\(overlaps))")
+        check(rects.allSatisfy { $0.minY >= screen.top - 0.5 }, "edge tools \(screen.name): the top stays free")
+        // Every tool stands against an edge: the left, the right or the bottom (narrower ones centred in their column).
+        let onEdge = rects.allSatisfy { $0.minX < 10 || $0.maxX > screen.width - 10 || $0.maxY > screen.height - 1 }
+        check(onEdge, "edge tools \(screen.name): every tool is against an edge")
+        // The middle of the picture (its middle third each way) is clear.
+        let centre = CGRect(x: screen.width / 3, y: screen.height / 3, width: screen.width / 3, height: screen.height / 3)
+        check(!rects.contains { $0.intersects(centre) }, "edge tools \(screen.name): the middle is clear")
+        if screen.name != "SE sideways" {
+            let gap = CGRect(x: half - 100, y: screen.height - 42, width: 200, height: 42)
+            check(!rects.contains { $0.intersects(gap) }, "edge tools \(screen.name): the finger picture's place at the bottom is clear")
+        }
+    }
+    // Upright the sides hold everything, spread out over most of their height.
+    let upright = EdgeLayoutMath.places(sizes: left, width: 188, height: 591, leading: true, top: 90, middle: 124, maxGap: 18)
+    check(Set(upright.map(\.x)).count == 1, "edge tools upright: one column")
+    check((upright.last!.y - upright.first!.y) > 400, "edge tools upright: spread along the edge (\(Int(upright.last!.y - upright.first!.y)) points)")
+    check(EdgeLayoutMath.places(sizes: [], width: 100, height: 100, leading: true, top: 0, middle: 0, maxGap: 18).isEmpty, "edge tools: none is fine")
 }
 
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
