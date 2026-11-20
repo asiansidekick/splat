@@ -118,6 +118,8 @@ struct AssetGallery: View {
     @State private var version = 0
     @State private var renaming: Asset?
     @State private var newName = ""
+    /// Phil, 2026-11-20: a scanned head going on an imported character.
+    @State private var puttingHead: String?
 
     private enum Asset: Identifiable {
         case scan(ScanFolder)
@@ -253,6 +255,15 @@ struct AssetGallery: View {
                 if placeNow { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { place(.model(made)) } }
             }
         }
+        .overlay {
+            if let puttingHead {
+                VStack(spacing: 10) {
+                    ProgressView().tint(.white)
+                    Text(puttingHead).font(Theme.subheadline.weight(.semibold)).foregroundStyle(.white)
+                }
+                .padding(20).background(Color.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
+            }
+        }
         .quickLookPreview($preview)
         .alert("Rename", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
@@ -314,6 +325,15 @@ struct AssetGallery: View {
             Button { newName = asset.name; renaming = asset } label: { Label("Rename", systemImage: "pencil") }
             // Phil, 2026-11-18: AirDrop objects.
             if case .model(let url) = asset, url.pathExtension.lowercased() == "fbx" {
+                // Phil, 2026-11-20: "And swap to any of my imported mixamo fbx". Makes a copy with the scan's head.
+                let people = ScanFolder.all().filter(\.hasModel)
+                if !people.isEmpty {
+                    Menu {
+                        ForEach(people) { scan in
+                            Button(scan.title) { putHead(from: scan, on: url) }
+                        }
+                    } label: { Label("Put a scanned head on", systemImage: "person.crop.circle.badge.plus") }
+                }
                 ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
             } else if case .model(let url) = asset {
                 ShareLink(item: SharedModel(url: url, name: asset.name), preview: SharePreview(asset.name)) { Label("Share", systemImage: "square.and.arrow.up") }
@@ -362,6 +382,29 @@ struct AssetGallery: View {
             message = placer.modelError ?? "Could not place \(asset.name)."
             placer.modelError = nil
             Haptics.warning()
+        }
+    }
+
+    private func putHead(from scan: ScanFolder, on character: URL) {
+        puttingHead = "Putting \(scan.title)'s head on…"
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<URL, Error> in
+                switch ScanCharacterMaker.prepare(scan) {
+                case .success(let maker): do { return .success(try maker.putHead(on: character)) } catch { return .failure(error) }
+                case .failure(let failure): return .failure(failure)
+                }
+            }.value
+            puttingHead = nil
+            switch result {
+            case .success(let made):
+                message = nil
+                newest = made
+                refresh()
+                version += 1
+            case .failure(let error):
+                message = "Couldn't take that head: " + ((error as? ScanCharacterMaker.Failure)?.words ?? error.localizedDescription)
+                Diagnostics.log("Scan person: head on \(character.lastPathComponent) failed: \(error)")
+            }
         }
     }
 

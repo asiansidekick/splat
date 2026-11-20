@@ -13,13 +13,16 @@ extension ScanRig {
         /// No smoothing from here down; in between it fades.
         var noneBelow: Float
         var rounds: Int
+        /// No point moves further than this (metres), so the eyes, nose and mouth stay true to the actor
+        /// (Phil, 2026-11-20: "Facial feature accuracy is important"). Only the small lumps go.
+        var maxMove: Float = .greatestFiniteMagnitude
     }
 
     /// Head and shoulders: full from the neck up, fading to nothing a little below the shoulder joints.
     static func headAndShoulders(joints J: [SIMD3<Float>], height H: Float) -> Smoothing {
         let shoulders = (J[bone("LeftArm")].y + J[bone("RightArm")].y) / 2
         let neck = J[bone("Neck")].y
-        return Smoothing(fullFrom: max(neck, shoulders + 0.01 * H), noneBelow: shoulders - 0.07 * H, rounds: 8)
+        return Smoothing(fullFrom: max(neck, shoulders + 0.01 * H), noneBelow: shoulders - 0.07 * H, rounds: 8, maxMove: 0.0012 * H)
     }
 
     /// How much a point at height y is smoothed, 0 to 1.
@@ -73,7 +76,15 @@ extension ScanRig {
             }
             places = moved
         }
-        for _ in 0..<s.rounds { step(0.5); step(-0.53) }
+        let start = places
+        for _ in 0..<s.rounds {
+            step(0.5); step(-0.53)
+            // Held to within maxMove of where it was scanned, every round, so features can't drift.
+            for i in moving {
+                let d = places[i] - start[i], length = simd_length(d)
+                if length > s.maxMove { places[i] = start[i] + d * (s.maxMove / length) }
+            }
+        }
         // Normals from the welded shape, so they agree across the photo's seams; only where something moved.
         var weldedTriangles: [UInt32] = []
         weldedTriangles.reserveCapacity(mesh.triangles.count)
@@ -93,8 +104,21 @@ extension ScanRig {
 
     /// Where a person's head is cut from the body: a little above the neck joint, round the head's middle.
     static func neckCut(joints J: [SIMD3<Float>]) -> SIMD3<Float> {
-        let neck = J[bone("Neck")], head = J[bone("Head")]
-        return SIMD3(head.x, neck.y + 0.45 * max(0.005, head.y - neck.y), head.z)
+        neckCut(neck: J[bone("Neck")], head: J[bone("Head")])
+    }
+
+    /// The same for any skeleton, from its neck and head joints.
+    static func neckCut(neck: SIMD3<Float>, head: SIMD3<Float>) -> SIMD3<Float> {
+        SIMD3(head.x, neck.y + 0.45 * max(0.005, head.y - neck.y), head.z)
+    }
+
+    /// This person's head, cut at its neck cut and moved so the cut is at 0,0,0. Metres, facing +Z, exactly as
+    /// scanned otherwise: the face is never reshaped (Phil, 2026-11-20: "Facial feature accuracy is important").
+    static func headPiece(of mesh: BodyMesh, joints: [SIMD3<Float>]) -> BodyMesh {
+        let cut = neckCut(joints: joints)
+        var head = part(of: mesh) { corners in corners.allSatisfy { $0.y > cut.y } }
+        head.positions = head.positions.map { $0 - cut }
+        return head
     }
 
     /// The triangles `keep` says yes to, with their points renumbered. `keep` is given the triangle's three corners.
@@ -141,14 +165,76 @@ extension ScanRig {
     /// `rename` gives the donor's pictures their new file names, so they don't clash with the body's.
     static func swapHead(body: BodyMesh, joints: [SIMD3<Float>], donor: BodyMesh, donorJoints: [SIMD3<Float>],
                          rename: (String) -> String) -> BodyMesh {
-        let cut = neckCut(joints: joints), donorCut = neckCut(joints: donorJoints)
+        let cut = neckCut(joints: joints)
         // The body keeps every triangle that reaches below its cut; the head is the donor's triangles wholly above its.
         let headless = part(of: body) { corners in corners.contains { $0.y <= cut.y } }
-        var head = part(of: donor) { corners in corners.allSatisfy { $0.y > donorCut.y } }
-        let shift = cut - donorCut
-        head.positions = head.positions.map { $0 + shift }
+        var head = headPiece(of: donor, joints: donorJoints)
+        head.positions = head.positions.map { $0 + cut }
         for i in head.parts.indices { head.parts[i].texture = head.parts[i].texture.map(rename) }
         return joined(headless, head)
     }
-}
 
+    // MARK: A scanned head on an imported character (Phil, 2026-11-20: "And swap to any of my imported mixamo fbx")
+
+    /// The file kept in an FBX character's pictures folder, so it travels wherever the character's pictures go.
+    static let headFile = "scanned-head.bin"
+
+    /// Where a head piece (cut at 0,0,0, metres, facing +Z) goes in a character's own space: its neck cut on the
+    /// character's, turned round for a character facing -Z, in the file's units. The head keeps its real size.
+    static func headPlacement(neck: SIMD3<Float>, head: SIMD3<Float>, facing: Float, metresPerUnit: Float) -> simd_float4x4 {
+        let cut = neckCut(neck: neck, head: head)
+        let k = 1 / max(1e-6, metresPerUnit), turn: Float = facing < 0 ? -1 : 1
+        return simd_float4x4(SIMD4(turn * k, 0, 0, 0), SIMD4(0, k, 0, 0), SIMD4(0, 0, turn * k, 0), SIMD4(cut.x, cut.y, cut.z, 1))
+    }
+
+    private struct SavedPart: Codable {
+        var first: Int, count: Int, texture: String?, color: [Float]
+    }
+
+    /// A head piece as a small file: points, normals, picture coordinates and triangles as they are, parts at the end.
+    static func headData(_ m: BodyMesh) -> Data {
+        var d = Data("RSH1".utf8)
+        func put<T>(_ values: [T]) {
+            var count = UInt32(values.count)
+            withUnsafeBytes(of: &count) { d.append(contentsOf: $0) }
+            values.withUnsafeBytes { d.append(contentsOf: $0) }
+        }
+        put(m.positions.flatMap { [$0.x, $0.y, $0.z] })
+        put(m.normals.flatMap { [$0.x, $0.y, $0.z] })
+        put((m.uvs ?? []).flatMap { [$0.x, $0.y] })
+        put(m.triangles)
+        let parts = m.parts.map { SavedPart(first: $0.firstTriangle, count: $0.triangleCount, texture: $0.texture, color: [$0.color.x, $0.color.y, $0.color.z]) }
+        put(Array((try? JSONEncoder().encode(parts)) ?? Data("[]".utf8)))
+        return d
+    }
+
+    static func head(from data: Data) -> BodyMesh? {
+        let data = Data(data)
+        guard data.count >= 4, data.prefix(4) == Data("RSH1".utf8) else { return nil }
+        var at = 4
+        func take<T>(_: T.Type) -> [T]? {
+            guard at + 4 <= data.count else { return nil }
+            var count32: UInt32 = 0
+            withUnsafeMutableBytes(of: &count32) { _ = data.copyBytes(to: $0, from: at..<(at + 4)) }
+            at += 4
+            let count = Int(count32), bytes = count * MemoryLayout<T>.stride
+            guard bytes >= 0, at + bytes <= data.count else { return nil }
+            let out = [T](unsafeUninitializedCapacity: count) { buffer, made in
+                if bytes > 0 { _ = data.copyBytes(to: buffer, from: at..<(at + bytes)) }
+                made = count
+            }
+            at += bytes
+            return out
+        }
+        guard let p = take(Float.self), let n = take(Float.self), let u = take(Float.self), let t = take(UInt32.self),
+              let partBytes = take(UInt8.self), let parts = try? JSONDecoder().decode([SavedPart].self, from: Data(partBytes)) else { return nil }
+        let count = p.count / 3
+        guard count > 0, n.count == p.count, u.isEmpty || u.count == count * 2, t.allSatisfy({ Int($0) < count }) else { return nil }
+        return BodyMesh(positions: (0..<count).map { SIMD3(p[$0 * 3], p[$0 * 3 + 1], p[$0 * 3 + 2]) },
+                        normals: (0..<count).map { SIMD3(n[$0 * 3], n[$0 * 3 + 1], n[$0 * 3 + 2]) },
+                        uvs: u.isEmpty ? nil : (0..<count).map { SIMD2(u[$0 * 2], u[$0 * 2 + 1]) },
+                        triangles: t,
+                        parts: parts.map { BodyMesh.Part(firstTriangle: $0.first, triangleCount: $0.count, texture: $0.texture,
+                                                         color: $0.color.count == 3 ? SIMD3($0.color[0], $0.color[1], $0.color[2]) : SIMD3(0.8, 0.8, 0.8)) })
+    }
+}

@@ -154,6 +154,48 @@ final class ScanCharacterMaker: @unchecked Sendable {
         return target
     }
 
+    /// Phil, 2026-11-20: "And swap to any of my imported mixamo fbx". A copy of an imported character, named
+    /// "<character> with <scan>'s head", with this scan's head kept beside it (ScanRig.headFile in its pictures
+    /// folder) for FBXImport to put on its head bone. The head is exactly as scanned, never smoothed: the face
+    /// must stay true to the actor. The character's own file is not changed.
+    func putHead(on character: URL) throws -> URL {
+        let head = ScanRig.headPiece(of: body, joints: joints(startingMarks))
+        guard head.triangleCount > 50 else { throw Failure.notAPerson }
+        let folder = character.deletingLastPathComponent()
+        let base = (character.deletingPathExtension().lastPathComponent + " with \(title)'s head").replacingOccurrences(of: "/", with: "-")
+        var target = folder.appendingPathComponent("\(base).fbx")
+        var number = 2
+        while FileManager.default.fileExists(atPath: target.path) {
+            target = folder.appendingPathComponent("\(base) \(number).fbx")
+            number += 1
+        }
+        let manager = FileManager.default
+        let textures = FBXImport.texturesFolder(for: target)
+        try manager.copyItem(at: character, to: target)
+        if manager.fileExists(atPath: FBXImport.texturesFolder(for: character).path) {
+            try manager.copyItem(at: FBXImport.texturesFolder(for: character), to: textures)
+        }
+        try manager.createDirectory(at: textures, withIntermediateDirectories: true)
+        var mesh = head
+        var byName: [String: UIImage] = [:]
+        for (index, part) in body.parts.enumerated() {
+            if let name = part.texture, index < pictures.count, let picture = pictures[index] { byName[name] = picture }
+        }
+        var written = Set<String>()
+        for (index, part) in mesh.parts.enumerated() {
+            guard let name = part.texture else { continue }
+            let saved = "scanned-head-" + name
+            guard let picture = byName[name], let data = Self.jpeg(picture) else { mesh.parts[index].texture = nil; continue }
+            mesh.parts[index].texture = saved
+            guard !written.contains(saved) else { continue }
+            try data.write(to: textures.appendingPathComponent(saved), options: .atomic)
+            written.insert(saved)
+        }
+        try ScanRig.headData(mesh).write(to: textures.appendingPathComponent(ScanRig.headFile), options: .atomic)
+        Diagnostics.log("Scan person: \(title)'s head (\(mesh.triangleCount) triangles) put on \(character.lastPathComponent) as \(target.lastPathComponent)")
+        return target
+    }
+
     private static func jpeg(_ image: UIImage) -> Data? {
         let longest = max(image.size.width * image.scale, image.size.height * image.scale)
         guard longest > 4096 else { return image.jpegData(compressionQuality: 0.9) }

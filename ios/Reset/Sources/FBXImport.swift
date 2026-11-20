@@ -68,6 +68,15 @@ enum FBXImport {
                 try? manager.copyItem(at: from, to: to)
             }
         }
+        // A scanned head put on the character, and its pictures (ScanCharacterMaker.putHead).
+        let own = texturesFolder(for: source)
+        if manager.fileExists(atPath: own.appendingPathComponent(ScanRig.headFile).path) {
+            try? manager.createDirectory(at: folder, withIntermediateDirectories: true)
+            for file in (try? manager.contentsOfDirectory(atPath: own.path)) ?? [] where file == ScanRig.headFile || file.hasPrefix("scanned-head-") {
+                let to = folder.appendingPathComponent(file)
+                if !manager.fileExists(atPath: to.path) { try? manager.copyItem(at: own.appendingPathComponent(file), to: to) }
+            }
+        }
     }
 
     static func load(_ url: URL, name: String) -> Loaded? {
@@ -106,12 +115,51 @@ enum FBXImport {
         var pictures: [String: UIImage] = [:]
         let textures = texturesFolder(for: url)
         var vertices = 0, skinned = 0, bones = 0
+        // A scanned head kept beside the character (ScanCharacterMaker.putHead): the character's own head, its
+        // hair and anything else riding on the head bone are left out, and the scan's head goes on in their place.
+        let rigMap = RigFinder.find(rigNodes)
+        var scannedHead: BodyMesh?
+        var headBones = Set<Int>()
+        if let headIndex = rigMap?.head, let saved = try? Data(contentsOf: textures.appendingPathComponent(ScanRig.headFile)) {
+            scannedHead = ScanRig.head(from: saved)
+            if scannedHead != nil {
+                for i in rigNodes.indices {
+                    var at = i, steps = 0
+                    while at >= 0, at < rigNodes.count, steps < 512 {
+                        if at == headIndex { headBones.insert(i); break }
+                        at = rigNodes[at].parent
+                        steps += 1
+                    }
+                }
+            }
+        }
+        var headTrianglesLeftOut = 0
         for m in 0..<Int(file.mesh_count) {
             let mesh = file.meshes[m]
             let count = Int(mesh.vertex_count)
             let positionPointer: UnsafeMutablePointer<Float>? = mesh.positions, normalPointer: UnsafeMutablePointer<Float>? = mesh.normals
             guard count >= 3, let positions = positionPointer, let normals = normalPointer else { continue }
+            // A shape riding on the head bone (eyes, hair, a hat) goes with the character's own head.
+            if !headBones.isEmpty, mesh.bone_count == 0, headBones.contains(Int(mesh.node)) {
+                headTrianglesLeftOut += count / 3
+                continue
+            }
             vertices += count
+            // Corners pulled mostly by the head bones, when a scanned head takes the head's place.
+            var onHead: [Bool]?
+            let headBoneNodes: UnsafeMutablePointer<Int32>? = mesh.bone_nodes
+            let headIndices: UnsafeMutablePointer<UInt16>? = mesh.bone_indices, headWeights: UnsafeMutablePointer<Float>? = mesh.bone_weights
+            if !headBones.isEmpty, mesh.bone_count > 0, let boneNodes = headBoneNodes, let indices = headIndices, let weights = headWeights {
+                let isHead = (0..<Int(mesh.bone_count)).map { headBones.contains(Int(boneNodes[$0])) }
+                onHead = (0..<count).map { v in
+                    var w: Float = 0
+                    for k in 0..<4 {
+                        let b = Int(indices[v * 4 + k])
+                        if b < isHead.count, isHead[b] { w += weights[v * 4 + k] }
+                    }
+                    return w > 0.5
+                }
+            }
             var sources = [
                 SCNGeometrySource(data: Data(bytes: positions, count: count * 12), semantic: .vertex, vectorCount: count, usesFloatComponents: true,
                                   componentsPerVector: 3, bytesPerComponent: 4, dataOffset: 0, dataStride: 12),
@@ -129,7 +177,15 @@ enum FBXImport {
                 let part = mesh.parts[p]
                 let start = Int(part.vertex_start), length = Int(part.vertex_count) / 3 * 3
                 guard length >= 3, start + length <= count else { continue }
-                elements.append(SCNGeometryElement(indices: (start..<(start + length)).map { UInt32($0) }, primitiveType: .triangles))
+                var corners = (start..<(start + length)).map { UInt32($0) }
+                if let onHead {
+                    corners = stride(from: start, to: start + length, by: 3)
+                        .filter { t in (onHead[t] ? 1 : 0) + (onHead[t + 1] ? 1 : 0) + (onHead[t + 2] ? 1 : 0) < 2 }
+                        .flatMap { [UInt32($0), UInt32($0 + 1), UInt32($0 + 2)] }
+                    headTrianglesLeftOut += (length - corners.count) / 3
+                }
+                guard corners.count >= 3 else { continue }
+                elements.append(SCNGeometryElement(indices: corners, primitiveType: .triangles))
                 let material = SCNMaterial()
                 material.lightingModel = .physicallyBased
                 material.roughness.contents = 0.7
@@ -220,9 +276,21 @@ enum FBXImport {
         sized.simdScale = SIMD3(repeating: scale)
         sized.addChildNode(lift)
 
+        var headWords = ""
+        if let head = scannedHead, let map = rigMap, let headIndex = map.head {
+            let below = rigNodes[headIndex].parent
+            let neck = map.neck.map { rigNodes[$0].position }
+                ?? (below >= 0 && below < rigNodes.count ? rigNodes[below].position : rigNodes[headIndex].position - SIMD3(0, 0.1 / scale, 0))
+            let placed = ScanRig.headPlacement(neck: neck, head: rigNodes[headIndex].position, facing: map.facing, metresPerUnit: scale)
+            let holder = headNode(head, textures: textures)
+            holder.simdTransform = rigNodes[headIndex].world.inverse * placed
+            nodes[headIndex].addChildNode(holder)
+            headWords = ", scanned head on \(rigNodes[headIndex].name) (\(head.triangleCount) triangles, \(headTrianglesLeftOut) of its own left out)"
+        }
+
         var rig: FBXRig?
         var found = "no skeleton to pose"
-        if skinned > 0, let map = RigFinder.find(rigNodes) {
+        if skinned > 0, let map = rigMap {
             rig = FBXRig(nodes: nodes, lift: lift, poser: RigPoser(nodes: rigNodes, map: map), height: (high.y - low.y) * scale)
             found = "joints from " + (map.fromNames ? "bone names" : "the skeleton's shape") + (map.facing < 0 ? ", facing back" : "")
                 + ", arm \(rigNodes[map.armL[0]].name) > \(rigNodes[map.armL[1]].name), leg \(rigNodes[map.legL[0]].name) > \(rigNodes[map.legL[1]].name)"
@@ -231,8 +299,38 @@ enum FBXImport {
         }
         Diagnostics.log(String(format: "FBX: %@, %d nodes, %d shapes (%d skinned, %d bones), %d corners, %.2f x %.2f x %.2f m, %@",
                                name, Int(file.node_count), Int(file.mesh_count), skinned, bones, vertices,
-                               (high.x - low.x) * scale, (high.y - low.y) * scale, (high.z - low.z) * scale, found))
+                               (high.x - low.x) * scale, (high.y - low.y) * scale, (high.z - low.z) * scale, found + headWords))
         return Loaded(node: sized, low: low * scale, high: high * scale, rig: rig)
+    }
+
+    /// A scanned head, shown unlit with its photo like the scan itself.
+    private static func headNode(_ head: BodyMesh, textures: URL) -> SCNNode {
+        let positions = head.positions, normals = head.normals
+        var sources = [SCNGeometrySource(vertices: positions.map { SCNVector3($0.x, $0.y, $0.z) }),
+                       SCNGeometrySource(normals: normals.map { SCNVector3($0.x, $0.y, $0.z) })]
+        if let uvs = head.uvs { sources.append(SCNGeometrySource(textureCoordinates: uvs.map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) })) }
+        var elements: [SCNGeometryElement] = []
+        var materials: [SCNMaterial] = []
+        for part in head.parts {
+            let first = part.firstTriangle * 3, last = min(head.triangles.count, (part.firstTriangle + part.triangleCount) * 3)
+            guard last - first >= 3 else { continue }
+            elements.append(SCNGeometryElement(indices: Array(head.triangles[first..<last]), primitiveType: .triangles))
+            let material = SCNMaterial()
+            material.isDoubleSided = true
+            if let name = part.texture, head.uvs != nil, let picture = sized(UIImage(contentsOfFile: textures.appendingPathComponent(name).path)) {
+                material.lightingModel = .constant
+                material.diffuse.contents = picture
+            } else {
+                material.lightingModel = .physicallyBased
+                material.diffuse.contents = UIColor(red: CGFloat(part.color.x), green: CGFloat(part.color.y), blue: CGFloat(part.color.z), alpha: 1)
+            }
+            materials.append(material)
+        }
+        let geometry = SCNGeometry(sources: sources, elements: elements)
+        geometry.materials = materials
+        let node = SCNNode(geometry: geometry)
+        node.name = "fbx.scannedHead"
+        return node
     }
 }
 

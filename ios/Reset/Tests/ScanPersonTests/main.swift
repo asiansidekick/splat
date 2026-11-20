@@ -297,6 +297,9 @@ for i in body.positions.indices {
     if body.positions[i].y > region.fullFrom, simd_distance(smoothedPerson.positions[i], body.positions[i]) > 1e-5 { headMoved = true }
 }
 expect(untouched, "the body and costume below the shoulders stay exactly as scanned")
+var furthest: Float = 0
+for i in body.positions.indices { furthest = max(furthest, simd_distance(smoothedPerson.positions[i], body.positions[i])) }
+expect(furthest <= region.maxMove + 1e-5, String(format: "no point moved more than %.1f mm, so the face keeps its features (furthest %.2f mm)", region.maxMove * 1000, furthest * 1000))
 expect(headMoved && smoothedCount > 0, "the head and shoulders were smoothed (\(smoothedCount) points)")
 expect(smoothedPerson.triangles == body.triangles && smoothedPerson.uvs! == body.uvs!, "triangles and photo kept as they were")
 let smoothedHigh = smoothedPerson.positions.map(\.y).max()!
@@ -346,6 +349,21 @@ if let swappedVoxels = ScanRig.Voxels(swapped, size: height / 150) {
 } else {
     expect(false, "swapped person filled in")
 }
+
+// MARK: A scanned head on an imported character
+
+let piece = ScanRig.headPiece(of: body, joints: joints)
+expect(piece.triangleCount > 50 && piece.positions.allSatisfy { $0.y > 0 }, "the head piece stands on its cut (\(piece.triangleCount) triangles)")
+let pieceBack = ScanRig.head(from: ScanRig.headData(piece))
+expect(pieceBack != nil && pieceBack!.positions == piece.positions && pieceBack!.normals == piece.normals && pieceBack!.uvs! == piece.uvs!
+       && pieceBack!.triangles == piece.triangles && pieceBack!.parts.count == piece.parts.count && pieceBack!.parts[0].texture == piece.parts[0].texture,
+       "the head file reads back exactly")
+expect(ScanRig.head(from: Data("RSH1junk".utf8)) == nil && ScanRig.head(from: Data()) == nil, "a broken head file is refused")
+// A character in centimetres facing -Z: the head lands on its neck at real size, turned to face the same way.
+let place = ScanRig.headPlacement(neck: SIMD3(0, 150, 0), head: SIMD3(0, 160, 2), facing: -1, metresPerUnit: 0.01)
+let chin = place * SIMD4<Float>(0, 0, 0.1, 1), crown = place * SIMD4<Float>(0, 0.2, 0, 1)
+expect(abs(chin.y - 154.5) < 0.01 && abs(chin.z - (2 - 10)) < 0.01, String(format: "the head's front faces the character's front (%.1f, %.1f)", chin.y, chin.z))
+expect(abs(crown.y - 174.5) < 0.01, "the head keeps its real size in centimetres")
 
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
