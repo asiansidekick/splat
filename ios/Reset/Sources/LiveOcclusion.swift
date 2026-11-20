@@ -79,7 +79,16 @@ final class LiveOccluder {
     private var wasOn = false
 
     /// Real things picked to go in front of the models: where each was tapped, in the room.
-    private struct Pick { let id = UUID(); let anchor: SIMD3<Float> }
+    /// `held` is its outline kept still in the room, so a picture where Vision misses it doesn't let a model through
+    /// (Phil, 2026-11-20: "the model flickers through still"). `differentSince` is when Vision first saw something else
+    /// there; after a while that is taken as the thing having really changed (a door swung).
+    private struct Pick {
+        let id = UUID()
+        let anchor: SIMD3<Float>
+        var held: HeldOutline?
+        var history: [[Bool]] = []
+        var differentSince: TimeInterval?
+    }
     private var picks: [Pick] = [] { didSet { placer?.inFrontCount = picks.count } }
     /// The picked things' outlines, cut from the camera picture: a sheet 30 cm in front of the camera that hides every
     /// model behind it, turned as the camera was for that picture and kept at the camera.
@@ -87,11 +96,9 @@ final class LiveOccluder {
     private var pickBusy = false
     private var lastPickLog: TimeInterval = 0
     private var pickFound = true
-    private var lastPickSeen: TimeInterval = 0
     /// The last few sharpened depths and picked outlines while the camera holds still (EdgeDepth.steady, OutlineVote).
     private var depthHistory: [[Float]] = []
     private var depthHistoryPose: simd_float4x4?
-    private var maskHistory: [[Bool]] = []
     private var maskHistoryPose: simd_float4x4?
     nonisolated static let historyLength = 6
 
@@ -329,7 +336,13 @@ final class LiveOccluder {
                     Haptics.tap()
                     Diagnostics.log("In front: taken out, \(self.picks.count) left")
                 } else {
-                    self.picks.append(Pick(anchor: anchor))
+                    var held: HeldOutline?
+                    if let mask = try? found.observation.generateScaledMaskForImage(forInstances: IndexSet(integer: Int(label)), from: found.handler),
+                       let cells = Self.cells(of: mask) {
+                        held = HeldOutline(cells: cells.inside, width: cells.width, height: cells.height, pose: camera.transform,
+                                           lens: Self.lens(camera), distance: HeldOutline.distance(of: anchor, from: camera.transform))
+                    }
+                    self.picks.append(Pick(anchor: anchor, held: held))
                     Haptics.success()
                     Diagnostics.log(String(format: "In front: picked thing %d at %.2f, %.2f, %.2f m away, %d in front", label, n.x, n.y,
                                            simd_length(anchor - camera.transform.columns.3.xyz), self.picks.count))
@@ -416,63 +429,182 @@ final class LiveOccluder {
         return Instances(observation: observation, handler: handler, labels: labels, width: w, height: h)
     }
 
-    /// Each tick: finds the picked things in the latest picture and makes their outlines the sheet that hides models.
+    /// Each picked thing's sheet, by id, drawn nearest first (see ModelPlacer.applyLayers).
+    private var sheetNodes: [UUID: SCNNode] = [:]
+    /// Picked things nearest the camera first.
+    private var layerOrder: [UUID] = []
+
+    private func clearSheets() {
+        for node in sheetNodes.values { node.removeFromParentNode() }
+        sheetNodes = [:]
+        if !layerOrder.isEmpty {
+            layerOrder = []
+            placer?.nearerThings = [:]
+            placer?.applyLayers()
+        }
+    }
+
+    private func showSheets(_ sheets: [UUID: OccluderMesh]) {
+        for (id, node) in sheetNodes where !picks.contains(where: { $0.id == id }) {
+            node.removeFromParentNode()
+            sheetNodes[id] = nil
+        }
+        for pick in picks {
+            let node: SCNNode
+            if let existing = sheetNodes[pick.id] {
+                node = existing
+            } else {
+                node = SCNNode()
+                node.name = "live.inFront.thing"
+                node.categoryBitMask = ReviewPick.occluderMask
+                pickNode.addChildNode(node)
+                sheetNodes[pick.id] = node
+            }
+            node.renderingOrder = 10 * (layerOrder.firstIndex(of: pick.id) ?? 0) + 5
+            node.geometry = sheets[pick.id]?.geometry(readsDepth: false)
+        }
+    }
+
+    /// Orders the picked things by distance from the camera and tells each model how many are nearer than it, so a row
+    /// of posed people seen down its length goes behind each real thing in front of it.
+    private func orderLayers(camera: simd_float4x4) {
+        let eye = camera.columns.3.xyz
+        let order = picks.sorted { simd_distance($0.anchor, eye) < simd_distance($1.anchor, eye) }
+        let ids = order.map(\.id)
+        var nearer: [UUID: Int] = [:]
+        for (id, place) in placer?.modelPlaces ?? [:] {
+            let distance = simd_distance(place, eye)
+            nearer[id] = order.filter { simd_distance($0.anchor, eye) < distance }.count
+        }
+        let changed = ids != layerOrder || nearer != placer?.nearerThings
+        layerOrder = ids
+        if changed {
+            placer?.nearerThings = nearer
+            for (k, id) in ids.enumerated() { sheetNodes[id]?.renderingOrder = 10 * k + 5 }
+        }
+        placer?.applyLayers()
+    }
+
+    private func layerReport() -> String {
+        guard let placer else { return "" }
+        return placer.models.map { "\(placer.layer(of: $0.id))" }.joined(separator: "/")
+    }
+
+    /// The lens of a camera picture, for HeldOutline.
+    nonisolated private static func lens(_ camera: ARCamera) -> HeldOutline.Lens {
+        let k = camera.intrinsics
+        return HeldOutline.Lens(fx: k[0][0], fy: k[1][1], cx: k[2][0], cy: k[2][1],
+                                imageWidth: Float(camera.imageResolution.width), imageHeight: Float(camera.imageResolution.height))
+    }
+
+    /// What one tick learned about one picked thing.
+    private struct PickUpdate: Sendable {
+        let id: UUID
+        /// Vision's outline when it is the held thing (or has been something else for long enough to take over).
+        var taken: [Bool]?
+        /// Whether Vision saw something different there this picture.
+        var different = false
+        var source = "held"
+        var width = 0
+    }
+
+    /// Each tick: shows every picked thing's outline, the one held still in the room redrawn for the camera as it is now,
+    /// and swaps in Vision's fresh outline only when it agrees with the held one. Holding still, the last 6 agreeing
+    /// outlines are voted on so the edge doesn't shimmer.
     private func updatePicks(_ frame: ARFrame, on: Bool) {
         guard on, !picks.isEmpty else {
-            pickNode.geometry = nil
+            clearSheets()
             return
         }
+        orderLayers(camera: frame.camera.transform)
         guard !pickBusy else { return }
         pickBusy = true
         let image = frame.capturedImage
         let camera = frame.camera
-        let anchors = picks.map(\.anchor)
+        let current = picks
         let timestamp = frame.timestamp
         let logNow = timestamp - lastPickLog > 10
         let pose = camera.transform
-        if !Self.still(maskHistoryPose, pose) {
-            maskHistory = []
+        let still = Self.still(maskHistoryPose, pose)
+        if !still {
             maskHistoryPose = pose
+            for i in picks.indices { picks[i].history = [] }
         }
-        let history = maskHistory
+        let lens = Self.lens(camera)
         Task.detached(priority: .userInitiated) {
             let started = Date()
-            var geometry: OccluderMesh?
-            var latest: [Bool]?
-            var labels = IndexSet()
-            if let found = Self.instances(in: image) {
-                for anchor in anchors {
-                    if let n = Self.imagePoint(of: anchor, camera: camera), let label = found.label(at: n) { labels.insert(Int(label)) }
+            let found = Self.instances(in: image)
+            var updates: [PickUpdate] = []
+            var sheets: [UUID: OccluderMesh] = [:]
+            for pick in current {
+                var update = PickUpdate(id: pick.id)
+                let held = pick.held?.seen(from: pose, lens: lens)
+                var fresh: [Bool]?
+                var width = 0
+                if let found, let n = Self.imagePoint(of: pick.anchor, camera: camera), let label = found.label(at: n),
+                   let mask = try? found.observation.generateScaledMaskForImage(forInstances: IndexSet(integer: Int(label)), from: found.handler),
+                   let cells = Self.cells(of: mask) {
+                    fresh = cells.inside
+                    width = cells.width
                 }
-                if !labels.isEmpty, let mask = try? found.observation.generateScaledMaskForImage(forInstances: labels, from: found.handler) {
-                    if let cells = Self.cells(of: mask) {
-                        latest = cells.inside
-                        let steady = OutlineVote.steady(history + [cells.inside])
-                        geometry = Self.sheet(cells: steady, width: cells.width, height: cells.height, camera: camera)
+                var outline = held
+                if let fresh {
+                    if held == nil || HeldOutline.agrees(fresh, with: held!) {
+                        update.taken = fresh
+                        update.source = "fresh"
+                    } else if let since = pick.differentSince, timestamp - since > 1.5 {
+                        update.taken = fresh
+                        update.source = "changed"
+                    } else {
+                        update.different = true
                     }
                 }
+                if let taken = update.taken {
+                    outline = OutlineVote.steady(pick.history + [taken])
+                }
+                update.width = update.taken != nil ? width : (pick.held?.width ?? width)
+                if let outline, update.width > 0,
+                   let sheet = Self.sheet(cells: outline, width: update.width, height: outline.count / update.width, camera: camera) {
+                    sheets[pick.id] = sheet
+                }
+                updates.append(update)
             }
             let seconds = Date().timeIntervalSince(started)
             let rotation = simd_quatf(camera.transform)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.pickBusy = false
-                guard !self.picks.isEmpty else { self.pickNode.geometry = nil; return }
-                if let latest, Self.still(self.maskHistoryPose, pose) {
-                    self.maskHistory.append(latest)
-                    if self.maskHistory.count > Self.historyLength { self.maskHistory.removeFirst() }
+                guard !self.picks.isEmpty else { self.clearSheets(); return }
+                let keepHistory = Self.still(self.maskHistoryPose, pose)
+                for update in updates {
+                    guard let i = self.picks.firstIndex(where: { $0.id == update.id }) else { continue }
+                    var pick = self.picks[i]
+                    if let taken = update.taken {
+                        let w = update.width
+                        let h = taken.count / max(1, w)
+                        if keepHistory {
+                            pick.history.append(taken)
+                            if pick.history.count > Self.historyLength { pick.history.removeFirst() }
+                        }
+                        let steady = keepHistory ? OutlineVote.steady(pick.history) : taken
+                        pick.held = HeldOutline(cells: steady, width: w, height: h, pose: pose, lens: lens,
+                                                distance: HeldOutline.distance(of: pick.anchor, from: pose))
+                        pick.differentSince = nil
+                    } else if update.different {
+                        if pick.differentSince == nil { pick.differentSince = timestamp }
+                    } else {
+                        pick.differentSince = nil
+                    }
+                    self.picks[i] = pick
                 }
-                let found = geometry != nil
-                // A picture or two where Vision misses the thing keeps the last outline, so it doesn't blink.
-                if found || timestamp - self.lastPickSeen > 0.5 {
-                    self.pickNode.simdOrientation = rotation
-                    self.pickNode.geometry = geometry?.geometry(readsDepth: false)
-                }
-                if found { self.lastPickSeen = timestamp }
-                if logNow || found != self.pickFound {
+                self.pickNode.simdOrientation = rotation
+                self.showSheets(sheets)
+                let sources = updates.map(\.source).joined(separator: ", ")
+                let shown = !sheets.isEmpty
+                if logNow || shown != self.pickFound {
                     self.lastPickLog = timestamp
-                    self.pickFound = found
-                    Diagnostics.log("In front: \(labels.count) of \(anchors.count) picked things found, \((geometry?.indices.count ?? 0) / 6) strips, \(Int(seconds * 1000)) ms")
+                    self.pickFound = shown
+                    Diagnostics.log("In front: \(updates.count) picked things (\(sources)), Vision \(found == nil ? "found nothing" : "ran"), \(sheets.values.reduce(0) { $0 + $1.indices.count / 6 }) strips, layers \(self.layerReport()), \(Int(seconds * 1000)) ms")
                 }
             }
         }

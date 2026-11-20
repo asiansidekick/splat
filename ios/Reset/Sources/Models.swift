@@ -36,6 +36,39 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     @Published var inFrontCount = 0
     /// Set by the live view's occluder: the tap that picks a thing.
     var onPickInFront: ((CGPoint, ARSCNView) -> Void)?
+    /// Phil, 2026-11-20: "Push back a layer", "And bring forward", "line up a row of posed people and look down that
+    /// row". The picked real things are layers, nearest the camera in front. Each model is behind the picked things
+    /// nearer than it (`nearerThings`, from the live view's occluder), moved by Push back / Bring forward (`layerShift`).
+    @Published private(set) var layerShift: [UUID: Int] = [:]
+    @Published var nearerThings: [UUID: Int] = [:]
+
+    /// How many picked real things the model is behind.
+    func layer(of id: UUID) -> Int { min(max(0, (nearerThings[id] ?? inFrontCount) + (layerShift[id] ?? 0)), inFrontCount) }
+
+    /// Moves the selected model one picked thing back (+1) or forward (-1).
+    func moveSelectedLayer(by step: Int) {
+        guard let id = selectedModel else { return }
+        let now = layer(of: id)
+        let next = min(max(0, now + step), inFrontCount)
+        guard next != now else { return }
+        layerShift[id] = next - (nearerThings[id] ?? inFrontCount)
+        Haptics.tap()
+        applyLayers()
+        Diagnostics.log("In front: model moved \(step > 0 ? "back" : "forward"), now behind \(next) of \(inFrontCount) picked things")
+    }
+
+    /// Draws each model just after the picked things in front of it and before those behind it (LiveOcclusion.swift
+    /// draws the k-th nearest picked thing at 10k + 5), so only the things in front hide it. Handles and dots (1000 and up) stay on top.
+    func applyLayers() {
+        for (id, node) in modelNodes {
+            let base = 10 * layer(of: id)
+            node.enumerateHierarchy { child, _ in
+                guard child.renderingOrder < 1000 else { return }
+                let own = ((child.renderingOrder % 10) + 10) % 10
+                if child.renderingOrder != base + own { child.renderingOrder = base + own }
+            }
+        }
+    }
     /// Pinning the selected model's distance from two views (PinMath): step aside, then drag it back onto its spot.
     enum PinStep: Equatable { case stepAside, dragBack, done }
     @Published private(set) var pinStep: PinStep?
@@ -174,6 +207,10 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
     private var modelNodes: [UUID: SCNNode] = [:]
     /// Where each placed model stands in the room now, for the log of what hides it (LiveOcclusion.swift).
+    /// Where each placed model stands in the room, by id.
+    var modelPlaces: [UUID: SIMD3<Float>] {
+        modelNodes.mapValues { $0.presentation.simdWorldPosition }
+    }
     var worldPositions: [(name: String, position: SIMD3<Float>)] {
         models.compactMap { model in modelNodes[model.id].map { (model.name, $0.presentation.simdWorldPosition) } }
     }
@@ -2004,6 +2041,11 @@ struct ModelOverlay: View {
             if placer.onPickInFront != nil {
                 CutoutTool(word: placer.inFrontCount > 0 ? "In front \(placer.inFrontCount)" : "In front", symbol: "square.3.layers.3d.top.filled",
                            on: placer.pickingInFront) { placer.pickingInFront.toggle() }
+                if let id = placer.selectedModel, placer.inFrontCount > 0 {
+                    let layer = placer.layer(of: id)
+                    if layer > 0 { CutoutTool(word: "Bring forward", symbol: "square.2.layers.3d.top.filled") { placer.moveSelectedLayer(by: -1) } }
+                    if layer < placer.inFrontCount { CutoutTool(word: "Push back", symbol: "square.2.layers.3d.bottom.filled") { placer.moveSelectedLayer(by: 1) } }
+                }
             }
         }
         if cutout {

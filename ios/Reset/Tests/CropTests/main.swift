@@ -348,5 +348,44 @@ do {
     check(OutlineVote.steady([[false, true]]) == [false, true], "still: one outline is kept as it is")
 }
 
+// Held outline: a picked thing stays in front where Vision misses it, and moves with the camera.
+do {
+    let lens = HeldOutline.Lens(fx: 100, fy: 100, cx: 50, cy: 40, imageWidth: 100, imageHeight: 80)
+    // A 20 x 16 grid (5 pixels a cell); the thing fills cells x 8..<12, y 6..<10, 2 m away.
+    var cells = [Bool](repeating: false, count: 20 * 16)
+    for y in 6..<10 { for x in 8..<12 { cells[y * 20 + x] = true } }
+    let pose = matrix_identity_float4x4
+    let held = HeldOutline(cells: cells, width: 20, height: 16, pose: pose, lens: lens, distance: 2)
+    check(held.seen(from: pose, lens: lens) == cells, "held: from the same camera the outline is unchanged")
+    // Step 0.2 m to the right: a thing 2 m away moves left by 100 * 0.2 / 2 = 10 pixels = 2 cells.
+    var right = pose
+    right.columns.3 = SIMD4(0.2, 0, 0, 1)
+    let moved = held.seen(from: right, lens: lens)
+    var expected = [Bool](repeating: false, count: 20 * 16)
+    for y in 6..<10 { for x in 6..<10 { expected[y * 20 + x] = true } }
+    check(moved == expected, "held: stepping right moves the outline left by the parallax of its distance")
+    // Step back 2 m: twice as far, half the size around the centre.
+    var back = pose
+    back.columns.3 = SIMD4(0, 0, 2, 1)
+    let far = held.seen(from: back, lens: lens)
+    let count = far.filter { $0 }.count
+    check(count >= 3 && count <= 6, "held: stepping back shrinks the outline (\(count) cells of 16)")
+    // Turn away: the card is behind the camera and shows nowhere.
+    let away = simd_float4x4(simd_quatf(angle: .pi, axis: SIMD3(0, 1, 0)))
+    check(!held.seen(from: away, lens: lens).contains(true), "held: a card behind the camera hides nothing")
+    check(HeldOutline.distance(of: SIMD3(0.3, 0, -1.5), from: pose) == 1.5, "held: the card stands at the touched point's distance")
+    // Agreement: Vision's outline of the same thing is taken, half of it or something else is not.
+    var half = cells
+    for y in 8..<10 { for x in 8..<12 { half[y * 20 + x] = false } }
+    var shifted = [Bool](repeating: false, count: 20 * 16)
+    for y in 6..<10 { for x in 12..<16 { shifted[y * 20 + x] = true } }
+    var grown = cells
+    for x in 8..<12 { grown[10 * 20 + x] = true }
+    check(HeldOutline.agrees(grown, with: cells), "held: a fresh outline of the same thing is taken")
+    check(!HeldOutline.agrees(half, with: cells), "held: half the thing is not taken (the held outline stays)")
+    check(!HeldOutline.agrees(shifted, with: cells), "held: something else is not taken")
+    check(!HeldOutline.agrees([Bool](repeating: false, count: 20 * 16), with: cells), "held: an empty picture is not taken")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

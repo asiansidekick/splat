@@ -263,3 +263,77 @@ enum OutlineStrips {
     }
 }
 
+
+/// A picked thing's outline held still in the room (Phil, 2026-11-20: "the model flickers through"). The outline is
+/// kept as a flat card through the tapped point, facing the camera that saw it, and is redrawn for wherever the camera
+/// is now, so the thing stays in front even in pictures where Vision misses it.
+struct HeldOutline: Sendable {
+    /// A camera picture's lens: focal lengths and centre in pixels, and the picture's size.
+    struct Lens: Sendable, Equatable {
+        var fx: Float, fy: Float, cx: Float, cy: Float
+        var imageWidth: Float, imageHeight: Float
+    }
+
+    var cells: [Bool]
+    var width: Int
+    var height: Int
+    /// The camera (camera to room) and lens of the picture the outline came from.
+    var pose: simd_float4x4
+    var lens: Lens
+    /// How far in front of that camera the card stands, along its view.
+    var distance: Float
+
+    /// The card's distance for a thing touched at `point`, seen from `pose`; at least 10 cm.
+    static func distance(of point: SIMD3<Float>, from pose: simd_float4x4) -> Float {
+        let forward = -SIMD3(pose.columns.2.x, pose.columns.2.y, pose.columns.2.z)
+        let origin = SIMD3(pose.columns.3.x, pose.columns.3.y, pose.columns.3.z)
+        return max(0.1, simd_dot(point - origin, forward))
+    }
+
+    /// The outline as seen from another camera, on a grid the same size: each cell looks along its ray to the card.
+    func seen(from target: simd_float4x4, lens to: Lens) -> [Bool] {
+        var out = [Bool](repeating: false, count: width * height)
+        let forward = -SIMD3(pose.columns.2.x, pose.columns.2.y, pose.columns.2.z)
+        let source = SIMD3(pose.columns.3.x, pose.columns.3.y, pose.columns.3.z)
+        let onCard = source + forward * distance
+        let inverse = pose.inverse
+        let origin = SIMD3(target.columns.3.x, target.columns.3.y, target.columns.3.z)
+        let turn = simd_float3x3(SIMD3(target.columns.0.x, target.columns.0.y, target.columns.0.z),
+                                 SIMD3(target.columns.1.x, target.columns.1.y, target.columns.1.z),
+                                 SIMD3(target.columns.2.x, target.columns.2.y, target.columns.2.z))
+        let toSx = to.imageWidth / Float(width), toSy = to.imageHeight / Float(height)
+        let fromSx = lens.imageWidth / Float(width), fromSy = lens.imageHeight / Float(height)
+        let reach = simd_dot(onCard - origin, forward)
+        for y in 0..<height {
+            for x in 0..<width {
+                let u = (Float(x) + 0.5) * toSx, v = (Float(y) + 0.5) * toSy
+                let ray = turn * SIMD3((u - to.cx) / to.fx, -(v - to.cy) / to.fy, -1)
+                let facing = simd_dot(ray, forward)
+                guard abs(facing) > 1e-5 else { continue }
+                let t = reach / facing
+                guard t > 0 else { continue }
+                let hit = inverse * SIMD4(origin + ray * t, 1)
+                guard hit.z < -0.01 else { continue }
+                let su = lens.fx * hit.x / -hit.z + lens.cx, sv = -lens.fy * hit.y / -hit.z + lens.cy
+                let sx = Int((su / fromSx).rounded(.down)), sy = Int((sv / fromSy).rounded(.down))
+                guard sx >= 0, sx < width, sy >= 0, sy < height else { continue }
+                out[y * width + x] = cells[sy * width + sx]
+            }
+        }
+        return out
+    }
+
+    /// How much two outlines agree: the cells in both over the cells in either (1 when both are empty).
+    static func overlap(_ a: [Bool], _ b: [Bool]) -> Float {
+        guard a.count == b.count else { return 0 }
+        var both = 0, either = 0
+        for i in 0..<a.count where a[i] || b[i] {
+            either += 1
+            if a[i] && b[i] { both += 1 }
+        }
+        return either == 0 ? 1 : Float(both) / Float(either)
+    }
+
+    /// Whether a fresh outline from Vision is the held thing, or only a part of it or something else.
+    static func agrees(_ fresh: [Bool], with held: [Bool]) -> Bool { overlap(fresh, held) >= 0.6 }
+}
