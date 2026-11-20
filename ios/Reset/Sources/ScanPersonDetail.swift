@@ -68,7 +68,13 @@ enum ScanPersonDetail {
         defer { try? FileManager.default.removeItem(at: runningFile(folder)) }
         Diagnostics.log(String(format: "Scan person: memory before building, %.0f MB free", Double(os_proc_available_memory()) / 1_000_000))
         var config = PhotogrammetrySession.Configuration()
-        config.checkpointDirectory = folder.checkpoint
+        // A fresh start, as the first build that worked: reusing the first build's half-made files stopped the app
+        // twice about 30 s in (Phil's log, 2026-11-20). Slower (a few minutes), but the known-good way.
+        let fresh = folder.url.appendingPathComponent("person-detail-checkpoint", isDirectory: true)
+        try? FileManager.default.removeItem(at: fresh)
+        try? FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fresh) }
+        config.checkpointDirectory = fresh
         let session = try PhotogrammetrySession(input: folder.images, configuration: config)
         let raw = folder.url.appendingPathComponent("person-detail-raw.usdz")
         try? FileManager.default.removeItem(at: raw)
