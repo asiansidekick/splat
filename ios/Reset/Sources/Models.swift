@@ -162,6 +162,10 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         }
     }
     private var modelNodes: [UUID: SCNNode] = [:]
+    /// Where each placed model stands in the room now, for the log of what hides it (LiveOcclusion.swift).
+    var worldPositions: [(name: String, position: SIMD3<Float>)] {
+        models.compactMap { model in modelNodes[model.id].map { (model.name, $0.presentation.simdWorldPosition) } }
+    }
     /// Scrapbook cut-outs on show: each turns to the photo that matches the side the camera sees.
     private struct CutoutState {
         let plane: SCNNode

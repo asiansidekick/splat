@@ -14,34 +14,40 @@ enum BehindReal {
     /// which draws the camera view with its own SceneKit technique.
     static var peopleWanted: Bool { on && !StoryboardLook.shared.on }
 
-    static func addPeople(to config: ARWorldTrackingConfiguration) {
-        guard peopleWanted else { return }
-        let wanted = config.frameSemantics.union(.personSegmentationWithDepth)
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(wanted) {
-            config.frameSemantics = wanted
-        } else if !loggedNoPeople {
-            loggedNoPeople = true
-            Diagnostics.log("Behind real things: people occlusion not supported here (with \(config.frameSemantics.rawValue))")
+    /// What the camera should deliver for hiding models: people occlusion, and LiDAR depth smoothed over time (Phil,
+    /// 2026-11-20, build 1391: the edges flickered with the raw depth of each picture).
+    static func semantics(for config: ARWorldTrackingConfiguration) -> ARConfiguration.FrameSemantics {
+        var wanted = config.frameSemantics
+        wanted.remove(.personSegmentationWithDepth)
+        let withPeople = wanted.union(.personSegmentationWithDepth)
+        if peopleWanted {
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(withPeople) {
+                wanted = withPeople
+            } else if !loggedNoPeople {
+                loggedNoPeople = true
+                Diagnostics.log("Behind real things: people occlusion not supported here (with \(config.frameSemantics.rawValue))")
+            }
         }
+        let smoothed = wanted.union(.smoothedSceneDepth)
+        if on, wanted.contains(.sceneDepth), ARWorldTrackingConfiguration.supportsFrameSemantics(smoothed) { wanted = smoothed }
+        return wanted
     }
     private static var loggedNoPeople = false
 
-    /// True when the running camera's people occlusion matches the setting.
-    static func peopleMatch(_ config: ARWorldTrackingConfiguration) -> Bool {
-        let has = config.frameSemantics.contains(.personSegmentationWithDepth)
-        if !peopleWanted { return !has }
-        return has || !ARWorldTrackingConfiguration.supportsFrameSemantics(config.frameSemantics.union(.personSegmentationWithDepth))
+    static func addPeople(to config: ARWorldTrackingConfiguration) {
+        config.frameSemantics = semantics(for: config)
     }
 
-    /// Turns people occlusion on or off in the running camera, keeping the room where it is (no reset).
+    /// Turns people occlusion and smoothed depth on or off in the running camera, keeping the room where it is (no reset).
     static func applyPeople(to session: ARSession) {
-        guard let current = session.configuration as? ARWorldTrackingConfiguration, !peopleMatch(current),
-              let config = current.copy() as? ARWorldTrackingConfiguration else { return }
+        guard let current = session.configuration as? ARWorldTrackingConfiguration else { return }
+        let wanted = semantics(for: current)
+        guard wanted != current.frameSemantics, let config = current.copy() as? ARWorldTrackingConfiguration else { return }
         // The room is already found: running again with the saved map would look for it all over again.
         config.initialWorldMap = nil
-        if peopleWanted { addPeople(to: config) } else { config.frameSemantics.remove(.personSegmentationWithDepth) }
+        config.frameSemantics = wanted
         session.run(config)
-        Diagnostics.log("Behind real things: people occlusion \(config.frameSemantics.contains(.personSegmentationWithDepth) ? "on" : "off")")
+        Diagnostics.log("Behind real things: people occlusion \(wanted.contains(.personSegmentationWithDepth) ? "on" : "off"), smoothed depth \(wanted.contains(.smoothedSceneDepth))")
     }
 }
 
@@ -60,8 +66,9 @@ final class LiveOccluder {
     private var building = false
     private var lastTimestamp: TimeInterval = 0
     private var lastPeopleCheck: TimeInterval = 0
-    /// The lowest floor seen in this session, for pictures that show little or no floor.
-    private var seenFloor: Float?
+    /// The floor heights the latest pictures showed, for pictures that show little or no floor. The middle one is used:
+    /// build 1391 took the lowest, and one picture of the shiny floor's reflection sent it 1.8 m too low (Phil, 2026-11-20).
+    private var seenFloors: [Float] = []
     private var built = 0
     private var lastLog: TimeInterval = 0
     private var wasOn = false
@@ -117,12 +124,15 @@ final class LiveOccluder {
             BehindReal.applyPeople(to: view.session)
         }
         let hasModels = !(placer?.models.isEmpty ?? true)
-        let wanted = BehindReal.on && hasModels && !paused()
+        // Phil, 2026-11-20: the model he was posing vanished. While a model is picked its tools are on it, so it stays in
+        // full view; it goes behind real things again after Done.
+        let editing = placer?.selectedModel != nil
+        let wanted = BehindReal.on && hasModels && !paused() && !editing
         if wanted != wasOn {
             wasOn = wanted
-            Diagnostics.log("Behind real things: live \(wanted ? "on" : "off"), LiDAR depth \(frame.sceneDepth != nil || frame.smoothedSceneDepth != nil)")
+            Diagnostics.log("Behind real things: live \(wanted ? "on" : "off")\(editing ? " (a model is picked)" : ""), LiDAR depth \(frame.sceneDepth != nil), smoothed \(frame.smoothedSceneDepth != nil)")
         }
-        guard wanted, let depth = frame.sceneDepth ?? frame.smoothedSceneDepth else { clear(); return }
+        guard wanted, let depth = frame.smoothedSceneDepth ?? frame.sceneDepth else { clear(); return }
         guard !building else { return }
         building = true
         let map = depth.depthMap
@@ -132,29 +142,60 @@ final class LiveOccluder {
         let intrinsics = frame.camera.intrinsics
         let pose = frame.camera.transform
         let cameraY = pose.columns.3.y
-        // The floor ARKit found, else the lowest seen so far (a camera can't be below the floor: then the room moved).
+        // The floor: the lowest flat surface ARKit found well below the camera, else the middle of the floors the latest
+        // pictures showed (a camera below the floor means the room moved: start again).
         let planeFloor = frame.anchors.compactMap { anchor -> Float? in
-            guard let plane = anchor as? ARPlaneAnchor, plane.alignment == .horizontal, plane.classification == .floor else { return nil }
-            return plane.transform.columns.3.y
+            guard let plane = anchor as? ARPlaneAnchor, plane.alignment == .horizontal else { return nil }
+            let y = plane.transform.columns.3.y
+            return y < cameraY - 0.5 ? y : nil
         }.min()
-        if let floor = seenFloor, cameraY < floor + 0.2 { seenFloor = nil }
-        let floor = planeFloor ?? seenFloor
+        if let low = seenFloors.min(), cameraY < low + 0.2 { seenFloors = [] }
+        let floor = planeFloor ?? (seenFloors.count >= 3 ? seenFloors.sorted()[seenFloors.count / 2] : nil)
+        let models = placer?.worldPositions ?? []
+        let logNow = frame.timestamp - lastLog > 10
         let timestamp = frame.timestamp
         Task.detached(priority: .userInitiated) {
             let mesh = OccluderMesh.build(depth: values, width: width, height: height, intrinsics: intrinsics, pose: pose,
-                                          imageWidth: Float(image.width), imageHeight: Float(image.height), step: 2, floor: floor)
+                                          imageWidth: Float(image.width), imageHeight: Float(image.height), step: 1, floor: floor,
+                                          pushBack: 0.08, pushPerMetre: 0.04, denoise: true)
+            let report = logNow ? Self.report(models, depth: values, width: width, height: height, intrinsics: intrinsics,
+                                                     pose: pose, image: image) : ""
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.building = false
                 guard self.wasOn else { self.clear(); return }
-                if let mesh, let seen = mesh.seenFloor, seen < cameraY - 0.6 { self.seenFloor = min(self.seenFloor ?? seen, seen) }
+                if let mesh, let seen = mesh.seenFloor, seen < cameraY - 0.6 {
+                    self.seenFloors.append(seen)
+                    if self.seenFloors.count > 31 { self.seenFloors.removeFirst() }
+                }
                 self.node.geometry = mesh?.geometry()
                 self.built += 1
                 if timestamp - self.lastLog > 10 {
                     self.lastLog = timestamp
-                    Diagnostics.log("Behind real things: \((mesh?.indices.count ?? 0) / 3) triangles from \(width)x\(height) depth, floor \(floor.map { String(format: "%.2f", $0) } ?? "none"), \(self.built) made")
+                    Diagnostics.log("Behind real things: \((mesh?.indices.count ?? 0) / 3) triangles from \(width)x\(height) depth, floor \(floor.map { String(format: "%.2f", $0) } ?? "none"), \(self.built) made\(report)")
                 }
             }
         }
+    }
+
+    /// For the log: how far away each model is, and how far the real surface is in that direction. A model further
+    /// than the surface is hidden by it, which is right if it was placed there, and tells us when it was placed wrong
+    /// (a guessed distance without LiDAR puts a model behind the wall).
+    nonisolated private static func report(_ models: [(name: String, position: SIMD3<Float>)], depth: [Float], width: Int, height: Int,
+                                           intrinsics k: simd_float3x3, pose: simd_float4x4, image: CGSize) -> String {
+        var parts: [String] = []
+        let toCamera = pose.inverse
+        for model in models.prefix(4) {
+            let c = toCamera * SIMD4(model.position, 1)
+            let distance = -c.z
+            guard distance > 0.05 else { parts.append("\(model.name) behind the camera"); continue }
+            let u = k[0][0] * c.x / distance + k[2][0], v = -k[1][1] * c.y / distance + k[2][1]
+            let x = Int(u / Float(image.width) * Float(width)), y = Int(v / Float(image.height) * Float(height))
+            guard x >= 0, x < width, y >= 0, y < height else { parts.append(String(format: "%@ %.2f m, off the picture", model.name, distance)); continue }
+            let real = depth[y * width + x]
+            parts.append(String(format: "%@ %.2f m, real surface there %.2f m%@", model.name, distance, real,
+                                real > 0.12 && real + 0.1 < distance ? " (hidden: it stands behind it)" : ""))
+        }
+        return parts.isEmpty ? "" : "; " + parts.joined(separator: "; ")
     }
 }

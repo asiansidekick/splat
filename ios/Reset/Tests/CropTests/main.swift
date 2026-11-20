@@ -219,6 +219,21 @@ do {
     let full = OccluderMesh.build(depth: depth, width: w, height: h, intrinsics: k, pose: pose, imageWidth: 1920, imageHeight: 1440)
     let coarse = OccluderMesh.build(depth: depth, width: w, height: h, intrinsics: k, pose: pose, imageWidth: 1920, imageHeight: 1440, step: 2)
     check((coarse?.indices.count ?? 0) > 0 && (coarse?.indices.count ?? 0) < (full?.indices.count ?? 0) / 3, "occluder: every second pixel makes a lighter mesh")
+    // A speck of noise in the middle of the wall: a 1 m reading on its own.
+    var specked = depth
+    specked[40 * w + 200] = 1
+    let median = OccluderMesh.median3(specked, width: w, height: h)
+    check(abs(median[40 * w + 200] - 3) < 0.001, "occluder: a lone speck is smoothed away")
+    check(abs(median[96 * w + 128] - 1.5) < 0.001 && abs(median[20 * w + 20] - 3) < 0.001, "occluder: smoothing keeps the box and the wall")
+    var holes = depth
+    for dy in -1...1 { for dx in -1...1 where !(dx == 0 && dy == 0) { holes[50 * w + 50 + dy * w + dx] = 0 } }
+    check(OccluderMesh.median3(holes, width: w, height: h)[50 * w + 50] == 0, "occluder: a reading with no neighbours is dropped")
+    if let wide = OccluderMesh.build(depth: depth, width: w, height: h, intrinsics: k, pose: pose, imageWidth: Float(w), imageHeight: Float(h),
+                                     pushBack: 0.08, pushPerMetre: 0.04, denoise: true) {
+        check(triangles(wide).contains { t in t.allSatisfy { abs($0.z + 1.64) < 0.01 } }, "occluder: live pushes the box back 14 cm")
+    } else {
+        check(false, "occluder: live pushes the box back 14 cm")
+    }
     // The camera moved and turned: the box lands where the pose says.
     var moved = simd_float4x4(simd_quatf(angle: .pi / 2, axis: SIMD3(0, 1, 0)))
     moved.columns.3 = SIMD4(1, 2, 3, 1)
