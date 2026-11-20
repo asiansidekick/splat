@@ -114,7 +114,7 @@ final class ScanTrimmer: ObservableObject {
     }
 
     /// The up-and-down picture coordinate of every point, as SceneKit read them.
-    private static func pictureHeights(of geometry: SCNGeometry) -> [Float]? {
+    nonisolated static func pictureHeights(of geometry: SCNGeometry) -> [Float]? {
         guard let source = geometry.sources(for: .texcoord).first, source.usesFloatComponents,
             source.bytesPerComponent == 4, source.componentsPerVector >= 2
         else { return nil }
@@ -130,7 +130,7 @@ final class ScanTrimmer: ObservableObject {
     }
 
     /// One mesh as ModelIO reads it: points, normals and picture coordinates all numbered the same way.
-    private struct UnifiedMesh {
+    struct UnifiedMesh {
         var positions: [SIMD3<Float>]
         var normals: [SIMD3<Float>]
         var uvs: [SIMD2<Float>]
@@ -138,7 +138,7 @@ final class ScanTrimmer: ObservableObject {
         var triangles: Int { elements.reduce(0) { $0 + $1.count / 3 } }
     }
 
-    private static func unifiedMeshes(of url: URL) -> [UnifiedMesh]? {
+    nonisolated static func unifiedMeshes(of url: URL) -> [UnifiedMesh]? {
         let asset = MDLAsset(url: url)
         let meshes = asset.childObjects(of: MDLMesh.self).compactMap { $0 as? MDLMesh }
         guard !meshes.isEmpty else { return nil }
@@ -213,7 +213,7 @@ final class ScanTrimmer: ObservableObject {
         triangles = pieces.reduce(0) { $0 + $1.elements.reduce(0) { $0 + $1.count / 3 } }
     }
 
-    private static func positions(of geometry: SCNGeometry) -> [SIMD3<Float>]? {
+    nonisolated static func positions(of geometry: SCNGeometry) -> [SIMD3<Float>]? {
         guard let source = geometry.sources(for: .vertex).first, source.usesFloatComponents,
             source.bytesPerComponent == 4, source.componentsPerVector >= 3
         else { return nil }
@@ -235,7 +235,7 @@ final class ScanTrimmer: ObservableObject {
     }
 
     /// The corner numbers of every triangle, one list for each material.
-    private static func triangles(of geometry: SCNGeometry) -> [[UInt32]]? {
+    nonisolated static func triangles(of geometry: SCNGeometry) -> [[UInt32]]? {
         var all: [[UInt32]] = []
         for element in geometry.elements {
             guard element.primitiveType == .triangles else { return nil }

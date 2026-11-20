@@ -1,0 +1,576 @@
+import ModelIO
+import SceneKit
+import SwiftUI
+import UIKit
+import simd
+
+/// Makes a posable person from a 3D scan (Phil, 2026-11-20): finds the joints (ScanRig.swift), lets the crew drag
+/// any that are off, then saves an FBX character with Mixamo bones into the gallery, where it is placed and posed
+/// like any other character.
+final class ScanCharacterMaker: @unchecked Sendable {
+    let title: String
+    private let original: BodyMesh
+    private let pictures: [UIImage?]
+    private(set) var stance: ScanRig.Stance
+    private(set) var body: BodyMesh
+    private(set) var voxels: ScanRig.Voxels
+    private(set) var found: ScanRig.Found?
+    private(set) var floorTrimmed = 0
+    /// The front view of the stood-up scan, and the stretch of the body (metres) its edges show.
+    private(set) var picture: UIImage
+    private(set) var shown: (minX: Float, maxX: Float, minY: Float, maxY: Float)
+    var height: Float { stance.height }
+
+    private init(title: String, original: BodyMesh, pictures: [UIImage?], stance: ScanRig.Stance, body: BodyMesh, voxels: ScanRig.Voxels,
+                 found: ScanRig.Found?, floorTrimmed: Int, picture: UIImage, shown: (Float, Float, Float, Float)) {
+        self.title = title
+        self.original = original
+        self.pictures = pictures
+        self.stance = stance
+        self.body = body
+        self.voxels = voxels
+        self.found = found
+        self.floorTrimmed = floorTrimmed
+        self.picture = picture
+        self.shown = (shown.0, shown.1, shown.2, shown.3)
+    }
+
+    enum Failure: Error {
+        case unreadable, notAPerson, tooBig
+        var words: String {
+            switch self {
+            case .unreadable: return "This scan couldn't be opened."
+            case .notAPerson: return "This scan doesn't look like a standing person. Scan someone standing, arms a little out from the body."
+            case .tooBig: return "This scan is too big to turn into a person."
+            }
+        }
+    }
+
+    /// Reads the scan, stands it up and finds the joints. Slow (a second or two): call off the main thread.
+    static func prepare(_ folder: ScanFolder, turned: Bool? = nil) -> Result<ScanCharacterMaker, Failure> {
+        guard let loaded = read(folder.model) else { return .failure(.unreadable) }
+        let (mesh, pictures) = loaded
+        guard mesh.triangleCount >= 100 else { return .failure(.unreadable) }
+        guard mesh.triangleCount < 1_500_000 else { return .failure(.tooBig) }
+        return build(title: folder.title, original: mesh, pictures: pictures, turned: turned)
+    }
+
+    /// The same scan turned round (when the picture shows the person's back).
+    func turnedRound() -> Result<ScanCharacterMaker, Failure> {
+        Self.build(title: title, original: original, pictures: pictures, turned: !stance.turned)
+    }
+
+    private static func build(title: String, original: BodyMesh, pictures: [UIImage?], turned: Bool?) -> Result<ScanCharacterMaker, Failure> {
+        let started = Date()
+        guard var stance = ScanRig.stance(of: original) else { return .failure(.notAPerson) }
+        if let turned { stance.turned = turned }
+        var body = ScanRig.stood(original, stance)
+        let trimmed = ScanRig.trimFloor(&body)
+        if trimmed > 0 {
+            // Stand it on its feet again, without the floor piece.
+            let low = body.positions.map(\.y).min() ?? 0
+            body.positions = body.positions.map { SIMD3($0.x, $0.y - low, $0.z) }
+            stance.height = (body.positions.map(\.y).max() ?? stance.height)
+        }
+        guard stance.height > 0.3, let voxels = ScanRig.Voxels(body, size: stance.height / 150) else { return .failure(.notAPerson) }
+        let found = ScanRig.findMarks(voxels)
+        // What the front view shows: the whole body with a margin.
+        var low = SIMD2<Float>(repeating: .greatestFiniteMagnitude), high = SIMD2<Float>(repeating: -.greatestFiniteMagnitude)
+        for p in body.positions { low = simd_min(low, SIMD2(p.x, p.y)); high = simd_max(high, SIMD2(p.x, p.y)) }
+        let margin = 0.06 * stance.height
+        let shown = (low.x - margin, high.x + margin, low.y - margin, high.y + margin)
+        let picture = drawFront(body, pictures: pictures, shown: shown)
+        Diagnostics.log(String(format: "Scan person: %@, %d points, %d triangles, %.2f m tall, turned %.0f°%@ (feet %.3f), floor triangles cut %d, voxels %d inside / %d skin%@, %@, %.1f s",
+                               title, body.positions.count, body.triangleCount, stance.height, stance.yaw * 180 / .pi, stance.turned ? " and round" : "",
+                               stance.feetSignal, trimmed, voxels.solidCount, voxels.shellCount, voxels.closed ? " (holes closed)" : "",
+                               found.map { "hands \($0.handsFound ? "found" : "not found"), groin \($0.groinFound ? "found" : "guessed")" } ?? "outline not read",
+                               Date().timeIntervalSince(started)))
+        return .success(ScanCharacterMaker(title: title, original: original, pictures: pictures, stance: stance, body: body, voxels: voxels,
+                                           found: found, floorTrimmed: trimmed, picture: picture, shown: shown))
+    }
+
+    /// Where the dots start.
+    var startingMarks: ScanRig.Marks {
+        found?.marks ?? ScanRig.averageMarks(height: height, middle: 0)
+    }
+
+    func joints(_ marks: ScanRig.Marks) -> [SIMD3<Float>] { ScanRig.joints(marks, voxels, height: height) }
+
+    /// Skins the scan to the joints and saves it in the gallery as "<scan> person.fbx". Slow: off the main thread.
+    func make(_ marks: ScanRig.Marks) throws -> URL {
+        let started = Date()
+        let joints = joints(marks)
+        let skin = ScanRig.skin(body, joints: joints, voxels)
+        let folder = ModelLibrary.folder
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let base = title.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces) + " person"
+        var target = folder.appendingPathComponent("\(base).fbx")
+        var number = 2
+        while FileManager.default.fileExists(atPath: target.path) {
+            target = folder.appendingPathComponent("\(base) \(number).fbx")
+            number += 1
+        }
+        let textures = FBXImport.texturesFolder(for: target)
+        try? FileManager.default.removeItem(at: textures)
+        var mesh = body
+        for (index, part) in mesh.parts.enumerated() {
+            guard let name = part.texture, index < pictures.count, let picture = pictures[index], let data = Self.jpeg(picture) else {
+                mesh.parts[index].texture = nil
+                continue
+            }
+            try FileManager.default.createDirectory(at: textures, withIntermediateDirectories: true)
+            try data.write(to: textures.appendingPathComponent(name), options: .atomic)
+        }
+        let file = ScanRig.fbx(mesh, joints: joints, skin: skin, name: target.deletingPathExtension().lastPathComponent)
+        try file.write(to: target, options: .atomic)
+        Diagnostics.log(String(format: "Scan person saved: %@, %.1f MB, %d bones pull the skin, %d loose points, %.1f s",
+                               target.lastPathComponent, Double(file.count) / 1_000_000, ScanRig.skinBones.count, skin.loose, Date().timeIntervalSince(started)))
+        return target
+    }
+
+    private static func jpeg(_ image: UIImage) -> Data? {
+        let longest = max(image.size.width * image.scale, image.size.height * image.scale)
+        guard longest > 4096 else { return image.jpegData(compressionQuality: 0.9) }
+        let factor = 4096 / longest
+        let size = CGSize(width: (image.size.width * image.scale * factor).rounded(), height: (image.size.height * image.scale * factor).rounded())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }.jpegData(compressionQuality: 0.9)
+    }
+
+    // MARK: Reading the scan
+
+    /// The scan's triangles in metres (as Reset shows it), with one picture per part. ModelIO's numbering is used when it
+    /// matches, as in the Trim screen: SceneKit's own picture coordinates can be numbered apart from its points.
+    static func read(_ url: URL) -> (BodyMesh, [UIImage?])? {
+        guard let scene = try? SCNScene(url: url, options: nil) else { return nil }
+        let unified = ScanTrimmer.unifiedMeshes(of: url)
+        var positions: [SIMD3<Float>] = [], normals: [SIMD3<Float>] = [], uvs: [SIMD2<Float>] = []
+        var allHaveUVs = true
+        var triangles: [UInt32] = []
+        var parts: [BodyMesh.Part] = []
+        var pictures: [UIImage?] = []
+        var meshNumber = 0
+        scene.rootNode.enumerateHierarchy { node, _ in
+            guard let geometry = node.geometry else { return }
+            defer { meshNumber += 1 }
+            guard var points = ScanTrimmer.positions(of: geometry), var elements = ScanTrimmer.triangles(of: geometry) else { return }
+            var ownNormals: [SIMD3<Float>] = []
+            var ownUVs: [SIMD2<Float>] = []
+            if let unified, meshNumber < unified.count, unified[meshNumber].triangles == elements.reduce(0, { $0 + $1.count / 3 }) {
+                let mesh = unified[meshNumber]
+                points = mesh.positions
+                elements = mesh.elements
+                if mesh.normals.count == points.count { ownNormals = mesh.normals }
+                if mesh.uvs.count == points.count {
+                    var flip = true
+                    if let own = ScanTrimmer.pictureHeights(of: geometry), own.count == mesh.uvs.count {
+                        let mine = mesh.uvs.map(\.y).sorted(), theirs = own.sorted()
+                        var plain: Float = 0, flipped: Float = 0
+                        for i in mine.indices {
+                            plain += abs(mine[i] - theirs[i])
+                            flipped += abs((1 - mine[mine.count - 1 - i]) - theirs[i])
+                        }
+                        flip = flipped < plain
+                    }
+                    ownUVs = mesh.uvs.map { SIMD2($0.x, flip ? 1 - $0.y : $0.y) }
+                }
+            } else {
+                // SceneKit's own numbers, used only when every source has one entry per point.
+                if let source = geometry.sources(for: .normal).first, source.vectorCount == points.count { ownNormals = Self.vectors(source) }
+                if let source = geometry.sources(for: .texcoord).first, source.vectorCount == points.count {
+                    ownUVs = Self.vectors(source).map { SIMD2($0.x, $0.y) }
+                }
+            }
+            let world = node.simdWorldTransform
+            let turn = simd_float3x3(world.columns.0.xyz, world.columns.1.xyz, world.columns.2.xyz)
+            let base = UInt32(positions.count)
+            positions += points.map { (world * SIMD4($0, 1)).xyz }
+            if ownNormals.count == points.count {
+                normals += ownNormals.map { let n = turn * $0; return simd_length(n) > 1e-9 ? simd_normalize(n) : SIMD3(0, 1, 0) }
+            } else {
+                normals += [SIMD3<Float>](repeating: .zero, count: points.count)  // made below
+            }
+            if ownUVs.count == points.count { uvs += ownUVs } else { allHaveUVs = false; uvs += [SIMD2<Float>](repeating: .zero, count: points.count) }
+            for (e, list) in elements.enumerated() {
+                let first = triangles.count / 3
+                var count = 0
+                var t = 0
+                while t + 2 < list.count {
+                    if Int(list[t]) < points.count, Int(list[t + 1]) < points.count, Int(list[t + 2]) < points.count {
+                        triangles += [base + list[t], base + list[t + 1], base + list[t + 2]]
+                        count += 1
+                    }
+                    t += 3
+                }
+                guard count > 0 else { continue }
+                let material = geometry.materials.isEmpty ? nil : geometry.materials[e % geometry.materials.count]
+                let image = ownUVs.count == points.count ? material.flatMap { Self.image(from: $0.diffuse.contents) } : nil
+                parts.append(BodyMesh.Part(firstTriangle: first, triangleCount: count, texture: image == nil ? nil : "skin\(parts.count).jpg",
+                                           color: material.map { Self.color(from: $0.diffuse.contents) } ?? SIMD3(0.7, 0.7, 0.7)))
+                pictures.append(image)
+            }
+        }
+        guard !positions.isEmpty, !triangles.isEmpty else { return nil }
+        // A picture SceneKit kept inside the file: ModelIO's copy of the first one.
+        if pictures.allSatisfy({ $0 == nil }), allHaveUVs, let picture = modelIOPicture(url) {
+            pictures = parts.map { _ in picture }
+            for i in parts.indices { parts[i].texture = "skin\(i).jpg" }
+        }
+        if normals.contains(where: { $0 == .zero }) {
+            let made = BodyMesh.smoothNormals(positions, triangles)
+            for i in normals.indices where normals[i] == .zero { normals[i] = made[i] }
+        }
+        let textured = parts.filter { $0.texture != nil }.count
+        Diagnostics.log("Scan person read: \(url.lastPathComponent), \(meshNumber) meshes, \(positions.count) points, \(triangles.count / 3) triangles, \(parts.count) parts, \(textured) with pictures")
+        return (BodyMesh(positions: positions, normals: normals, uvs: allHaveUVs ? uvs : nil, triangles: triangles, parts: parts), pictures)
+    }
+
+    private static func vectors(_ source: SCNGeometrySource) -> [SIMD3<Float>] {
+        guard source.usesFloatComponents, source.bytesPerComponent == 4 else { return [] }
+        let count = source.vectorCount, stride = source.dataStride, offset = source.dataOffset, parts = min(3, source.componentsPerVector)
+        let data = source.data
+        guard count > 0, stride > 0, data.count >= offset + (count - 1) * stride + parts * 4 else { return [] }
+        var out: [SIMD3<Float>] = []
+        out.reserveCapacity(count)
+        data.withUnsafeBytes { raw in
+            for i in 0..<count {
+                var v = SIMD3<Float>(0, 0, 0)
+                for p in 0..<parts { v[p] = raw.loadUnaligned(fromByteOffset: offset + i * stride + p * 4, as: Float.self) }
+                out.append(v)
+            }
+        }
+        return out
+    }
+
+    private static func image(from contents: Any?) -> UIImage? {
+        guard let contents else { return nil }
+        if let image = contents as? UIImage { return image }
+        if let url = contents as? URL {
+            return UIImage(contentsOfFile: url.path) ?? (try? Data(contentsOf: url)).flatMap { UIImage(data: $0) }
+        }
+        if let path = contents as? String { return UIImage(contentsOfFile: path) }
+        if let texture = contents as? MDLTexture, let cg = texture.imageFromTexture()?.takeUnretainedValue() { return UIImage(cgImage: cg) }
+        let object = contents as AnyObject
+        if CFGetTypeID(object) == CGImage.typeID { return UIImage(cgImage: object as! CGImage) }
+        return nil
+    }
+
+    private static func color(from contents: Any?) -> SIMD3<Float> {
+        guard let color = contents as? UIColor else { return SIMD3(0.7, 0.7, 0.7) }
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return SIMD3(Float(r), Float(g), Float(b))
+    }
+
+    private static func modelIOPicture(_ url: URL) -> UIImage? {
+        let asset = MDLAsset(url: url)
+        asset.loadTextures()
+        for case let mesh as MDLMesh in asset.childObjects(of: MDLMesh.self) {
+            for submesh in (mesh.submeshes as? [MDLSubmesh]) ?? [] {
+                guard let property = submesh.material?.property(with: .baseColor), property.type == .texture,
+                      let cg = property.textureSamplerValue?.texture?.imageFromTexture()?.takeUnretainedValue()
+                else { continue }
+                return UIImage(cgImage: cg)
+            }
+        }
+        return nil
+    }
+
+    // MARK: The front view
+
+    /// The stood-up scan seen from the front, drawn triangle by triangle from the back forwards with its photo's
+    /// colours. Drawn here, not by SceneKit, so the dots sit exactly where the body is.
+    private static func drawFront(_ mesh: BodyMesh, pictures: [UIImage?], shown: (Float, Float, Float, Float)) -> UIImage {
+        let (minX, maxX, minY, maxY) = shown
+        let tall: CGFloat = 1400
+        let scale = tall / CGFloat(maxY - minY)
+        let size = CGSize(width: max(200, (CGFloat(maxX - minX) * scale).rounded()), height: tall)
+        let samplers = pictures.map { $0.flatMap(Sampler.init) }
+        var partOf = [Int](repeating: 0, count: mesh.triangleCount)
+        for (p, part) in mesh.parts.enumerated() {
+            for t in part.firstTriangle..<min(mesh.triangleCount, part.firstTriangle + part.triangleCount) { partOf[t] = p }
+        }
+        let order = (0..<mesh.triangleCount).sorted {
+            let a = mesh.positions[Int(mesh.triangles[$0 * 3])].z + mesh.positions[Int(mesh.triangles[$0 * 3 + 1])].z + mesh.positions[Int(mesh.triangles[$0 * 3 + 2])].z
+            let b = mesh.positions[Int(mesh.triangles[$1 * 3])].z + mesh.positions[Int(mesh.triangles[$1 * 3 + 1])].z + mesh.positions[Int(mesh.triangles[$1 * 3 + 2])].z
+            return a < b
+        }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: size, format: format).image { renderer in
+            let context = renderer.cgContext
+            context.setFillColor(UIColor(white: 0.12, alpha: 1).cgColor)
+            context.fill(CGRect(origin: .zero, size: size))
+            context.setShouldAntialias(false)
+            func point(_ p: SIMD3<Float>) -> CGPoint { CGPoint(x: CGFloat(p.x - minX) * scale, y: CGFloat(maxY - p.y) * scale) }
+            for t in order {
+                let a = Int(mesh.triangles[t * 3]), b = Int(mesh.triangles[t * 3 + 1]), c = Int(mesh.triangles[t * 3 + 2])
+                let pa = mesh.positions[a], pb = mesh.positions[b], pc = mesh.positions[c]
+                var colour = mesh.parts.isEmpty ? SIMD3<Float>(0.7, 0.7, 0.7) : mesh.parts[partOf[t]].color
+                if let uvs = mesh.uvs, partOf[t] < samplers.count, let sampler = samplers[partOf[t]] {
+                    colour = (sampler.color(uvs[a]) + sampler.color(uvs[b]) + sampler.color(uvs[c])) / 3
+                }
+                // A little shading, so the shape reads.
+                let n = simd_cross(pb - pa, pc - pa)
+                let facing = simd_length(n) > 1e-12 ? abs(simd_normalize(n).z) : 1
+                colour *= 0.72 + 0.28 * facing
+                context.setFillColor(red: CGFloat(colour.x), green: CGFloat(colour.y), blue: CGFloat(colour.z), alpha: 1)
+                context.beginPath()
+                context.move(to: point(pa))
+                context.addLine(to: point(pb))
+                context.addLine(to: point(pc))
+                context.closePath()
+                context.fillPath()
+            }
+        }
+    }
+
+    /// A photo's colours, read at 512 pixels.
+    private struct Sampler {
+        let side = 512
+        let pixels: [UInt8]
+
+        init?(_ image: UIImage) {
+            guard let cg = image.cgImage else { return nil }
+            var buffer = [UInt8](repeating: 0, count: 512 * 512 * 4)
+            let drawn = buffer.withUnsafeMutableBytes { raw -> Bool in
+                guard let context = CGContext(data: raw.baseAddress, width: 512, height: 512, bitsPerComponent: 8, bytesPerRow: 512 * 4,
+                                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+                else { return false }
+                context.interpolationQuality = .medium
+                context.draw(cg, in: CGRect(x: 0, y: 0, width: 512, height: 512))
+                return true
+            }
+            guard drawn else { return nil }
+            pixels = buffer
+        }
+
+        /// (0, 0) is the top left, as SceneKit counts.
+        func color(_ uv: SIMD2<Float>) -> SIMD3<Float> {
+            let u = uv.x - floor(uv.x), v = uv.y - floor(uv.y)
+            let x = min(side - 1, max(0, Int(u * Float(side)))), y = min(side - 1, max(0, Int(v * Float(side))))
+            let at = (y * side + x) * 4
+            return SIMD3(Float(pixels[at]), Float(pixels[at + 1]), Float(pixels[at + 2])) / 255
+        }
+    }
+}
+
+/// The screen: the scan from the front with a dot on each joint Mixamo asks for. Drag a dot that is off; the
+/// skeleton follows. "Make person" saves it in the gallery.
+struct ScanCharacterScreen: View {
+    let folder: ScanFolder
+    /// Called on closing, with the saved character when one was made.
+    let done: (URL?) -> Void
+    @State private var maker: ScanCharacterMaker?
+    @State private var marks = ScanRig.Marks()
+    @State private var working: String? = "Finding the joints…"
+    @State private var problem: String?
+    @State private var saved: URL?
+
+    var body: some View {
+        ZStack {
+            Color(white: 0.12).ignoresSafeArea()
+            if let maker {
+                editor(maker)
+            }
+            if let working {
+                VStack(spacing: 12) {
+                    ProgressView().tint(.white)
+                    Text(working).font(Theme.subheadline).foregroundStyle(.white)
+                }
+                .padding(20)
+                .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 14))
+            }
+        }
+        .overlay(alignment: .top) { topBar }
+        .overlay(alignment: .bottom) { bottomBar }
+        .preferredColorScheme(.dark)
+        .task { await start() }
+    }
+
+    private var topBar: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Button("Cancel") { done(nil) }
+                    .font(Theme.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .disabled(working != nil && maker != nil)
+                Spacer()
+            }
+            if let problem {
+                Text(problem).font(Theme.footnote).foregroundStyle(.orange).multilineTextAlignment(.center).shadow(color: .black, radius: 3)
+            } else if maker != nil, saved == nil, working == nil {
+                Text("Drag any dot that's off its joint").font(Theme.footnote).foregroundStyle(.white).shadow(color: .black, radius: 3)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+
+    @ViewBuilder private var bottomBar: some View {
+        if let saved {
+            VStack(spacing: 10) {
+                Text("Saved as “\(saved.deletingPathExtension().lastPathComponent)” in 3D models. Tap it there to place it, then Pose.")
+                    .font(Theme.footnote).foregroundStyle(.white).multilineTextAlignment(.center)
+                Button { done(saved) } label: {
+                    Text("Done").font(Theme.body.weight(.semibold)).foregroundStyle(Theme.onAccent)
+                        .padding(.horizontal, 28).padding(.vertical, 10).background(Theme.accent, in: Capsule())
+                }
+            }
+            .padding(16)
+            .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 14))
+            .padding(.bottom, 12)
+        } else if maker != nil, working == nil {
+            HStack {
+                Button { turnRound() } label: {
+                    Label("Turn round", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+                        .font(Theme.subheadline.weight(.semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 14).padding(.vertical, 10).background(Color.black.opacity(0.55), in: Capsule())
+                }
+                Spacer()
+                Button { make() } label: {
+                    Text("Make person").font(Theme.body.weight(.semibold)).foregroundStyle(Theme.onAccent)
+                        .padding(.horizontal, 20).padding(.vertical, 10).background(Theme.accent, in: Capsule())
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+        }
+    }
+
+    private func editor(_ maker: ScanCharacterMaker) -> some View {
+        GeometryReader { geometry in
+            let frame = Self.fit(maker.picture.size, in: geometry.size)
+            let map = Mapping(frame: frame, shown: maker.shown)
+            ZStack(alignment: .topLeading) {
+                Image(uiImage: maker.picture)
+                    .resizable()
+                    .frame(width: frame.width, height: frame.height)
+                    .offset(x: frame.minX, y: frame.minY)
+                // The skeleton the dots make, so a wrong one shows.
+                Canvas { context, _ in
+                    let joints = maker.joints(marks)
+                    var path = Path()
+                    for (bone, parent) in ScanRig.parents.enumerated() where parent >= 0 {
+                        path.move(to: map.point(joints[parent].x, joints[parent].y))
+                        path.addLine(to: map.point(joints[bone].x, joints[bone].y))
+                    }
+                    context.stroke(path, with: .color(.black.opacity(0.5)), lineWidth: 4)
+                    context.stroke(path, with: .color(.white.opacity(0.9)), lineWidth: 2)
+                }
+                .allowsHitTesting(false)
+                if saved == nil {
+                    ForEach(ScanRig.Marks.Name.allCases) { name in
+                        dot(name, map: map)
+                    }
+                }
+            }
+            .coordinateSpace(name: "person")
+        }
+        .ignoresSafeArea(edges: .bottom)
+        .padding(.top, 56)
+        .padding(.bottom, 64)
+    }
+
+    private func dot(_ name: ScanRig.Marks.Name, map: Mapping) -> some View {
+        let at = map.point(marks[name].x, marks[name].y)
+        return ZStack {
+            Circle().fill(Theme.accent).frame(width: 18, height: 18)
+                .overlay(Circle().stroke(Color.black.opacity(0.6), lineWidth: 1.5))
+            Text(name.word)
+                .font(Theme.caption2.weight(.semibold))
+                .foregroundStyle(.white)
+                .shadow(color: .black, radius: 2)
+                .fixedSize()
+                .offset(x: [.elbowR, .wristR, .kneeR].contains(name) ? -34 : 34)
+        }
+        .frame(width: 44, height: 44)
+        .contentShape(Circle())
+        .position(at)
+        .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("person")).onChanged { value in
+            marks[name] = map.metres(value.location)
+        })
+    }
+
+    /// From the picture's metres to the screen's points and back.
+    private struct Mapping {
+        let frame: CGRect
+        let shown: (minX: Float, maxX: Float, minY: Float, maxY: Float)
+        func point(_ x: Float, _ y: Float) -> CGPoint {
+            CGPoint(x: frame.minX + CGFloat((x - shown.minX) / (shown.maxX - shown.minX)) * frame.width,
+                    y: frame.minY + CGFloat((shown.maxY - y) / (shown.maxY - shown.minY)) * frame.height)
+        }
+        func metres(_ p: CGPoint) -> SIMD2<Float> {
+            let u = Float((p.x - frame.minX) / max(frame.width, 1)), v = Float((p.y - frame.minY) / max(frame.height, 1))
+            let x = shown.minX + min(max(u, 0), 1) * (shown.maxX - shown.minX)
+            let y = shown.maxY - min(max(v, 0), 1) * (shown.maxY - shown.minY)
+            return SIMD2(x, y)
+        }
+    }
+
+    private static func fit(_ size: CGSize, in box: CGSize) -> CGRect {
+        guard size.width > 0, size.height > 0, box.width > 0, box.height > 0 else { return .zero }
+        let scale = min(box.width / size.width, box.height / size.height)
+        let w = size.width * scale, h = size.height * scale
+        return CGRect(x: (box.width - w) / 2, y: (box.height - h) / 2, width: w, height: h)
+    }
+
+    private func start() async {
+        let folder = folder
+        let result = await Task.detached(priority: .userInitiated) { ScanCharacterMaker.prepare(folder) }.value
+        show(result)
+    }
+
+    private func turnRound() {
+        guard let maker else { return }
+        working = "Turning round…"
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { maker.turnedRound() }.value
+            show(result)
+        }
+    }
+
+    private func show(_ result: Result<ScanCharacterMaker, ScanCharacterMaker.Failure>) {
+        working = nil
+        switch result {
+        case .failure(let failure):
+            problem = failure.words
+            Diagnostics.log("Scan person: \(failure)")
+        case .success(let made):
+            maker = made
+            marks = made.startingMarks
+            if made.found?.handsFound != true {
+                problem = "Couldn't find both hands, so some dots are a guess. Drag them onto the joints, or scan again with the arms held a little out from the body."
+            } else if made.stance.feetSignal < 0.01 {
+                problem = "If you see the person's back, tap Turn round."
+            } else {
+                problem = nil
+            }
+        }
+    }
+
+    private func make() {
+        guard let maker else { return }
+        working = "Making the person…"
+        let chosen = marks
+        let moved = ScanRig.Marks.Name.allCases.filter { simd_distance(chosen[$0], maker.startingMarks[$0]) > 0.01 }.map(\.rawValue)
+        Diagnostics.log("Scan person: making, dots moved: \(moved.isEmpty ? "none" : moved.joined(separator: ", "))")
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<URL, Error> in
+                do { return .success(try maker.make(chosen)) } catch { return .failure(error) }
+            }.value
+            working = nil
+            switch result {
+            case .success(let url):
+                saved = url
+                problem = nil
+                Haptics.success()
+            case .failure(let error):
+                problem = "Couldn't save the person: \(error.localizedDescription)"
+                Diagnostics.log("Scan person save failed: \(error)")
+                Haptics.warning()
+            }
+        }
+    }
+}

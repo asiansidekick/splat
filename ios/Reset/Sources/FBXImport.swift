@@ -100,6 +100,8 @@ enum FBXImport {
             if n.parent >= 0, n.parent < nodes.count, n.parent != i { nodes[n.parent].addChildNode(nodes[i]) } else { top.addChildNode(nodes[i]) }
         }
 
+        // A person made from a scan (ScanCharacter.swift): its colours are photographs, shown unlit like the scan itself.
+        let scanned = rigNodes.contains { $0.name == ScanRig.scanMarker }
         var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude), high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
         var pictures: [String: UIImage] = [:]
         let textures = texturesFolder(for: url)
@@ -129,7 +131,7 @@ enum FBXImport {
                 guard length >= 3, start + length <= count else { continue }
                 elements.append(SCNGeometryElement(indices: (start..<(start + length)).map { UInt32($0) }, primitiveType: .triangles))
                 let material = SCNMaterial()
-                material.lightingModel = .physicallyBased
+                material.lightingModel = scanned ? .constant : .physicallyBased
                 material.roughness.contents = 0.7
                 material.isDoubleSided = true
                 var picture: UIImage?

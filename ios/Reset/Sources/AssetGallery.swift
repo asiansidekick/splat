@@ -110,6 +110,8 @@ struct AssetGallery: View {
     var scanApology: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var trimming: ScanFolder?
+    /// Phil, 2026-11-20: a scan of a person made into a posable character (ScanCharacter.swift).
+    @State private var makingPerson: ScanFolder?
     @State private var preview: URL?
     @State private var version = 0
     @State private var renaming: Asset?
@@ -220,6 +222,15 @@ struct AssetGallery: View {
                 version += 1
             }
         }
+        .fullScreenCover(item: $makingPerson) { folder in
+            ScanCharacterScreen(folder: folder) { made in
+                makingPerson = nil
+                if made != nil {
+                    refresh()
+                    version += 1
+                }
+            }
+        }
         .quickLookPreview($preview)
         .alert("Rename", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
@@ -272,6 +283,7 @@ struct AssetGallery: View {
             Button { place(asset) } label: { Label("Place", systemImage: "scope") }
             Button { newName = asset.name; renaming = asset } label: { Label("Rename", systemImage: "pencil") }
             Button { trimming = folder } label: { Label("Trim", systemImage: "scissors") }
+            Button { makingPerson = folder } label: { Label("Make a posable person", systemImage: "figure.arms.open") }
             Button { preview = folder.model } label: { Label("View", systemImage: "eye") }
             ShareLink(item: folder.model) { Label("Share", systemImage: "square.and.arrow.up") }
             Button(role: .destructive) { delete(asset) } label: { Label("Delete scan", systemImage: "trash") }
