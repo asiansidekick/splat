@@ -71,7 +71,9 @@ struct ScanScreen: View {
     @ViewBuilder private var overlay: some View {
         switch model.phase {
         case .building(let fraction):
-            BuildingView(fraction: fraction)
+            building(fraction)
+        case .person(let folder):
+            person(folder)
         case .cropping(let folder):
             CropScreen(folder: folder)
         case .done(let folder):
@@ -83,12 +85,29 @@ struct ScanScreen: View {
         }
     }
 
+    private func building(_ fraction: Double) -> BuildingView {
+        let skip: (() -> Void)? = model.buildingWords == ScanModel.personWords ? { model.skipPerson() } : nil
+        return BuildingView(fraction: fraction, words: model.buildingWords, skip: skip)
+    }
+
+    /// "Scan a person": the person's dots, then back to the scan's own done screen (or into the room with the person).
+    private func person(_ folder: ScanFolder) -> ScanCharacterScreen {
+        ScanCharacterScreen(folder: folder, done: { (made: URL?, placeNow: Bool) in
+            if let made, placeNow {
+                place(made)
+            } else {
+                model.phase = .done(folder)
+            }
+        })
+    }
+
     private var captureControls: some View {
         VStack(spacing: 0) {
             topBar
             TorchDial().padding(.top, 8)
             Spacer()
             if model.phase == .passDone { passChoices }
+            if model.phase == .ready || model.phase == .starting { modePicker }
             Text(stepText)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.white)
@@ -121,9 +140,25 @@ struct ScanScreen: View {
         .padding(.top, 12)
     }
 
+    /// Like the Camera app's modes: two words above the shutter, the chosen one in yellow.
+    private var modePicker: some View {
+        HStack(spacing: 22) {
+            ForEach([false, true], id: \.self) { person in
+                Button(person ? "Person" : "Object") { model.personMode = person }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(model.personMode == person ? Color.yellow : Color.white)
+                    .fixedSize()
+            }
+        }
+        .shadow(radius: 3)
+        .padding(.bottom, 10)
+    }
+
     private var stepText: String {
         switch model.phase {
         case .starting: return "Starting camera…"
+        case .ready where model.personMode: return "Tap to record, then walk slowly round the person, high and low"
+        case .capturing where model.personMode: return "Arms a little out, standing still. Tap to stop"
         case .ready where model.ownCamera: return "Tap to record, then walk slowly round the object"
         case .capturing where model.ownCamera: return "Walk slowly round it, high and low. Tap to stop"
         case .ready: return ScanModel.usesBox ? "Aim at the object, then tap" : "Tap to record, then walk slowly round the object"
@@ -245,6 +280,8 @@ enum FirstPicture {
 
 struct BuildingView: View {
     let fraction: Double
+    var words = "Building the 3D model on the phone"
+    var skip: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 18) {
@@ -257,8 +294,11 @@ struct BuildingView: View {
                 Text("\(Int(fraction * 100))%").font(.title3.monospacedDigit().weight(.semibold))
             }
             .frame(width: 110, height: 110)
-            Text("Building the 3D model on the phone").font(.headline)
+            Text(words).font(.headline).multilineTextAlignment(.center)
             Text("Keep the app open. This takes a few minutes.").font(.footnote).foregroundStyle(.secondary)
+            if let skip {
+                Button("Skip", action: skip).font(.body.weight(.semibold)).foregroundStyle(.yellow).padding(.top, 6)
+            }
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

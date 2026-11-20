@@ -92,6 +92,7 @@ final class ScanModel: ObservableObject {
         case finishing      // session writing its last pictures
         case building(Double) // photogrammetry progress 0...1
         case cropping(ScanFolder) // whole area built; choose what to keep
+        case person(ScanFolder)   // "Scan a person": the person's dots, to make a posable person
         case done(ScanFolder)
         case failed(String)
     }
@@ -102,6 +103,17 @@ final class ScanModel: ObservableObject {
     @Published var maxShots = 0
     @Published var passes = 1
     @Published var library: [ScanFolder] = ScanFolder.all()
+    /// Phil, 2026-11-20: "Should we have a scan a person mode". After the build the room is cut away and just the
+    /// person is built again from the same photos, then the dots for making a posable person open. Remembered.
+    @Published var personMode = UserDefaults.standard.bool(forKey: "scanPersonMode") {
+        didSet {
+            UserDefaults.standard.set(personMode, forKey: "scanPersonMode")
+            if personMode != oldValue { switchedMode() }
+        }
+    }
+    static let personWords = "Building just the person in more detail"
+    /// Words under the progress ring while building.
+    @Published var buildingWords = "Building the 3D model on the phone"
 
     @Published private(set) var session: ObjectCaptureSession?
     /// Reset's own camera is taking the pictures (Apple's capture took none on this phone).
@@ -143,7 +155,8 @@ final class ScanModel: ObservableObject {
         do {
             let folder = try ScanFolder.new()
             self.folder = folder
-            if Self.prefersOwn {
+            // A person scan needs to know where each photo was taken, which only Reset's own camera records.
+            if Self.prefersOwn || personMode {
                 startOwn(folder, recording: false)
                 return
             }
@@ -180,6 +193,20 @@ final class ScanModel: ObservableObject {
         poll?.invalidate()
         poll = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
+        }
+    }
+
+    /// Person mode needs Reset's own camera: Apple's capture, not yet recording, is swapped for it.
+    private func switchedMode() {
+        ScanLog.add("Mode: \(personMode ? "person" : "object")")
+        guard personMode, session != nil, phase == .ready || phase == .starting else { return }
+        session?.cancel()
+        stopSession()
+        phase = .starting
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            guard let self, let folder = self.folder else { return }
+            self.startOwn(folder, recording: false)
         }
     }
 
@@ -464,6 +491,7 @@ final class ScanModel: ObservableObject {
         }
         self.folder = folder
         phase = .building(0)
+        buildingWords = "Building the 3D model on the phone"
         hint = ""
         let out = crop == nil ? folder.full : folder.model
         try? FileManager.default.removeItem(at: out)
@@ -535,7 +563,12 @@ final class ScanModel: ObservableObject {
             let ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
             ScanLog.add("Own camera model: fit \(fit.map { String(format: "scale %.3f, error %.3f m", $0.scale, $0.error) } ?? "none"), written \(ok)")
             library = ScanFolder.all()
-            phase = ok ? .done(folder) : .failed("The model couldn't be saved.")
+            guard ok else { phase = .failed("The model couldn't be saved."); return }
+            if personMode, ScanPersonDetail.canRebuild(folder) {
+                buildPerson(folder)
+            } else {
+                phase = .done(folder)
+            }
             return
         }
         if cropped {
@@ -545,6 +578,52 @@ final class ScanModel: ObservableObject {
         } else {
             phase = .failed("The model file wasn't written. The pictures are kept; try Build again from the library.")
         }
+    }
+
+    /// "Scan a person": the room is cut away round the person and just the person is built again from the same photos
+    /// (about four times the detail on the face), then the person's dots open. Anything that goes wrong leaves the
+    /// scan as it is, ready for Place or for Make a posable person from the gallery.
+    private func buildPerson(_ folder: ScanFolder) {
+        phase = .building(0)
+        buildingWords = Self.personWords
+        buildTask = Task { [weak self] in
+            let box = await Task.detached(priority: .userInitiated) { () -> (SIMD3<Float>, SIMD3<Float>)? in
+                guard let person = ScanPersonDetail.personBox(folder) else { return nil }
+                return ScanPersonDetail.builderBox(folder, low: person.0, high: person.1)
+            }.value
+            guard let box else {
+                self?.phase = .person(folder)
+                return
+            }
+            do {
+                try await ScanPersonDetail.rebuild(folder, box: box) { [weak self] fraction in
+                    Task { @MainActor [weak self] in
+                        if case .building = self?.phase { self?.phase = .building(fraction) }
+                    }
+                }
+                // A detailed build that doesn't read as a person goes; the scan as it is is used instead.
+                let check = await Task.detached(priority: .userInitiated) { ScanCharacterMaker.prepare(folder) }.value
+                if case .failure(let failure) = check {
+                    try? FileManager.default.removeItem(at: ScanPersonDetail.file(folder))
+                    ScanPersonDetail.skip(folder)
+                    ScanLog.add("Person build didn't read as a person (\(failure)), using the scan as it is")
+                }
+            } catch {
+                ScanPersonDetail.skip(folder)
+                ScanLog.add("Person build failed: \(error)")
+            }
+            self?.library = ScanFolder.all()
+            self?.phase = .person(folder)
+        }
+    }
+
+    /// Skip on the person build: the scan as it is goes straight to the dots.
+    func skipPerson() {
+        guard let folder, case .building = phase else { return }
+        ScanPersonDetail.skip(folder)
+        buildTask?.cancel()
+        ScanLog.add("Person build skipped")
+        phase = .person(folder)
     }
 
     /// Where the builder thinks each picture was taken, against where ARKit knows it was: the model's real size and

@@ -312,6 +312,68 @@ enum ScanRig {
         return removed
     }
 
+    /// Phil, 2026-11-20 ("a scan a person mode"): where the person stands in a scan of the whole area round them.
+    /// `points` are the built model's points and `cameras` where each picture was taken, both in metres with y up.
+    /// The floor is the most crowded 2 cm slice low down; the person is the most crowded spot above it inside the ring
+    /// the cameras walked round. The box is that spot, 0.7 m each way, from just under the floor to the top of the head.
+    /// Nil when nothing stands there.
+    static func personColumn(points: [SIMD3<Float>], cameras: [SIMD3<Float>]) -> (low: SIMD3<Float>, high: SIMD3<Float>)? {
+        guard cameras.count >= 4, points.count >= 100, let lowest = points.map(\.y).min() else { return nil }
+        let eye = cameras.map(\.y).reduce(0, +) / Float(cameras.count)
+        var slices = [Int](repeating: 0, count: 25)
+        for p in points {
+            let slice = Int((p.y - lowest) / 0.02)
+            if slice >= 0 && slice < slices.count { slices[slice] += 1 }
+        }
+        var floor = lowest + (Float(slices.indices.max { slices[$0] < slices[$1] } ?? 0) + 0.5) * 0.02
+        // The phone is held well above the floor: a "floor" near the cameras is something else.
+        if floor > eye - 0.5 { floor = lowest }
+        let ring = cameras.map { SIMD2($0.x, $0.z) }
+        var middle = ring.reduce(SIMD2<Float>(), +) / Float(ring.count)
+        // The circle the phone walked: its middle is where the person stood, even after only part of a walk round.
+        if let circle = orbitCentre(ring), simd_distance(circle, middle) < 3 { middle = circle }
+        let distances = ring.map { simd_distance($0, middle) }.sorted()
+        let reach = max(0.5, 0.8 * distances[distances.count / 2])
+        let standing = points.filter { p in
+            p.y > floor + 0.25 && p.y < floor + 2.3 && simd_distance(SIMD2(p.x, p.z), middle) < reach
+        }
+        guard standing.count >= 50 else { return nil }
+        // The most crowded 10 cm square (with its neighbours) is the person.
+        let cell: Float = 0.1
+        var counts: [SIMD2<Int32>: Int] = [:]
+        for p in standing { counts[SIMD2(Int32((p.x / cell).rounded(.down)), Int32((p.z / cell).rounded(.down))), default: 0] += 1 }
+        var best = SIMD2<Int32>(), bestCount = -1
+        for key in counts.keys {
+            var sum = 0
+            for dx in Int32(-1)...1 { for dz in Int32(-1)...1 { sum += counts[key &+ SIMD2(dx, dz)] ?? 0 } }
+            if sum > bestCount || (sum == bestCount && (key.x, key.y) < (best.x, best.y)) { best = key; bestCount = sum }
+        }
+        let seed = (SIMD2<Float>(Float(best.x), Float(best.y)) + 0.5) * cell
+        let near = standing.filter { simd_distance(SIMD2($0.x, $0.z), seed) < 0.45 }
+        guard near.count >= 50, let top = near.map(\.y).max(), top - floor > 0.6 else { return nil }
+        let centre = near.reduce(SIMD3<Float>(), +) / Float(near.count)
+        let half: Float = 0.7
+        return (SIMD3(centre.x - half, floor - 0.01, centre.z - half), SIMD3(centre.x + half, min(top + 0.04, floor + 2.35), centre.z + half))
+    }
+
+    /// The middle of the circle that best fits the points (least squares, Kåsa). Nil for points in a line.
+    static func orbitCentre(_ points: [SIMD2<Float>]) -> SIMD2<Float>? {
+        guard points.count >= 3 else { return nil }
+        let mean = points.reduce(SIMD2<Float>(), +) / Float(points.count)
+        // x² + z² + D x + E z + F = 0, around the mean for precision.
+        var m = simd_double3x3(0), v = SIMD3<Double>()
+        for p in points {
+            let x = Double(p.x - mean.x), z = Double(p.y - mean.y)
+            let row = SIMD3<Double>(x, z, 1)
+            m += simd_double3x3(rows: [row * x, row * z, row])
+            v += row * -(x * x + z * z)
+        }
+        guard abs(m.determinant) > 1e-9 else { return nil }
+        let solved = m.inverse * v
+        let centre = SIMD2<Float>(Float(-solved.x / 2), Float(-solved.y / 2)) + mean
+        return centre.x.isFinite && centre.y.isFinite ? centre : nil
+    }
+
     /// Phil, 2026-11-20: scraps of floor left round the feet after trimFloor (a ragged patch rises a few centimetres
     /// in places) pulled the joint finder off the feet. Low triangles away from where the legs come down are left out:
     /// anything under 6 % of the height that is not under a leg or just in front of or behind it, where the feet are.

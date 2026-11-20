@@ -40,16 +40,7 @@ enum ScanPersonDetail {
     /// The box round the person (in the model's metres, as Reset shows it) in the builder's own space, where the
     /// builder needs it: the turn and size ScanBake gave the model are taken back off.
     static func builderBox(_ folder: ScanFolder, low: SIMD3<Float>, high: SIMD3<Float>) -> (SIMD3<Float>, SIMD3<Float>)? {
-        guard let fit = folder.fit, fit.scale > 0, let scene = try? SCNScene(url: folder.full, options: nil) else { return nil }
-        // The same steps as ScanBake.bake, to find where it stood the model.
-        let turned = SCNNode()
-        for child in scene.rootNode.childNodes { turned.addChildNode(child) }
-        turned.simdOrientation = fit.quaternion
-        turned.simdScale = SIMD3(repeating: fit.scale)
-        let holder = SCNNode()
-        holder.addChildNode(turned)
-        let (bl, bh) = holder.boundingBox
-        let shift = SIMD3<Float>(-(Float(bl.x) + Float(bh.x)) / 2, -Float(bl.y), -(Float(bl.z) + Float(bh.z)) / 2)
+        guard let fit = folder.fit, fit.scale > 0, let shift = bakedShift(folder) else { return nil }
         let back = fit.quaternion.inverse
         var outLow = SIMD3<Float>(repeating: .greatestFiniteMagnitude), outHigh = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
         for corner in 0..<8 {
@@ -59,6 +50,37 @@ enum ScanPersonDetail {
             outHigh = simd_max(outHigh, q)
         }
         return (outLow, outHigh)
+    }
+
+    /// How far ScanBake moved the turned, sized model to stand it on y = 0 and centre it.
+    private static func bakedShift(_ folder: ScanFolder) -> SIMD3<Float>? {
+        guard let fit = folder.fit, let scene = try? SCNScene(url: folder.full, options: nil) else { return nil }
+        // The same steps as ScanBake.bake, to find where it stood the model.
+        let turned = SCNNode()
+        for child in scene.rootNode.childNodes { turned.addChildNode(child) }
+        turned.simdOrientation = fit.quaternion
+        turned.simdScale = SIMD3(repeating: fit.scale)
+        let holder = SCNNode()
+        holder.addChildNode(turned)
+        let (bl, bh) = holder.boundingBox
+        return SIMD3<Float>(-(Float(bl.x) + Float(bh.x)) / 2, -Float(bl.y), -(Float(bl.z) + Float(bh.z)) / 2)
+    }
+
+    /// "Scan a person": the box round the person in a scan of the whole area (the model's metres, as Reset shows it),
+    /// found from where the photos were taken (they walked round the person) and the model's points. Slow (reads the
+    /// model): call off the main thread.
+    static func personBox(_ folder: ScanFolder) -> (SIMD3<Float>, SIMD3<Float>)? {
+        guard let fit = folder.fit, fit.translation.count == 3, let cameras = folder.cameras, let shift = bakedShift(folder),
+              let (mesh, _) = ScanCharacterMaker.read(folder.model) else { return nil }
+        // ARKit's places, moved the way the bake moved the model: model = room - fit's shift + bake's shift.
+        let move = shift - SIMD3(fit.translation[0], fit.translation[1], fit.translation[2])
+        let places = cameras.values.filter { $0.count == 3 }.map { SIMD3($0[0], $0[1], $0[2]) + move }
+        guard let box = ScanRig.personColumn(points: mesh.positions, cameras: places) else {
+            Diagnostics.log("Scan person: no person found standing in the middle of the scan (\(places.count) photos, \(mesh.positions.count) points)")
+            return nil
+        }
+        Diagnostics.log(String(format: "Scan person: person found, box %.2f x %.2f x %.2f m, floor at %.2f m", box.high.x - box.low.x, box.high.y - box.low.y, box.high.z - box.low.z, box.low.y + 0.01))
+        return (box.low, box.high)
     }
 
     /// Builds the person again inside the box. `progress` gets 0 to 1. Throws on failure; cancelling the task stops it.
