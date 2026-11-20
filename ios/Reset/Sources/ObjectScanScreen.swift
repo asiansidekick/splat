@@ -71,11 +71,9 @@ struct ScanScreen: View {
     @ViewBuilder private var overlay: some View {
         switch model.phase {
         case .building(let fraction):
-            BuildingView(fraction: fraction, words: model.buildingWords, skip: model.buildingWords == ScanModel.personWords ? model.skipPerson : nil)
+            building(fraction)
         case .person(let folder):
-            ScanCharacterScreen(folder: folder) { made, placeNow in
-                if let made, placeNow { place(made) } else { model.phase = .done(folder) }
-            }
+            person(folder)
         case .cropping(let folder):
             CropScreen(folder: folder)
         case .done(let folder):
@@ -85,6 +83,22 @@ struct ScanScreen: View {
         default:
             captureControls
         }
+    }
+
+    private func building(_ fraction: Double) -> BuildingView {
+        let skip: (() -> Void)? = model.buildingWords == ScanModel.personWords ? { model.skipPerson() } : nil
+        return BuildingView(fraction: fraction, words: model.buildingWords, skip: skip)
+    }
+
+    /// "Scan a person": the person's dots, then back to the scan's own done screen (or into the room with the person).
+    private func person(_ folder: ScanFolder) -> ScanCharacterScreen {
+        ScanCharacterScreen(folder: folder, done: { (made: URL?, placeNow: Bool) in
+            if let made, placeNow {
+                place(made)
+            } else {
+                model.phase = .done(folder)
+            }
+        })
     }
 
     private var captureControls: some View {
