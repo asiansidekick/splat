@@ -689,8 +689,8 @@ enum ScanRig {
         // end on its side, near the body.
         let lowEnds = ends.filter { up($0) < 0.15 }
         let highEnds = ends.filter { up($0) > 0.3 }
-        let width = Float(chest.b - chest.a + 1)
-        let nearFeet = lowEnds.filter { abs(Float($0 % nx - seedI)) < 1.2 * width }
+        let chestWidth = Float(chest.b - chest.a + 1)
+        let nearFeet = lowEnds.filter { abs(Float($0 % nx - seedI)) < 1.2 * chestWidth }
         var footR = nearFeet.first { $0 % nx < seedI }, footL = nearFeet.first { $0 % nx >= seedI }
         if footR == nil || footL == nil {
             // Feet together, or both one side of the middle: the two furthest low ends.
