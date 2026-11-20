@@ -415,5 +415,44 @@ let chin = place * SIMD4<Float>(0, 0, 0.1, 1), crown = place * SIMD4<Float>(0, 0
 expect(abs(chin.y - 154.5) < 0.01 && abs(chin.z - (2 - 10)) < 0.01, String(format: "the head's front faces the character's front (%.1f, %.1f)", chin.y, chin.z))
 expect(abs(crown.y - 174.5) < 0.01, "the head keeps its real size in centimetres")
 
+// MARK: Scan a person: finding the person in a scan of the whole area
+
+do {
+    var room: [SIMD3<Float>] = []
+    // A floor 4 m across, a little uneven, its lowest bump 1 cm under.
+    for i in 0..<80 { for k in 0..<80 { room.append(SIMD3(Float(i) * 0.05 - 2, (i * 7 + k * 3) % 5 == 0 ? -0.01 : 0.003, Float(k) * 0.05 - 2)) } }
+    // A person 1.75 m tall at (0.3, 0.2), as a column of points.
+    for step in 0..<175 { for a in 0..<24 {
+        let angle = Float(a) / 24 * 2 * .pi
+        room.append(SIMD3(0.3 + 0.18 * cos(angle), Float(step) * 0.01, 0.2 + 0.12 * sin(angle)))
+    } }
+    // A table off to the side, near where the phone walked.
+    for i in 0..<20 { for k in 0..<10 { room.append(SIMD3(1.3 + Float(i) * 0.03, 0.75, -0.3 + Float(k) * 0.03)) } }
+    let ring = (0..<36).map { a -> SIMD3<Float> in
+        let angle = Float(a) / 36 * 2 * .pi
+        return SIMD3(0.3 + 1.2 * cos(angle), 1.4, 0.2 + 1.2 * sin(angle))
+    }
+    if let column = ScanRig.personColumn(points: room, cameras: ring) {
+        let middle = (column.low + column.high) / 2
+        expect(abs(middle.x - 0.3) < 0.05 && abs(middle.z - 0.2) < 0.05, String(format: "the person is found where they stand (%.2f, %.2f)", middle.x, middle.z))
+        expect(column.low.y < 0.005 && column.low.y > -0.04, String(format: "the person's box starts at the floor (%.3f)", column.low.y))
+        expect(column.high.y > 1.74 && column.high.y < 1.85, String(format: "the person's box reaches over the head (%.2f)", column.high.y))
+        expect(column.high.x - column.low.x < 1.9 && column.high.y - column.low.y < 2.4, "the person's box is one person's size")
+        expect(column.high.x < 1.3, "the table is left out")
+    } else {
+        expect(false, "a person standing in the middle is found")
+    }
+    // Only a floor: no person.
+    let bare = room.filter { $0.y < 0.01 }
+    expect(ScanRig.personColumn(points: bare, cameras: ring) == nil, "an empty floor has no person")
+    // A partial walk (half a circle) still finds them.
+    if let column = ScanRig.personColumn(points: room, cameras: Array(ring[0..<18])) {
+        let middle = (column.low + column.high) / 2
+        expect(abs(middle.x - 0.3) < 0.05 && abs(middle.z - 0.2) < 0.05, String(format: "half a walk round still finds the person (%.2f, %.2f)", middle.x, middle.z))
+    } else {
+        expect(false, "half a walk round still finds the person")
+    }
+}
+
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
