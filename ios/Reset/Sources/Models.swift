@@ -444,6 +444,11 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     private var poseDots: [(node: SCNNode, joint: PoseDrag.Joint)] = []
     private var poseHandle: PoseDrag.Joint?
+    /// Phil, 2026-11-20: curved arrows on the floor under a character in Pose; drag them left or right to turn it round.
+    private var poseTurnIcon: SCNNode?
+    private var poseTurnReach: Float = 0
+    private var poseTurning = false
+    private var poseTurnLast: Float = 0
     private var poseDepth: Float = 1
     private var poseStartFinger: CGPoint = .zero
     private var poseStartPose: MannequinPose?
@@ -467,6 +472,9 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         for dot in poseDots { dot.node.removeFromParentNode() }
         poseDots = []
         poseHandle = nil
+        poseTurnIcon?.removeFromParentNode()
+        poseTurnIcon = nil
+        poseTurning = false
         guard cutoutJob == .pose, let id = selectedModel, let rig = rigs[id], let node = modelNodes[id] else { return }
         let map = rig.poser.map
         let worldHeight = max(rig.height * node.simdScale.x, 0.2)
@@ -518,10 +526,42 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             if let place { dot.simdPosition = SIMD3(bone.convertPosition(SCNVector3(place.x, place.y, place.z), from: nil)) }
             poseDots.append((dot, joint))
         }
+        // The turning arrows lie on the floor under the feet, on the side nearest the phone.
+        let scale = max(node.simdScale.x, 1e-6)
+        let reach = worldHeight * 0.3 / scale
+        let icon = TurnIcon.node(radius: reach)
+        icon.simdPosition = SIMD3(0, (boxes[id]?.low.y ?? 0) + 0.004 / scale, 0)
+        if let eye = self.eye?.columns.3.xyz {
+            let away = (node.simdWorldTransform.inverse * SIMD4(eye, 1)).xyz
+            icon.eulerAngles.y = atan2(away.x, away.z)
+        }
+        node.addChildNode(icon)
+        poseTurnIcon = icon
+        poseTurnReach = reach
+    }
+
+    /// Where the middle of the turning arrows is now, in the world.
+    private func turnKnobPoint() -> SIMD3<Float>? {
+        guard let icon = poseTurnIcon else { return nil }
+        return (icon.simdWorldTransform * SIMD4(0, 0, poseTurnReach, 1)).xyz
+    }
+
+    /// The finger's place on the floor under the character, as an angle round it.
+    private func turnAngle(at finger: CGPoint, in view: SCNView) -> Float? {
+        guard let icon = poseTurnIcon, let eye = self.eye?.columns.3.xyz else { return nil }
+        let far = SIMD3<Float>(view.unprojectPoint(SCNVector3(Float(finger.x), Float(finger.y), 1)))
+        let direction = simd_normalize(far - eye)
+        let floor = icon.simdWorldPosition
+        guard abs(direction.y) > 0.02 else { return nil }
+        let t = (floor.y - eye.y) / direction.y
+        guard t > 0 else { return nil }
+        let hit = eye + direction * t
+        return atan2(hit.x - floor.x, hit.z - floor.z)
     }
 
     private func posePick(at finger: CGPoint, in view: SCNView, id: UUID) {
         poseHandle = nil
+        poseTurning = false
         guard let eye = self.eye?.columns.3.xyz else { return }
         var best: (joint: PoseDrag.Joint, distance: CGFloat, depth: Float)?
         for dot in poseDots {
@@ -530,6 +570,16 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             guard shown.z > 0, shown.z < 1 else { continue }
             let distance = hypot(CGFloat(shown.x) - finger.x, CGFloat(shown.y) - finger.y)
             if distance < (best?.distance ?? 50) { best = (dot.joint, distance, simd_distance(world, eye)) }
+        }
+        if let knob = turnKnobPoint() {
+            let shown = view.projectPoint(SCNVector3(knob.x, knob.y, knob.z))
+            let distance = hypot(CGFloat(shown.x) - finger.x, CGFloat(shown.y) - finger.y)
+            if shown.z > 0, shown.z < 1, distance < (best?.distance ?? 50), let angle = turnAngle(at: finger, in: view) {
+                poseTurning = true
+                poseTurnLast = angle
+                Haptics.firm()
+                return
+            }
         }
         guard let best, let rig = rigs[id], let model = models.first(where: { $0.id == id }) else { return }
         poseHandle = best.joint
@@ -545,6 +595,15 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     /// The joint under the finger follows it (at the depth it was picked at) and the limb is solved to match.
     private func poseDrag(to finger: CGPoint, in view: SCNView, node: SCNNode, id: UUID) {
+        if poseTurning {
+            // The character turns about its own spot, following the finger round the floor.
+            guard let angle = turnAngle(at: finger, in: view) else { return }
+            var delta = angle - poseTurnLast
+            if delta > .pi { delta -= 2 * .pi } else if delta < -.pi { delta += 2 * .pi }
+            poseTurnLast = angle
+            node.simdWorldOrientation = simd_normalize(simd_quatf(angle: delta, axis: SIMD3(0, 1, 0)) * node.simdWorldOrientation)
+            return
+        }
         guard let joint = poseHandle, let rig = rigs[id], let eye = self.eye?.columns.3.xyz,
               let model = models.first(where: { $0.id == id }) else { return }
         let far = SIMD3<Float>(view.unprojectPoint(SCNVector3(Float(finger.x), Float(finger.y), 1)))
@@ -1184,7 +1243,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             let finger = gesture.location(in: view)
             if gesture.state == .began { posePick(at: finger, in: view, id: id) }
             poseDrag(to: finger, in: view, node: node, id: id)
-            if gesture.state == .ended || gesture.state == .cancelled { poseHandle = nil }
+            if gesture.state == .ended || gesture.state == .cancelled { poseHandle = nil; poseTurning = false }
         case .move:
             break
         }
@@ -2100,7 +2159,7 @@ private struct MoveHint: View {
         case .size: return ("arrow.up.and.down.circle", "pinch, or drag ↕, to scale · the figures follow")
         case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "push a lever's knob to swing it · or drag anywhere · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
-        case .pose: return ("hand.draw", "mint dot: reach · yellow: shoulder, hips, wrist, ankle, head")
+        case .pose: return ("hand.draw", "mint dot: reach · yellow: shoulder, hips, wrist, ankle, head · white arrows: turn")
         }
     }
 

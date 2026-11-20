@@ -151,6 +151,7 @@ private struct PoseStage: UIViewRepresentable {
         scene.rootNode.addChildNode(camera)
         context.coordinator.view = view
         context.coordinator.camera = camera
+        context.coordinator.addTurnHandle(to: scene)
         context.coordinator.placeCamera()
         context.coordinator.rebuild(pose)
         view.addGestureRecognizer(UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pan(_:))))
@@ -172,6 +173,9 @@ private struct PoseStage: UIViewRepresentable {
         var shown: MannequinPose?
         var shownProportion: MannequinProportion?
         private var yaw: Float = 0.5
+        /// Phil, 2026-11-20: a rotate handle under the figure: curved white arrows on the floor facing the viewer.
+        /// Drag them left or right to turn the figure round (the view orbits it).
+        private var turnKnob: SCNNode?
         private var dragging: String?
         private var depth: Float = 0
         private var lastPoint: CGPoint = .zero
@@ -183,6 +187,15 @@ private struct PoseStage: UIViewRepresentable {
             let centre = SIMD3<Float>(0, parent.height * 0.52, 0)
             camera?.simdPosition = centre + SIMD3(sin(yaw) * distance, parent.height * 0.12, cos(yaw) * distance)
             camera?.simdLook(at: centre)
+            // The arrows face the viewer, wherever the view has orbited to.
+            turnKnob?.eulerAngles.y = yaw
+            turnKnob?.simdPosition = SIMD3(0, 0.004, 0)
+        }
+
+        func addTurnHandle(to scene: SCNScene) {
+            let icon = TurnIcon.node(radius: parent.height * 0.3)
+            scene.rootNode.addChildNode(icon)
+            turnKnob = icon
         }
 
         func rebuild(_ pose: MannequinPose) {
@@ -241,12 +254,21 @@ private struct PoseStage: UIViewRepresentable {
                     let gap = hypot(CGFloat(p.x) - point.x, CGFloat(p.y) - point.y)
                     if gap < best { best = gap; dragging = name; depth = p.z }
                 }
+                if turnKnob != nil {
+                    let reach = parent.height * 0.3
+                    let p = view.projectPoint(SCNVector3(sin(yaw) * reach, 0.004, cos(yaw) * reach))
+                    if hypot(CGFloat(p.x) - point.x, CGFloat(p.y) - point.y) < (dragging == nil ? 50 : best) { dragging = "turn" }
+                }
                 lastPoint = point
                 startPoint = point
                 startPose = shown ?? parent.pose
-                if dragging != nil { parent.onBegin() }
+                if dragging != nil, dragging != "turn" { parent.onBegin() }
             case .changed:
-                if let dragging, Coordinator.articulates(dragging) {
+                if dragging == "turn" {
+                    yaw -= Float(point.x - lastPoint.x) * 0.012
+                    lastPoint = point
+                    placeCamera()
+                } else if let dragging, Coordinator.articulates(dragging) {
                     articulate(dragging, to: point)
                 } else if let dragging {
                     let world = view.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), depth))
@@ -326,5 +348,45 @@ private struct PoseStage: UIViewRepresentable {
                     if side == "L" { pose.leftLeg = leg } else { pose.rightLeg = leg }
                 }
         }
+    }
+}
+
+
+/// Curved arrows lying on the floor, pointing both ways round: the picture for "drag left or right to turn it".
+/// The arc is centred on the +Z side of the node and sits at its origin; (Phil, 2026-11-20).
+enum TurnIcon {
+    static func node(radius r: Float, width: Float? = nil) -> SCNNode {
+        let w = width ?? r * 0.13
+        let half: Float = 0.8
+        let head = (w * 2.2) / r
+        func point(_ angle: Float, _ radius: Float) -> CGPoint { CGPoint(x: CGFloat(sin(angle) * radius), y: CGFloat(cos(angle) * radius)) }
+        let path = UIBezierPath()
+        let steps = 20
+        path.move(to: point(-half, r + w / 2))
+        for i in 0...steps { path.addLine(to: point(-half + 2 * half * Float(i) / Float(steps), r + w / 2)) }
+        path.addLine(to: point(half, r + w * 1.2))
+        path.addLine(to: point(half + head, r))
+        path.addLine(to: point(half, r - w * 1.2))
+        for i in 0...steps { path.addLine(to: point(half - 2 * half * Float(i) / Float(steps), r - w / 2)) }
+        path.addLine(to: point(-half, r - w * 1.2))
+        path.addLine(to: point(-half - head, r))
+        path.addLine(to: point(-half, r + w * 1.2))
+        path.close()
+        let shape = SCNShape(path: path, extrusionDepth: CGFloat(w * 0.2))
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.white.withAlphaComponent(0.92)
+        material.readsFromDepthBuffer = false
+        material.writesToDepthBuffer = false
+        material.isDoubleSided = true
+        shape.materials = [material]
+        let arrows = SCNNode(geometry: shape)
+        // The shape is drawn in X and Y; laid flat, its Y becomes the floor's +Z.
+        arrows.eulerAngles.x = .pi / 2
+        arrows.renderingOrder = 2500
+        let holder = SCNNode()
+        holder.name = "turnicon"
+        holder.addChildNode(arrows)
+        return holder
     }
 }
