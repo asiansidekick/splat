@@ -305,5 +305,48 @@ do {
     check(took < 1.5, "edges: fast enough (\(Int(took * 1000)) ms on the test Mac)")
 }
 
+// OutlineStrips: a picked thing's outline (a disc, and a ring with a hole) as strips, exact to the pixel.
+do {
+    let w = 400, h = 300
+    func disc(_ x: Int, _ y: Int) -> Bool { let dx = Float(x) + 0.5 - 200, dy = Float(y) + 0.5 - 150; return dx * dx + dy * dy < 80 * 80 }
+    let strips = OutlineStrips.make(width: w, height: h, stepY: 1, inside: disc)
+    var area = 0, truth = 0
+    for strip in strips { area += (strip.x1 - strip.x0) * (strip.y1 - strip.y0) }
+    for y in 0..<h { for x in 0..<w where disc(x, y) { truth += 1 } }
+    check(area == truth, "strips: every pixel of the outline covered, none outside (\(area) of \(truth))")
+    check(strips.allSatisfy { s in (s.x0..<s.x1).allSatisfy { disc($0, s.y0) } && !disc(s.x0 - 1, s.y0) && !disc(s.x1, s.y0) }, "strips: each strip starts and ends on the outline's edge")
+    func ring(_ x: Int, _ y: Int) -> Bool { let dx = Float(x) + 0.5 - 200, dy = Float(y) + 0.5 - 150; let r = dx * dx + dy * dy; return r < 80 * 80 && r > 30 * 30 }
+    let middle = OutlineStrips.make(width: w, height: h, stepY: 1, inside: ring).filter { $0.y0 == 150 }
+    check(middle.count == 2, "strips: a hole leaves a gap (\(middle.count) strips across the middle)")
+    check(OutlineStrips.make(width: w, height: h, stepY: 2, inside: disc).count * 2 >= strips.count - 2, "strips: every second row halves the strips")
+    check(OutlineStrips.make(width: w, height: h, stepY: 1) { _, _ in false }.isEmpty, "strips: nothing picked, nothing drawn")
+    let edge = OutlineStrips.make(width: 10, height: 1, stepY: 1) { x, _ in x >= 7 }
+    check(edge == [OutlineStrips.Strip(x0: 7, x1: 10, y0: 0, y1: 1)], "strips: a thing at the picture's edge runs to the edge")
+}
+
+// Holding still: an edge that flickers between pictures settles on the side it is on most of the time.
+do {
+    // 6 pictures of a row of 10 pixels: box (1.5 m) on the left 5, wall (3 m) on the right; pixel 4 and 5 flicker.
+    var history: [[Float]] = []
+    for k in 0..<6 {
+        var row = [Float](repeating: 3, count: 10)
+        for i in 0..<5 { row[i] = 1.5 }
+        if k == 2 { row[4] = 3 }          // the box's last pixel lost once
+        if k == 1 || k == 4 { row[5] = 1.5 }  // the wall's first pixel taken twice
+        if k == 3 { row[8] = 0 }          // a missing reading once
+        history.append(row)
+    }
+    let steady = EdgeDepth.steady(history)
+    check(steady[4] == 1.5 && steady[5] == 3, "still: the flickering edge settles where it is most often (\(steady[4]), \(steady[5]))")
+    check(steady[8] == 3, "still: a reading missing once is filled from the others")
+    check(EdgeDepth.steady([history[0]]) == history[0], "still: one picture is kept as it is")
+    var gone = history
+    for k in 0..<4 { gone[k][9] = 0 }
+    check(EdgeDepth.steady(gone)[9] == 0, "still: a pixel missing in most pictures stays empty")
+    let masks: [[Bool]] = [[true, true, false], [true, false, false], [true, true, false], [true, true, true], [true, true, false]]
+    check(OutlineVote.steady(masks) == [true, true, false], "still: a picked outline keeps the shape it has most often")
+    check(OutlineVote.steady([[false, true]]) == [false, true], "still: one outline is kept as it is")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

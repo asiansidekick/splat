@@ -18,6 +18,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             refreshPoseDots()
             if selectedModel != oldValue, selectedModel != nil { Haptics.bump() }
             if selectedModel != oldValue {
+                pickingInFront = false
                 stopCarrying()
                 cancelPin()
                 cutoutJob = .move
@@ -25,6 +26,16 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         }
     }
     @Published var modelError: String?
+    /// Phil, 2026-11-20: "selecting what is foreground": after "In front", the next tap on the camera picture picks the
+    /// real thing that goes in front of the models (LiveOcclusion.swift). Tapping a picked thing again takes it out.
+    @Published var pickingInFront = false {
+        didSet { if pickingInFront { pickingSince = Date() } }
+    }
+    private var pickingSince = Date.distantPast
+    /// How many real things are in front of the models now.
+    @Published var inFrontCount = 0
+    /// Set by the live view's occluder: the tap that picks a thing.
+    var onPickInFront: ((CGPoint, ARSCNView) -> Void)?
     /// Pinning the selected model's distance from two views (PinMath): step aside, then drag it back onto its spot.
     enum PinStep: Equatable { case stepAside, dragBack, done }
     @Published private(set) var pinStep: PinStep?
@@ -974,6 +985,12 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        // The tap on "In front" itself can reach the camera view too: picking starts with the next one.
+        if pickingInFront, Date().timeIntervalSince(pickingSince) > 0.4, let view = gesture.view as? ARSCNView, let pick = onPickInFront {
+            pickingInFront = false
+            pick(gesture.location(in: view), view)
+            return
+        }
         guard selectionAllowed(), let view = gesture.view as? SCNView else { return }
         if dimensionTap(at: gesture.location(in: view), in: view) { return }
         let hits = view.hitTest(gesture.location(in: view), options: ReviewPick.options)
@@ -1984,6 +2001,10 @@ struct ModelOverlay: View {
         if showsFloor {
             let isPinned = placer.selectedModel.map { placer.pinned.contains($0) } ?? false
             CutoutTool(word: isPinned ? "Pinned" : "Pin", symbol: "pin", tint: isPinned ? .white : Theme.accent, on: placer.pinStep != nil) { placer.startPin() }
+            if placer.onPickInFront != nil {
+                CutoutTool(word: placer.inFrontCount > 0 ? "In front \(placer.inFrontCount)" : "In front", symbol: "square.3.layers.3d.top.filled",
+                           on: placer.pickingInFront) { placer.pickingInFront.toggle() }
+            }
         }
         if cutout {
             CutoutTool(word: "Straighten", symbol: "arrow.uturn.backward") { placer.resetPose() }
@@ -2054,11 +2075,12 @@ struct ModelOverlay: View {
                     // the width of their longest word whatever sits between them.
                     .layoutPriority(1)
                     Spacer(minLength: 0)
-                    if showsCutoutHelp || placer.carrying || placer.pinStep != nil || (placer.cutoutJob == .pose && placer.selectedHasRig) {
+                    if showsCutoutHelp || placer.carrying || placer.pinStep != nil || placer.pickingInFront || (placer.cutoutJob == .pose && placer.selectedHasRig) {
                         VStack(spacing: 4) {
                             if placer.cutoutJob == .pose, placer.selectedHasRig { poseBar }
-                            if showsCutoutHelp || placer.carrying || placer.pinStep != nil {
-                                MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText, pin: placer.pinStep, cutout: cutout)
+                            if showsCutoutHelp || placer.carrying || placer.pinStep != nil || placer.pickingInFront {
+                                MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText, pin: placer.pinStep, cutout: cutout,
+                                         picking: placer.pickingInFront)
                                     .transition(.opacity)
                             }
                         }
@@ -2163,8 +2185,10 @@ private struct MoveHint: View {
     let size: String?
     var pin: ModelPlacer.PinStep?
     var cutout = false
+    var picking = false
 
     private var parts: (arrow: String, words: String) {
+        if picking { return ("square.3.layers.3d.top.filled", "tap the real thing that goes in front · tap it again to take it out") }
         switch pin {
         case .stepAside: return ("arrow.left.and.right", "1 of 2: step sideways, keep it in view")
         case .dragBack: return ("hand.draw", "2 of 2: drag it back onto its spot")
@@ -2185,12 +2209,12 @@ private struct MoveHint: View {
     var body: some View {
         VStack(spacing: 2) {
             HStack(spacing: 4) {
-                Image(systemName: pin == .stepAside ? "figure.walk" : pin == .done ? "pin.fill" : carrying ? "iphone.gen3" : "hand.point.up.left.fill")
+                Image(systemName: picking ? "hand.tap.fill" : pin == .stepAside ? "figure.walk" : pin == .done ? "pin.fill" : carrying ? "iphone.gen3" : "hand.point.up.left.fill")
                 Image(systemName: parts.arrow).font(.system(size: 16, weight: .bold))
             }
             .font(.system(size: 22, weight: .semibold))
             Text(parts.words).font(.system(size: 12, weight: .semibold))
-            if pin == nil, let size, !size.isEmpty { Text(size).font(.system(size: 11, weight: .semibold).monospacedDigit()) }
+            if pin == nil, !picking, let size, !size.isEmpty { Text(size).font(.system(size: 11, weight: .semibold).monospacedDigit()) }
         }
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.85), radius: 2, y: 1)

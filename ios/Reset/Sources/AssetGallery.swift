@@ -161,7 +161,7 @@ struct AssetGallery: View {
     @State private var message: String?
     /// Phil, 2026-11-18: the grid scales in rows and columns. Pinch, or tap the grid button, to change.
     @AppStorage("galleryColumns") private var columns = 2
-    @AppStorage(BehindReal.key) private var behindReal = true
+    @AppStorage(BehindReal.wholeRoomKey) private var wholeRoom = false
 
     var body: some View {
         NavigationStack {
@@ -182,14 +182,15 @@ struct AssetGallery: View {
                     Text(message).font(Theme.footnote).foregroundStyle(.orange).padding(.horizontal)
                 }
                 if base == nil {
-                    // Phil, 2026-11-20: models hide behind real things in the live camera too (LiveOcclusion.swift).
-                    Toggle(isOn: $behindReal) { Label("Models go behind real things", systemImage: "square.2.layers.3d") }
+                    // Phil, 2026-11-20: real things in front are picked by tapping them ("In front" on a model's tools). The
+                    // whole room from LiDAR hiding models is a choice, off unless turned on (LiveOcclusion.swift).
+                    Toggle(isOn: $wholeRoom) { Label("Whole room hides models (LiDAR)", systemImage: "square.2.layers.3d") }
                         .font(Theme.footnote.weight(.semibold))
                         .tint(Theme.accent)
                         .padding(.horizontal, 16).padding(.top, 6)
-                        .onChange(of: behindReal) { _, on in
+                        .onChange(of: wholeRoom) { _, on in
                             BehindReal.applyPeople(to: placer.session)
-                            Diagnostics.log("Behind real things: \(on ? "on" : "off") in the gallery")
+                            Diagnostics.log("Behind real things: whole room \(on ? "on" : "off") in the gallery")
                         }
                 }
                 if loaded, assets.isEmpty {
