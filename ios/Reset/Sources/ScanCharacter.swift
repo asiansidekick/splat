@@ -729,6 +729,13 @@ struct ScanCharacterScreen: View {
     private func buildInDetail(_ made: ScanCharacterMaker) {
         let folder = folder
         let (low, high) = made.modelBox
+        // Only a box the size of one person: an untrimmed room would be the whole room built again, for nothing.
+        let size = high - low
+        guard size.y < 2.4, max(size.x, size.z) < 1.9 else {
+            Diagnostics.log(String(format: "Scan person: no more detail, the scan is %.1f x %.1f x %.1f m, more than one person", size.x, size.y, size.z))
+            problem = "For a sharper face, trim the scan to just the person first (••• → Trim), then make the person again."
+            return
+        }
         guard let box = ScanPersonDetail.builderBox(folder, low: low, high: high) else {
             Diagnostics.log("Scan person: no box for more detail")
             return
