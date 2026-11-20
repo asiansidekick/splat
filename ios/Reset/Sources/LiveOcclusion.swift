@@ -87,6 +87,7 @@ final class LiveOccluder {
     private var pickBusy = false
     private var lastPickLog: TimeInterval = 0
     private var pickFound = true
+    private var lastPickSeen: TimeInterval = 0
     nonisolated static let sheetDistance: Float = 0.3
 
     /// Starts hiding models behind real things in this camera view, for as long as the view lives.
@@ -419,9 +420,13 @@ final class LiveOccluder {
                 guard let self else { return }
                 self.pickBusy = false
                 guard !self.picks.isEmpty else { self.pickNode.geometry = nil; return }
-                self.pickNode.simdOrientation = rotation
-                self.pickNode.geometry = geometry?.geometry(readsDepth: false)
                 let found = geometry != nil
+                // A picture or two where Vision misses the thing keeps the last outline, so it doesn't blink.
+                if found || timestamp - self.lastPickSeen > 0.5 {
+                    self.pickNode.simdOrientation = rotation
+                    self.pickNode.geometry = geometry?.geometry(readsDepth: false)
+                }
+                if found { self.lastPickSeen = timestamp }
                 if logNow || found != self.pickFound {
                     self.lastPickLog = timestamp
                     self.pickFound = found
