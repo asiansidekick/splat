@@ -452,6 +452,9 @@ final class LiveOccluder {
     private var sheetNodes: [UUID: SCNNode] = [:]
     /// Picked things nearest the camera first.
     private var layerOrder: [UUID] = []
+    /// Whether picked things are shaped by real depth now (so each model goes behind them all and depth decides).
+    private var pickDepth = false
+    private var pickDepthHistory: [[Float]] = []
 
     private func clearSheets() {
         for node in sheetNodes.values { node.removeFromParentNode() }
@@ -463,7 +466,12 @@ final class LiveOccluder {
         }
     }
 
-    private func showSheets(_ sheets: [UUID: OccluderMesh]) {
+    /// A picked thing's shape: real depth (LiDAR) where the thing is, so a model is hidden only where the thing is
+    /// nearer than it (Phil, 2026-11-21: the rail hides her legs, not the staircase behind her); else the flat outline
+    /// 30 cm from the camera that hides every model behind it.
+    private struct Shape: @unchecked Sendable { let mesh: OccluderMesh; let inRoom: Bool }
+
+    private func showSheets(_ sheets: [UUID: Shape]) {
         for (id, node) in sheetNodes where !picks.contains(where: { $0.id == id }) {
             node.removeFromParentNode()
             sheetNodes[id] = nil
@@ -476,11 +484,13 @@ final class LiveOccluder {
                 node = SCNNode()
                 node.name = "live.inFront.thing"
                 node.categoryBitMask = ReviewPick.occluderMask
-                pickNode.addChildNode(node)
                 sheetNodes[pick.id] = node
             }
             node.renderingOrder = 10 * (layerOrder.firstIndex(of: pick.id) ?? 0) + 5
-            node.geometry = sheets[pick.id]?.geometry(readsDepth: false)
+            let shape = sheets[pick.id]
+            let parent = shape?.inRoom == true ? view?.scene.rootNode : pickNode
+            if node.parent !== parent { node.removeFromParentNode(); parent?.addChildNode(node) }
+            node.geometry = shape.map { $0.mesh.geometry(readsDepth: $0.inRoom) }
         }
     }
 
@@ -493,7 +503,7 @@ final class LiveOccluder {
         var nearer: [UUID: Int] = [:]
         for (id, place) in placer?.modelPlaces ?? [:] {
             let distance = simd_distance(place, eye)
-            nearer[id] = order.filter { simd_distance($0.anchor, eye) < distance }.count
+            nearer[id] = pickDepth ? order.count : order.filter { simd_distance($0.anchor, eye) < distance }.count
         }
         let changed = ids != layerOrder || nearer != placer?.nearerThings
         layerOrder = ids
@@ -550,11 +560,33 @@ final class LiveOccluder {
             for i in picks.indices { picks[i].history = [] }
         }
         let lens = Self.lens(camera)
+        // Real depth to shape the picked things with, sharpened by the picture like the whole room's.
+        var depthValues: [Float]?
+        var depthSize = (0, 0)
+        if let depth = frame.smoothedSceneDepth ?? frame.sceneDepth {
+            let map = depth.depthMap
+            depthValues = DepthMap.floats(DepthMap.copy(map))
+            depthSize = (CVPixelBufferGetWidth(map), CVPixelBufferGetHeight(map))
+        }
+        let guide = depthValues == nil ? nil : Self.luma(image, step: max(2, Int(camera.imageResolution.width) / 480))
+        if !still { pickDepthHistory = [] }
+        let depthHistory = pickDepthHistory
         Task.detached(priority: .userInitiated) {
             let started = Date()
             let found = Self.instances(in: image)
             var updates: [PickUpdate] = []
-            var sheets: [UUID: OccluderMesh] = [:]
+            var sheets: [UUID: Shape] = [:]
+            var sharp: [Float]?
+            var room: (depth: [Float], width: Int, height: Int)?
+            if let depthValues, let guide {
+                let clean = OccluderMesh.median3(depthValues, width: depthSize.0, height: depthSize.1)
+                let refined = EdgeDepth.refine(depth: clean, width: depthSize.0, height: depthSize.1, guide: guide.values,
+                                               guideWidth: guide.width, guideHeight: guide.height)
+                if refined.count == guide.width * guide.height {
+                    sharp = refined
+                    room = (EdgeDepth.steady(depthHistory + [refined]), guide.width, guide.height)
+                }
+            }
             for pick in current {
                 var update = PickUpdate(id: pick.id)
                 let held = pick.held?.seen(from: pose, lens: lens)
@@ -587,9 +619,13 @@ final class LiveOccluder {
                     outline = OutlineVote.steady(pick.history + [taken])
                 }
                 update.width = update.taken != nil ? width : (pick.held?.width ?? width)
-                if let outline, update.width > 0,
-                   let sheet = Self.sheet(cells: outline, width: update.width, height: outline.count / update.width, camera: camera) {
-                    sheets[pick.id] = sheet
+                if let outline, update.width > 0 {
+                    let height = outline.count / update.width
+                    if let room, let mesh = Self.depthShape(cells: outline, width: update.width, height: height, room: room, camera: camera) {
+                        sheets[pick.id] = Shape(mesh: mesh, inRoom: true)
+                    } else if let sheet = Self.sheet(cells: outline, width: update.width, height: height, camera: camera) {
+                        sheets[pick.id] = Shape(mesh: sheet, inRoom: false)
+                    }
                 }
                 updates.append(update)
             }
@@ -622,13 +658,18 @@ final class LiveOccluder {
                     self.picks[i] = pick
                 }
                 self.pickNode.simdOrientation = rotation
+                if let sharp, keepHistory {
+                    self.pickDepthHistory.append(sharp)
+                    if self.pickDepthHistory.count > Self.historyLength { self.pickDepthHistory.removeFirst() }
+                }
+                self.pickDepth = room != nil
                 self.showSheets(sheets)
                 let sources = updates.map(\.source).joined(separator: ", ")
                 let shown = !sheets.isEmpty
                 if logNow || shown != self.pickFound {
                     self.lastPickLog = timestamp
                     self.pickFound = shown
-                    Diagnostics.log("In front: \(updates.count) picked things (\(sources)), Vision \(found == nil ? "found nothing" : "ran"), \(sheets.values.reduce(0) { $0 + $1.indices.count / 6 }) strips, layers \(self.layerReport()), \(Int(seconds * 1000)) ms")
+                    Diagnostics.log("In front: \(updates.count) picked things (\(sources)), Vision \(found == nil ? "found nothing" : "ran"), \(sheets.values.reduce(0) { $0 + $1.mesh.indices.count / 3 }) triangles (\(room != nil ? "real depth" : "flat, no depth")), layers \(self.layerReport()), \(Int(seconds * 1000)) ms")
                 }
             }
         }
@@ -650,6 +691,31 @@ final class LiveOccluder {
             }
         }
         return (inside, cw, ch)
+    }
+
+    /// The real surface (sharpened LiDAR depth) inside a picked thing's outline, in the room: hides a model only where
+    /// the thing is nearer than the model. Nil when too little of the outline has depth.
+    nonisolated private static func depthShape(cells: [Bool], width cw: Int, height ch: Int,
+                                               room: (depth: [Float], width: Int, height: Int), camera: ARCamera) -> OccluderMesh? {
+        let gw = room.width, gh = room.height
+        guard cw > 0, ch > 0, gw > 8, gh > 8 else { return nil }
+        var masked = [Float](repeating: 0, count: gw * gh)
+        var inside = 0, measured = 0
+        for y in 0..<gh {
+            let cy = min(ch - 1, y * ch / gh)
+            for x in 0..<gw where cells[cy * cw + min(cw - 1, x * cw / gw)] {
+                inside += 1
+                let d = room.depth[y * gw + x]
+                if d.isFinite, d > 0.12 { masked[y * gw + x] = d; measured += 1 }
+            }
+        }
+        guard inside > 0, measured * 2 >= inside else { return nil }
+        let step = Float(camera.imageResolution.width) / Float(gw)
+        // No floor here: a picked thing's flat top (a handrail) still hides.
+        let mesh = OccluderMesh.build(depth: masked, width: gw, height: gh, intrinsics: camera.intrinsics, pose: camera.transform,
+                                      imageWidth: Float(gw) * step, imageHeight: Float(gh) * step, step: 1,
+                                      floor: -1_000_000, pushBack: 0.03, pushPerMetre: 0.02)
+        return (mesh?.indices.isEmpty ?? true) ? nil : mesh
     }
 
     /// The outline's cells as rows of strips on a sheet 30 cm in front of the camera, in the camera's own coordinates.
