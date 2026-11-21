@@ -434,6 +434,14 @@ do {
     check(Set(upright.map(\.x)).count == 1, "edge tools upright: one column")
     check((upright.last!.y - upright.first!.y) > 400, "edge tools upright: spread along the edge (\(Int(upright.last!.y - upright.first!.y)) points)")
     check(EdgeLayoutMath.places(sizes: [], width: 100, height: 100, leading: true, top: 0, middle: 0, maxGap: 18).isEmpty, "edge tools: none is fine")
+    // Posing on its side: the pose buttons hold 392 points in the middle of the bottom; the tools keep out of it.
+    do {
+        for count in [8, 9, 11] {
+            let many = tools(Array(repeating: 60, count: count))
+            let points = EdgeLayoutMath.places(sizes: many, width: 338, height: 312, leading: true, top: 0, middle: 196, maxGap: 18)
+            check(zip(points, many).allSatisfy { $0.x + $1.width / 2 <= 338 - 196 + 0.5 || $0.y < 312 - 42 }, "edge tools posing \(count): the pose row's place is clear")
+        }
+    }
     // Eleven on one side, on its side: what the bottom has no room for goes along the top (the ring), still apart and clear of the middle.
     do {
         let many = tools(Array(repeating: 60, count: 11))

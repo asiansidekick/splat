@@ -95,7 +95,7 @@ struct FrameReview: View {
                     .padding(.horizontal, 12)
             }
             // Phil, 2026-11-20: the picked model's tools round the edges, under the top row, the middle clear.
-            ModelEdgeTools(placer: placer, showsFloor: false, uprightTop: 40, sidewaysTop: 0)
+            ModelEdgeTools(placer: placer, measurer: measurer, showsFloor: false, uprightTop: 40, sidewaysTop: 0)
                 .padding(.top, 64)
                 .padding(.bottom, showsStrip ? 84 : 8)
                 .padding(.horizontal, 12)

@@ -2133,7 +2133,8 @@ struct CaptureStage: View {
                 }
                 VStack {
                     // Phil, 2026-11-12: on its side the instruction line goes to the bottom, out of the top row's way.
-                    if verticalSize != .compact { statusBanner }
+                    // Phil, 2026-11-21: the mapping line covered the top edge while working on a model; it waits until Done.
+                    if verticalSize != .compact, !editingModel { statusBanner }
                     Spacer()
                     TorchDial()
                     MeasureHint(measurer: recorder.measurer)
@@ -2151,7 +2152,7 @@ struct CaptureStage: View {
                 .clearOfControls()
                 .hiddenInScreenshots()
                 // Phil, 2026-11-20: the picked model's tools stand round the edges, the middle stays clear.
-                ModelEdgeTools(placer: recorder.placer, onAdd: { choosingModel = true })
+                ModelEdgeTools(placer: recorder.placer, measurer: recorder.measurer, onAdd: { choosingModel = true })
                     .padding(8)
                     .clearOfControls()
                     .hiddenInScreenshots()
@@ -3011,7 +3012,7 @@ struct ResetStage: View {
                 .hiddenInScreenshots()
                 if section == .edit || simpleTouch, !restorer.paused {
                     // Phil, 2026-11-20: the picked model's tools round the edges; the top keeps room for the banners.
-                    ModelEdgeTools(placer: restorer.placer, uprightTop: 120, sidewaysTop: 40)
+                    ModelEdgeTools(placer: restorer.placer, measurer: restorer.measurer, uprightTop: 120, sidewaysTop: 40)
                         .padding(8)
                         .clearOfControls()
                         .hiddenInScreenshots()
