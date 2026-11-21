@@ -2142,6 +2142,9 @@ struct ModelOverlay: View {
 /// everywhere but on its buttons.
 struct ModelEdgeTools: View {
     @ObservedObject var placer: ModelPlacer
+    /// While the ruler is on, its buttons hold the bottom edge (upright) or the left edge (on its side): the tools
+    /// stand clear of them (Phil, 2026-11-21: "these icons clash").
+    @ObservedObject var measurer: Measurer
     /// Off in Review, where there is no live LiDAR to find the floor with.
     var showsFloor = true
     /// Opens the add menu, where the screen's own add button gives way to these tools.
@@ -2180,6 +2183,8 @@ struct ModelEdgeTools: View {
                 EdgeColumn(leading: true, top: top, middle: middle) { jobTools(cutout: cutout) }
                 EdgeColumn(leading: false, top: top, middle: middle) { actionTools(cutout: cutout) }
             }
+            .padding(.bottom, measurer.active && verticalSize != .compact ? 78 : 0)
+            .padding(.leading, measurer.active && verticalSize == .compact ? 66 : 0)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Phil, 2026-11-20 (the ring): the "hold, then drag" bubble and the size hints stand at the top edge, not
             // over the middle of the picture.
