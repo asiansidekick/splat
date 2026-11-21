@@ -421,6 +421,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         group = []
         pickingGroup = false
         refreshGroupMarks()
+        forgetUndo()
     }
 
     /// Copies the model files into another folder, for example a newly saved reference.
@@ -530,6 +531,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: cutoutTurn[id] ?? 0)
         try? JSONEncoder().encode(package).write(to: folder.appendingPathComponent(file), options: .atomic)
         if let index = models.firstIndex(where: { $0.id == id }) { models[index].moved = Date() }
+        record(id)
     }
 
     // MARK: Posing an imported character in live view (Phil, 2026-11-18)
@@ -1903,6 +1905,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             node.simdTransform = change * node.simdTransform
             models[index].transform = flatten(node.simdTransform)
         }
+        // The old places are in the old coordinates: undoing to them would throw the models away.
+        forgetUndo()
     }
 
     private func commit(_ id: UUID) {
@@ -1911,6 +1915,126 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         models[index].moved = Date()
         if id == selectedModel { updateTilted() }
         if groupMarks[id] != nil { positionGroupMarks() }
+        record(id)
+    }
+
+    // MARK: Undo and redo (Phil, 2026-11-21: "an undo function for movement, scale etc like there is in pose")
+
+    /// Where a model stands, how big and which way round, and for a cut-out its tip, slant and twist.
+    private struct ModelState: Equatable {
+        var transform: [Float]
+        var tilt: Float?
+        var skew: Float?
+        var turn: Float?
+    }
+    /// One step back: the models it changed, as they were before it. A group move is one step.
+    private typealias UndoStep = [UUID: ModelState]
+    private var undoSteps: [UndoStep] = []
+    private var redoSteps: [UndoStep] = []
+    @Published private(set) var canUndoModel = false
+    @Published private(set) var canRedoModel = false
+    /// Each model as it was after its last finished change.
+    private var settled: [UUID: ModelState] = [:]
+    /// Changes finished in this pass of the main loop (a group's models are committed one after another), made one step.
+    private var pendingStep: UndoStep?
+
+    private func state(of id: UUID) -> ModelState? {
+        guard let node = modelNodes[id] else { return nil }
+        let package = cutoutPackages[id]
+        return ModelState(transform: flatten(node.simdTransform), tilt: package?.tilt, skew: package?.skew,
+                          turn: package == nil ? nil : (cutoutTurn[id] ?? 0))
+    }
+
+    /// Notes a finished change: what the model was before goes on the undo list.
+    private func record(_ id: UUID) {
+        guard let now = state(of: id) else { return }
+        guard let before = settled[id] else {
+            settled[id] = now
+            return
+        }
+        guard before != now else { return }
+        settled[id] = now
+        if pendingStep == nil {
+            pendingStep = [:]
+            DispatchQueue.main.async { [weak self] in self?.finishStep() }
+        }
+        if pendingStep?[id] == nil { pendingStep?[id] = before }
+    }
+
+    private func finishStep() {
+        guard let step = pendingStep else { return }
+        pendingStep = nil
+        guard !step.isEmpty else { return }
+        undoSteps.append(step)
+        if undoSteps.count > 60 { undoSteps.removeFirst() }
+        redoSteps = []
+        refreshUndo()
+    }
+
+    private func refreshUndo() {
+        if canUndoModel != !undoSteps.isEmpty { canUndoModel = !undoSteps.isEmpty }
+        if canRedoModel != !redoSteps.isEmpty { canRedoModel = !redoSteps.isEmpty }
+    }
+
+    func undoModel() {
+        // Anything still under way is finished first (it lands on the list like any other change).
+        cancelPin()
+        stopCarrying()
+        finishStep()
+        guard let step = undoSteps.popLast() else { return }
+        if let back = apply(step) { redoSteps.append(back) }
+        Haptics.tap()
+        refreshUndo()
+    }
+
+    func redoModel() {
+        // Anything still under way is finished first (it lands on the list like any other change).
+        cancelPin()
+        stopCarrying()
+        finishStep()
+        guard let step = redoSteps.popLast() else { return }
+        if let back = apply(step) { undoSteps.append(back) }
+        Haptics.tap()
+        refreshUndo()
+    }
+
+    /// Puts the models of a step back as it has them, and gives the step that would put them back again
+    /// (nil when none of them is still here, for example after Delete).
+    private func apply(_ step: UndoStep) -> UndoStep? {
+        var back: UndoStep = [:]
+        for (id, wanted) in step {
+            guard let node = modelNodes[id], let index = models.firstIndex(where: { $0.id == id }), let now = state(of: id) else { continue }
+            back[id] = now
+            node.simdTransform = matrix4(wanted.transform)
+            if var package = cutoutPackages[id], let plane = cutouts[id]?.plane, let tilt = wanted.tilt, let skew = wanted.skew {
+                package.tilt = tilt
+                package.skew = skew
+                cutoutTurn[id] = wanted.turn ?? 0
+                cutoutPackages[id] = package
+                plane.simdTransform = Self.poseMatrix(tilt: tilt, skew: skew, turn: cutoutTurn[id] ?? 0)
+                try? JSONEncoder().encode(package).write(to: folder.appendingPathComponent(models[index].file), options: .atomic)
+            }
+            models[index].transform = wanted.transform
+            models[index].moved = Date()
+            pinned.remove(id)
+            settled[id] = wanted
+            refreshDimensions(id)
+        }
+        updateSize()
+        updateTilted()
+        positionGroupMarks()
+        refreshGizmo()
+        refreshPoseDots()
+        return back.isEmpty ? nil : back
+    }
+
+    private func forgetUndo() {
+        undoSteps = []
+        redoSteps = []
+        pendingStep = nil
+        settled = [:]
+        for id in modelNodes.keys { settled[id] = state(of: id) }
+        refreshUndo()
     }
 
     /// Free rotation about the model's own middle, like turning an object in your hands (Phil, 2026-11-18: rotate in
@@ -2202,6 +2326,12 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     @discardableResult
     private func loadNode(for model: PlacedModel) -> SCNNode? {
+        let node = loadNodeNow(for: model)
+        if node != nil { settled[model.id] = state(of: model.id) }
+        return node
+    }
+
+    private func loadNodeNow(for model: PlacedModel) -> SCNNode? {
         if model.file.hasSuffix("." + Cutout.fileExtension) { return loadCutoutNode(for: model) }
         if model.file.hasSuffix(".fbx") { return loadFBXNode(for: model) }
         let url = folder.appendingPathComponent(model.file)
@@ -2577,6 +2707,18 @@ struct ModelEdgeTools: View {
                     // to corner, as the top of the ring.
                     if posingRig, verticalSize != .compact { poseRow }
                     ObjectNudge(placer: placer).padding(.top, verticalSize == .compact ? 0 : 36)
+                }
+            }
+            // Phil, 2026-11-21: "an undo function for movement, scale etc like there is in pose". Upright, in the top
+            // corners where Pose keeps its Undo and Redo; on its side, in the middle of the bottom edge.
+            .overlay(alignment: verticalSize == .compact ? .bottom : .top) {
+                if !posingRig, placer.canUndoModel || placer.canRedoModel {
+                    HStack(spacing: 0) {
+                        CutoutTool(word: "Undo", symbol: "arrow.uturn.backward", tint: placer.canUndoModel ? .white : .gray, width: 46) { placer.undoModel() }
+                        if verticalSize != .compact { Spacer(minLength: 0) }
+                        CutoutTool(word: "Redo", symbol: "arrow.uturn.forward", tint: placer.canRedoModel ? .white : .gray, width: 46) { placer.redoModel() }
+                    }
+                    .frame(maxWidth: verticalSize == .compact ? nil : .infinity)
                 }
             }
             // Phil, 2026-11-21 (drawing on 1397, on its side): one row along the bottom edge, between Pose and Delete.
