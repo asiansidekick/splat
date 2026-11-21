@@ -7,6 +7,10 @@ import UIKit
 @MainActor
 enum FilmFrame {
     static let key = "filmAspect"
+    /// Phil, 2026-11-21: "option to crop the output". On: photos are cut to the frame. Off: the frame is only drawn
+    /// on the screen and photos keep the whole picture.
+    static let cropKey = "filmFrameCrops"
+    static var crops: Bool { UserDefaults.standard.object(forKey: cropKey) as? Bool ?? true }
 
     /// Where the frame is on the screen now (window points), and the screen's size, set by the matte on show.
     static var shownFrame: CGRect?
@@ -17,7 +21,7 @@ enum FilmFrame {
     /// The photo cut to the frame shown now, or as it is when no frame is on. The photo fills the screen as the
     /// camera does (cut to fit), so a lens photo of another shape is cropped where the frame sat over it.
     static func crop(_ image: UIImage) -> UIImage {
-        guard aspect != .full, let frame = shownFrame, screen.width > 0 else { return image }
+        guard aspect != .full, crops, let frame = shownFrame, screen.width > 0 else { return image }
         let upright = uprighted(image)
         guard let cg = upright.cgImage else { return image }
         let pixels = CGSize(width: cg.width, height: cg.height)
@@ -83,6 +87,7 @@ struct FilmFrameMatte: View {
 /// next shape, a hold lists them all. Yellow while a frame is on.
 struct FilmFrameWord: View {
     @AppStorage(FilmFrame.key) private var saved = 0.0
+    @AppStorage(FilmFrame.cropKey) private var crops = true
     var showToast: ((String) -> Void)? = nil
     @State private var listing = false
     /// A hold opens the list; the button's own tap when the finger lifts must not then move on as well.
@@ -92,7 +97,8 @@ struct FilmFrameWord: View {
 
     var body: some View {
         Button { TapGate.run("Film frame", step) } label: {
-            Text("FRAME \(aspect.word) ›")
+            // A frame drawn but not cropping says so, so nobody is surprised by the photo.
+            Text("FRAME \(aspect.word)\(aspect != .full && !crops ? " · LINES" : "") ›")
                 .font(Theme.footnote.weight(.semibold))
                 .lineLimit(1)
                 .foregroundStyle(aspect == .full ? Color.white : Theme.active)
@@ -108,8 +114,10 @@ struct FilmFrameWord: View {
             ForEach(FilmAspect.allCases) { choice in
                 Button(choice == aspect ? "\(choice.menuName) ✓" : choice.menuName) { pick(choice) }
             }
+            Button(crops ? "Photos: crop to the frame ✓" : "Photos: crop to the frame") { setCrops(true) }
+            Button(crops ? "Photos: keep the whole picture" : "Photos: keep the whole picture ✓") { setCrops(false) }
         } message: {
-            Text("Snapshots and screenshots are cropped to the frame.")
+            Text(crops ? "Snapshots and screenshots are cropped to the frame." : "The frame shows on the screen only; photos keep the whole picture.")
         }
         .accessibilityLabel(aspect == .full ? "Film frame off" : "Film frame \(aspect.word)")
     }
@@ -119,6 +127,13 @@ struct FilmFrameWord: View {
         Self.heldAt = Date()
         Haptics.tap()
         listing = true
+    }
+
+    private func setCrops(_ on: Bool) {
+        Haptics.tap()
+        crops = on
+        Diagnostics.log("Film frame: photos \(on ? "cropped to the frame" : "keep the whole picture")")
+        showToast?(on ? "Photos are cropped to the frame" : "Photos keep the whole picture; the frame shows on the screen only")
     }
 
     private func step() {
@@ -132,7 +147,8 @@ struct FilmFrameWord: View {
         Diagnostics.log("Film frame: \(choice.word)")
         if choice != .full, HintStore.shouldShow("filmFrameTip") {
             HintStore.shown("filmFrameTip")
-            showToast?("Photos are cropped to the frame. Tap FRAME for the next shape, hold it for the list")
+            showToast?(crops ? "Photos are cropped to the frame. Tap FRAME for the next shape, hold it for crop on or off"
+                             : "The frame shows on the screen only. Tap FRAME for the next shape, hold it for crop on or off")
         }
     }
 }
