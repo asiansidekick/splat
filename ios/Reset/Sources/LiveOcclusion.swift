@@ -490,7 +490,7 @@ final class LiveOccluder {
             let shape = sheets[pick.id]
             let parent = shape?.inRoom == true ? view?.scene.rootNode : pickNode
             if node.parent !== parent { node.removeFromParentNode(); parent?.addChildNode(node) }
-            node.geometry = shape.map { $0.mesh.geometry(readsDepth: $0.inRoom) }
+            node.geometry = shape.flatMap { $0.mesh.geometry(readsDepth: $0.inRoom) }
         }
     }
 
