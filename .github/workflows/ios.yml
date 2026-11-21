@@ -60,7 +60,7 @@ jobs:
         working-directory: ios/Reset
         run: |
           # Object scan: auto-crop maths (floor and object finding) on synthetic scans.
-          if ! swiftc -O Sources/CropMath.swift Sources/ScanAlign.swift Sources/TrimMath.swift Sources/PinMath.swift Sources/OccluderMath.swift Sources/EdgeLayoutMath.swift Tests/CropTests/main.swift -o crop-tests > crop-compile.log 2>&1; then
+          if ! swiftc -O Sources/CropMath.swift Sources/ScanAlign.swift Sources/TrimMath.swift Sources/PinMath.swift Sources/OccluderMath.swift Sources/EdgeLayoutMath.swift Sources/FilmFrameMath.swift Tests/CropTests/main.swift -o crop-tests > crop-compile.log 2>&1; then
             grep -E ": error: " crop-compile.log | sort -u | head -10 \
               | sed -E 's#^(.*/)?((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Reset/\2,line=\4,col=\5::\6#'
             tail -40 crop-compile.log
@@ -72,6 +72,23 @@ jobs:
           set -e
           cat crop-results.txt
           sed -nE 's/^FAIL  (.*)$/::error::\1/p' crop-results.txt
+          exit $status
+      - name: Light tests
+        working-directory: ios/Reset
+        run: |
+          # Each model's own light: the SceneKit shader step rendered on a white ball (pictures go with the ghost test pictures).
+          if ! swiftc -O Sources/ModelLightShader.swift Tests/LightTests/main.swift -o light-tests > light-compile.log 2>&1; then
+            grep -E ": error: " light-compile.log | sort -u | head -10 \
+              | sed -E 's#^(.*/)?((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Reset/\2,line=\4,col=\5::\6#'
+            tail -40 light-compile.log
+            exit 1
+          fi
+          set +e
+          ./light-tests test-pictures > light-results.txt 2>&1
+          status=$?
+          set -e
+          cat light-results.txt
+          sed -nE 's/^FAIL  (.*)$/::error::\1/p; s/^SKIP  (.*)$/::warning::\1/p' light-results.txt
           exit $status
       - name: Scan person tests
         working-directory: ios/Reset

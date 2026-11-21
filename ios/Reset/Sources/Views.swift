@@ -2122,6 +2122,17 @@ struct CaptureStage: View {
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
+                // Phil, 2026-11-21: film frames (4:3 … 2.39); snapshots and screenshots are cropped to it.
+                FilmFrameMatte()
+                if !editingModel, !recorder.capturing {
+                    // Upright in the picture's bottom corner; on its side the bottom corner holds 3D models, so the top one.
+                    FilmFrameWord(showToast: showToast)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: verticalSize == .compact ? .topLeading : .bottomLeading)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .clearOfControls()
+                        .hiddenInScreenshots()
+                }
                 MeasureReticle(measurer: recorder.measurer).hiddenInScreenshots()
                 if mode == .snapshot && (recorder.pendingSave || recorder.saving || justSaved) {
                     ScanProgressOverlay(
@@ -2415,7 +2426,7 @@ struct CaptureStage: View {
             reference.shot = shot
             reference.name = name.isEmpty ? "\(chosen.label) photo" : name
             try ReferenceStore.save(reference)
-            if let image = UIImage(data: data) { onPhoto(image) }
+            if let image = UIImage(data: data) { onPhoto(FilmFrame.crop(image)) }
             onSaved(reference)
         } catch {
             Diagnostics.log("Lens snapshot could not be saved: \(error)")
@@ -2959,6 +2970,17 @@ struct ResetStage: View {
                     HeldCompare(
                         held: restorer.held, plainReference: reference.photoOnly ? restorer.startPhoto : restorer.heldPhoto,
                         toNow: $toNow, wipe: wipe)
+                }
+                // Phil, 2026-11-21: film frames (4:3 … 2.39) over the live view; snapshots and screenshots are cropped to it.
+                FilmFrameMatte()
+                // On its side the EDIT tools stand down the left edge, so the word waits in the BACKGROUND section then.
+                if !modelPicked, !restorer.paused, section == .background || simpleTouch || geometry.size.width < geometry.size.height {
+                    FilmFrameWord(showToast: showToast)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .clearOfControls()
+                        .hiddenInScreenshots()
                 }
                 // The picked model's tools take the right edge while it is picked (the ring).
                 if !layers.isEmpty, !restorer.paused, !modelPicked {

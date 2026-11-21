@@ -9,7 +9,12 @@ enum Screenshot {
     /// The whole screen as it looks. The camera is a Metal view, which some captures of a window
     /// leave black; if its part comes out black, the camera view's own picture (camera, models and
     /// measurements, without the overlays) is used instead.
+    /// Cropped to the film frame when one is on (FilmFrame.swift).
     @MainActor static func capture(camera: ARSCNView?) -> UIImage? {
+        wholeScreen(camera: camera).map(FilmFrame.crop)
+    }
+
+    @MainActor private static func wholeScreen(camera: ARSCNView?) -> UIImage? {
         guard let window = keyWindow else { return camera?.snapshot() }
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
@@ -22,7 +27,7 @@ enum Screenshot {
     }
 
     /// The handles drawn on a model while posing or turning it (Phil, 2026-11-20: they showed in snapshots).
-    static let handleNames: Set<String> = ["posedot", "turnicon"]
+    static let handleNames: Set<String> = ["posedot", "turnicon", "lightsun"]
 
     /// Hides the posing handles in the camera view and gives back what puts them back.
     @MainActor static func hideHandles(in camera: SCNView?) -> () -> Void {
@@ -227,7 +232,7 @@ struct ScreenshotButton: View {
                 // Phil, 2026-11-12: with 0.5× or 3× picked, the screenshot is the view through that lens.
                 if let picture = await lens?() {
                     Haptics.success()
-                    let saved = await PhotoLibrary.save([picture])
+                    let saved = await PhotoLibrary.save([FilmFrame.crop(picture)])
                     toast(saved ? "Screenshot saved to Photos" : "Allow Photos in Settings, Reset, Photos to save there")
                     return
                 }

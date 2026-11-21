@@ -623,6 +623,42 @@ runPoseLimitTests()
 try MainActor.assumeIsolated { try runSyncTests() }
 runFrameTests()
 
+/// Each model's own light (ModelLight): saved with the model, old files still read, and the sums behave.
+func runModelLightTests() {
+    var lit = PlacedModel(name: "Chair", file: "models/c.usdz", transform: flatten(matrix_identity_float4x4))
+    lit.light = ModelLight(brightness: 1.4, warmth: 0.5, around: 0.8, height: 0.3)
+    let back = try? JSONDecoder().decode(PlacedModel.self, from: JSONEncoder().encode(lit))
+    expect(back?.light == lit.light, "model light: saved with the model and read back")
+    let old = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","name":"Old","file":"models/o.usdz","transform":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}"#
+    let oldModel = try? JSONDecoder().decode(PlacedModel.self, from: Data(old.utf8))
+    expect(oldModel != nil && oldModel?.light == nil, "model light: a model saved before lighting still opens, lit as before")
+    let plain = ModelLight()
+    expect(plain.isPlain && plain.tint == SIMD3<Float>(1, 1, 1) && plain.direction == nil && plain.shade(normal: [0, 0, 1]) == 1,
+           "model light: the normal setting changes nothing")
+    let warm = ModelLight(warmth: 1).tint, cool = ModelLight(warmth: -1).tint
+    expect(warm.x > warm.y && warm.y > warm.z && warm.z > 0.5, "model light: warm is red over blue, never orange (\(warm))")
+    expect(cool.z > cool.y && cool.y > cool.x && cool.x > 0.6, "model light: cool is blue over red, gently (\(cool))")
+    var dragged = ModelLight()
+    dragged.change(.brightness, by: [0, -100])
+    expect(dragged.brightness > 1.3 && dragged.brightness < 1.7, "model light: dragging up brightens (\(dragged.brightness))")
+    for _ in 0..<50 { dragged.change(.brightness, by: [0, -200]) }
+    expect(dragged.brightness == ModelLight.brightnessRange.upperBound, "model light: brightness stops at its top")
+    var warming = ModelLight()
+    warming.change(.warmth, by: [100, 0])
+    expect(warming.warmth > 0.3 && warming.words(.warmth).hasPrefix("warmer"), "model light: dragging right warms (\(warming.words(.warmth)))")
+    warming.change(.warmth, by: [-100, 0])
+    expect(warming.warmth == 0 && warming.words(.warmth) == "as shot" && warming.isPlain, "model light: dragging back lands on as shot")
+    var side = ModelLight(around: 0, height: 0)
+    let way = side.direction ?? .zero
+    expect(abs(way.z - 1) < 0.001 && abs(way.y) < 0.001, "model light: round 0 and level is along +z")
+    expect(side.shade(normal: way) > 1.25 && side.shade(normal: -way) < 0.5, "model light: facing the light is brighter, turned away darker")
+    side.change(.direction, by: [0, -1000])
+    expect(side.height == ModelLight.heightRange.upperBound, "model light: the light can go no higher than almost overhead")
+    side.change(.direction, by: [Float.pi / 0.012 * 1.5, 0])
+    expect(abs(side.around ?? 9) <= Float.pi + 0.001, "model light: the way round stays within one turn")
+}
+runModelLightTests()
+
 print(failures == 0 ? "All sync tests passed" : "\(failures) sync test(s) failed")
 exit(failures == 0 ? 0 : 1)
 

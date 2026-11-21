@@ -151,6 +151,84 @@ struct PlacedModel: Codable, Identifiable, Equatable {
     var rigPose: MannequinPose?
     /// Made from one of Reset's own scans (its colours are photographs, shown unlit), whatever it is now called.
     var scan: Bool?
+    /// Phil, 2026-11-21: "control over lighting of each model". Nil while it is lit as it always was.
+    var light: ModelLight?
+}
+
+/// How one placed model is lit (ModelLighting.swift): brighter or darker, warmer or cooler, and optionally a light from
+/// one side of the room, so it matches the set's lamps. Plain numbers, so it saves and syncs with the model.
+struct ModelLight: Codable, Equatable {
+    /// 1 as it was; 0.2 (very dark) to 3 (very bright).
+    var brightness: Float = 1
+    /// 0 as it was; up to 1 for tungsten-warm, down to -1 for daylight-blue.
+    var warmth: Float = 0
+    /// Where the light comes from, round the room from the north of the room's map (radians); nil for no side light.
+    var around: Float?
+    /// How high the light is: 0 level with the model, up to 1.4 (almost overhead), down to -0.3 (from below).
+    var height: Float = 0.6
+
+    static let brightnessRange: ClosedRange<Float> = 0.2...3
+    static let warmthRange: ClosedRange<Float> = -1...1
+    static let heightRange: ClosedRange<Float> = -0.3...1.4
+
+    /// Nothing changed from how the model always looked.
+    var isPlain: Bool { abs(brightness - 1) < 0.01 && abs(warmth) < 0.01 && around == nil }
+
+    /// The colour the model's own colours are multiplied by: brightness times a warm or cool tint, gentle enough
+    /// that a costume never turns orange or blue.
+    var tint: SIMD3<Float> {
+        let w = min(max(warmth, Self.warmthRange.lowerBound), Self.warmthRange.upperBound)
+        let colour = w >= 0
+            ? SIMD3<Float>(1, 1 - 0.14 * w, 1 - 0.42 * w)
+            : SIMD3<Float>(1 - 0.32 * -w, 1 - 0.1 * -w, 1)
+        return colour * min(max(brightness, Self.brightnessRange.lowerBound), Self.brightnessRange.upperBound)
+    }
+
+    /// The way to the light from the model, in room coordinates (y up), or nil for no side light.
+    var direction: SIMD3<Float>? {
+        guard let around else { return nil }
+        let up = min(max(height, Self.heightRange.lowerBound), Self.heightRange.upperBound)
+        return SIMD3(cos(up) * sin(around), sin(up), cos(up) * cos(around))
+    }
+
+    /// How much a point of the surface facing `normal` is lit by the side light: 1 where no side light is set, about
+    /// 1.3 facing the light, 0.45 turned away from it. The same sum as the shader in ModelLighting.swift.
+    func shade(normal: SIMD3<Float>) -> Float {
+        guard let direction else { return 1 }
+        let facing = min(max(simd_dot(simd_normalize(normal), direction), 0), 1)
+        return 0.45 + 0.85 * facing
+    }
+
+    /// A drag on the picture: right or up raises the value, as on every other control.
+    mutating func change(_ part: Part, by moved: SIMD2<Float>) {
+        switch part {
+        case .brightness:
+            brightness = min(max(brightness * exp((moved.x - moved.y) * 0.004), Self.brightnessRange.lowerBound), Self.brightnessRange.upperBound)
+            if abs(brightness - 1) < 0.03 { brightness = 1 }
+        case .warmth:
+            warmth = min(max(warmth + (moved.x - moved.y) * 0.004, Self.warmthRange.lowerBound), Self.warmthRange.upperBound)
+            if abs(warmth) < 0.03 { warmth = 0 }
+        case .direction:
+            // Sideways swings the light round the model; up raises it.
+            let next = (around ?? 0) + moved.x * 0.012
+            around = atan2(sin(next), cos(next))
+            height = min(max(height - moved.y * 0.008, Self.heightRange.lowerBound), Self.heightRange.upperBound)
+        }
+    }
+
+    /// What one finger changes while the Light tool is on.
+    enum Part: String, CaseIterable { case direction = "Direction", brightness = "Brightness", warmth = "Warmth" }
+
+    /// A few words for the value now, for example "140%" or "warmer 30".
+    func words(_ part: Part) -> String {
+        switch part {
+        case .brightness: return "\(Int((brightness * 100).rounded()))%"
+        case .warmth:
+            let amount = Int((abs(warmth) * 100).rounded())
+            return amount == 0 ? "as shot" : (warmth > 0 ? "warmer \(amount)" : "cooler \(amount)")
+        case .direction: return around == nil ? "off" : "on"
+        }
+    }
 }
 
 /// A straight line measured in the room, between two points in its coordinates (metres).

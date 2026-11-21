@@ -16,6 +16,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             updateTilted()
             refreshGizmo()
             refreshPoseDots()
+            refreshLightSun()
             if selectedModel != oldValue, selectedModel != nil { Haptics.bump() }
             if selectedModel != oldValue {
                 pickingInFront = false
@@ -205,7 +206,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             if dimensionHint == hint { dimensionHint = nil }
         }
     }
-    private var modelNodes: [UUID: SCNNode] = [:]
+    private(set) var modelNodes: [UUID: SCNNode] = [:]
     /// Where each placed model stands in the room now, for the log of what hides it (LiveOcclusion.swift).
     /// Where each placed model stands in the room, by id.
     var modelPlaces: [UUID: SIMD3<Float>] {
@@ -244,8 +245,14 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// One-finger drags move the selected model up and down instead of across (Phil, 2026-10-31).
     @Published var lifting = false
     /// Phil, 2026-11-09: cut-outs are handled one job at a time, each with one finger, and carried by holding a finger on the object (2026-11-18).
-    enum CutoutJob: String, CaseIterable { case move = "Move", turn = "Turn", size = "Size", tilt = "Tilt", lift = "Lift", pose = "Pose" }
-    @Published var cutoutJob: CutoutJob = .move { didSet { if cutoutJob != oldValue { refreshGizmo(); refreshPoseDots() } } }
+    enum CutoutJob: String, CaseIterable { case move = "Move", turn = "Turn", size = "Size", tilt = "Tilt", lift = "Lift", pose = "Pose", light = "Light" }
+    @Published var cutoutJob: CutoutJob = .move { didSet { if cutoutJob != oldValue { refreshGizmo(); refreshPoseDots(); refreshLightSun() } } }
+    /// Phil, 2026-11-21: each model's light (ModelLighting.swift). What one finger changes while Light is on.
+    @Published var lightPart: ModelLight.Part = .brightness
+    /// The light being dragged, saved into `models` when the finger lifts; the sun that shows where it comes from.
+    var lightDraft: (id: UUID, light: ModelLight)?
+    var lightSun: SCNNode?
+    var lastLightShown = Date.distantPast
     @Published private(set) var carrying = false
     /// The selected 3D model has been tipped or leant (not just turned), so Upright is offered.
     @Published private(set) var selectedTilted = false
@@ -415,7 +422,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     /// Where the viewer is: the live camera, or in Review (no live session) the saved frame's camera.
     /// Phil, 2026-11-10: Move did nothing over a saved frame because it waited for a live camera.
-    private var eye: simd_float4x4? {
+    var eye: simd_float4x4? {
         if let frame = session.currentFrame { return frame.camera.transform }
         return cameraView?.pointOfView?.simdWorldTransform
     }
@@ -1389,6 +1396,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             if gesture.state == .began { posePick(at: finger, in: view, id: id) }
             poseDrag(to: finger, in: view, node: node, id: id)
             if gesture.state == .ended || gesture.state == .cancelled { poseHandle = nil; poseTurning = false }
+        case .light:
+            lightDrag(moved, id: id, ended: gesture.state == .ended || gesture.state == .cancelled)
         case .move:
             break
         }
@@ -1846,6 +1855,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         root.addChildNode(node)
         modelNodes[model.id] = node
         refreshDimensions(model.id)
+        Self.applyLight(model.light, to: node)
         return node
     }
 
@@ -1862,6 +1872,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         root.addChildNode(node)
         modelNodes[model.id] = node
         refreshDimensions(model.id)
+        Self.applyLight(model.light, to: node)
         return node
     }
 
@@ -1951,6 +1962,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         modelNodes[model.id] = node
         cutouts[model.id] = CutoutState(plane: plane, height: height, angles: angles, aspects: aspects, images: images, shown: first)
         refreshDimensions(model.id)
+        Self.applyLight(model.light, to: node)
         startCutoutTimer()
         Diagnostics.log(String(format: "Cut-out loaded: %@, %d views, %.2f m tall", model.name, images.count, height))
         return node
@@ -2162,6 +2174,7 @@ struct ModelEdgeTools: View {
         case .tilt: return "rotate.3d"
         case .lift: return "arrow.up.and.down"
         case .pose: return "figure.arms.open"
+        case .light: return "sun.max"
         }
     }
 
@@ -2181,6 +2194,7 @@ struct ModelEdgeTools: View {
             .overlay(alignment: .top) {
                 VStack(spacing: 4) {
                     if placer.cutoutJob == .pose, placer.selectedHasRig { poseBar }
+                    if placer.cutoutJob == .light { ModelLightBar(placer: placer) }
                     ObjectNudge(placer: placer)
                 }
                 .padding(.top, verticalSize == .compact ? 0 : 36)
@@ -2225,7 +2239,7 @@ struct ModelEdgeTools: View {
     /// Down the left edge: what one finger does to the model (pick one), then Carry, Floor and Pose.
     @ViewBuilder private func jobTools(cutout: Bool) -> some View {
         // Phil, 2026-11-11: Lift for cut-outs too. 2026-11-17: Tilt for every model ("rotate any object"): tip and lean.
-        ForEach(ModelPlacer.CutoutJob.allCases.filter { $0 != .pose }, id: \.self) { job in
+        ForEach(ModelPlacer.CutoutJob.allCases.filter { $0 != .pose && $0 != .light }, id: \.self) { job in
             CutoutTool(word: job == .tilt && !cutout ? "Rotate" : job.rawValue, symbol: Self.symbol(job), on: placer.cutoutJob == job) { placer.cutoutJob = job }
         }
         // Carry walks it along with the live camera, so not over a saved frame (Review).
@@ -2242,6 +2256,8 @@ struct ModelEdgeTools: View {
         } else if placer.selectedPoseSpec != nil {
             CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
         }
+        // Phil, 2026-11-21: each model's own light (ModelLighting.swift).
+        CutoutTool(word: "Light", symbol: "sun.max", on: placer.cutoutJob == .light) { placer.cutoutJob = .light }
     }
 
     /// Down the right edge: add another, bring it here, pin it, stand it, size it, show sizes, finish, delete.
@@ -2332,6 +2348,7 @@ private struct MoveHint: View {
         case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "push a lever's knob to swing it · or drag anywhere · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
         case .pose: return ("hand.draw", "mint dot: reach · yellow: shoulder, hips, wrist, ankle, head · white arrows: turn")
+        case .light: return ("arrow.up.and.down.and.arrow.left.and.right", "drag: change what is picked at the top · Direction: ↔ round, ↕ height")
         }
     }
 

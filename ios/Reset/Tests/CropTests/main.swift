@@ -447,5 +447,37 @@ do {
     }
 }
 
+// Film frames (FilmFrameMath): the frame fits the picture area, and photos are cropped where it sat.
+do {
+    let area = CGRect(x: 0, y: 103, width: 393, height: 607)  // iPhone 14 Pro upright, between the top bar and the shutter row
+    let scope = FilmFrameMath.frame(ratio: 2.39, in: area)
+    check(abs(scope.width - 393) < 0.01 && abs(scope.width / scope.height - 2.39) < 0.001, "film frame 2.39 upright: full width, right shape")
+    check(abs(scope.midY - area.midY) < 0.01 && area.contains(scope), "film frame 2.39 upright: centred in the picture area")
+    let side = CGRect(x: 59, y: 44, width: 693, height: 328)  // on its side, the control column on the right
+    let academy = FilmFrameMath.frame(ratio: 4.0 / 3.0, in: side)
+    check(abs(academy.height - 328) < 0.01 && abs(academy.width - 328 * 4 / 3) < 0.01 && abs(academy.midX - side.midX) < 0.01, "film frame 4:3 on its side: full height, centred")
+    for aspect in FilmAspect.allCases {
+        if let ratio = aspect.ratio {
+            let f = FilmFrameMath.frame(ratio: ratio, in: side)
+            check(f.minX >= side.minX - 0.01 && f.maxX <= side.maxX + 0.01 && f.minY >= side.minY - 0.01 && f.maxY <= side.maxY + 0.01, "film frame \(aspect.word): inside the area")
+        }
+    }
+    check(FilmAspect.scope.next == .full && FilmAspect.full.next == .academy && FilmAspect(saved: 1.85) == .flat && FilmAspect(saved: 7) == .full, "film frame: the tap order and the saved choice")
+    // A screenshot is the screen itself: the crop is the frame, in pixels.
+    let screen = CGSize(width: 393, height: 852)
+    let shot = FilmFrameMath.crop(frame: scope, screen: screen, picture: CGSize(width: 393 * 3, height: 852 * 3))
+    check(shot.map { abs($0.minX) < 0.5 && abs($0.width - 1179) < 0.5 && abs($0.minY - scope.minY * 3) < 0.5 } ?? false, "film frame crop: a screenshot is cut at the frame")
+    // A 3x lens photo (3024 x 4032, upright) fills the screen cut to fit: the crop lands on the same part of it.
+    let photo = CGSize(width: 3024, height: 4032)
+    if let cut = FilmFrameMath.crop(frame: scope, screen: screen, picture: photo) {
+        let scale = max(screen.width / photo.width, screen.height / photo.height)
+        let shownWidth = photo.width * scale
+        check(abs(cut.width / cut.height - 2.39) < 0.01, "film frame crop: a lens photo keeps the frame's shape (\(cut.width / cut.height))")
+        check(abs(cut.midX - photo.width / 2) < 1 && abs((cut.midY * scale + (screen.height - photo.height * scale) / 2) - scope.midY) < 1, "film frame crop: a lens photo is cut where the frame sat")
+        check(cut.width <= photo.width && shownWidth >= screen.width, "film frame crop: inside the photo")
+    } else { check(false, "film frame crop: a lens photo is cropped") }
+    check(FilmFrameMath.crop(frame: CGRect(x: 900, y: 0, width: 10, height: 10), screen: screen, picture: photo) == nil, "film frame crop: a frame off the picture gives nothing")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)
