@@ -2081,6 +2081,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 /// and the pose bar in the middle of the bottom. The model's tools themselves stand round the edges (ModelEdgeTools).
 struct ModelOverlay: View {
     @ObservedObject var placer: ModelPlacer
+    @Environment(\.verticalSizeClass) private var verticalSize
     @State private var showsCutoutHelp = true
 
     var body: some View {
@@ -2115,6 +2116,8 @@ struct ModelOverlay: View {
                     }
                 }
                 .frame(maxWidth: .infinity, minHeight: 42, alignment: .bottom)
+                // Above the pose buttons, which hold the middle of the bottom edge while posing.
+                .padding(.bottom, placer.cutoutJob == .pose && placer.selectedHasRig ? (verticalSize == .compact ? 44 : 88) : 0)
                 .task(id: "\(placer.selectedModel?.uuidString ?? "")-\(placer.cutoutJob.rawValue)") {
                     withAnimation { showsCutoutHelp = true }
                     try? await Task.sleep(for: .seconds(4))
@@ -2169,21 +2172,24 @@ struct ModelEdgeTools: View {
         if placer.selectedModelName != nil {
             let cutout = placer.selectedIsCutout
             let top = verticalSize == .compact ? sidewaysTop : uprightTop
-            // The middle of the bottom edge stays free for the finger picture and the pose bar (about 240 points).
+            let posingRig = placer.cutoutJob == .pose && placer.selectedHasRig
+            // The middle of the bottom edge stays free for the finger picture (about 240 points), and on its side for the
+            // pose buttons in one row (about 380); tools that would run into it go along the top instead.
+            let middle: CGFloat = posingRig && verticalSize == .compact ? 196 : 124
             HStack(spacing: 0) {
-                EdgeColumn(leading: true, top: top, middle: 124) { jobTools(cutout: cutout) }
-                EdgeColumn(leading: false, top: top, middle: 124) { actionTools(cutout: cutout) }
+                EdgeColumn(leading: true, top: top, middle: middle) { jobTools(cutout: cutout) }
+                EdgeColumn(leading: false, top: top, middle: middle) { actionTools(cutout: cutout) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             // Phil, 2026-11-20 (the ring): the "hold, then drag" bubble and the size hints stand at the top edge, not
             // over the middle of the picture.
-            // Phil, 2026-11-20 (drawing on 1396): the pose buttons along the top edge, out of the middle of the bottom.
             .overlay(alignment: .top) {
-                VStack(spacing: 4) {
-                    if placer.cutoutJob == .pose, placer.selectedHasRig { poseBar }
-                    ObjectNudge(placer: placer)
-                }
-                .padding(.top, verticalSize == .compact ? 0 : 36)
+                ObjectNudge(placer: placer).padding(.top, verticalSize == .compact ? 0 : 36)
+            }
+            // Phil, 2026-11-21 (drawing on 1397): the pose buttons sat over the character at the top; they go along the
+            // bottom edge, between Pose and Delete. On its side one row; upright two short rows between the side columns.
+            .overlay(alignment: .bottom) {
+                if posingRig { poseBar }
             }
             .sheet(isPresented: $showsHands) { HandsSheet { placer.setFingers($0, $1) } }
             .sheet(isPresented: $showsPoses) { PoseLibrarySheet { placer.applyCharacterPose($0) } }
@@ -2207,19 +2213,27 @@ struct ModelEdgeTools: View {
 
     /// Phil, 2026-11-19 (Magic Poser): undo, redo, flip left and right, and back to the file's pose.
     @ViewBuilder private var poseBar: some View {
-        HStack(spacing: 0) {
-            CutoutTool(word: "Undo", symbol: "arrow.uturn.backward", tint: placer.canUndoPose ? .white : .gray) { placer.undoPose() }
-            CutoutTool(word: "Redo", symbol: "arrow.uturn.forward", tint: placer.canRedoPose ? .white : .gray) { placer.redoPose() }
-            CutoutTool(word: "Mirror", symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right") { placer.mirrorPose() }
+        if verticalSize == .compact {
+            HStack(spacing: 0) { undoTools; keepTools }.fixedSize()
+        } else {
+            VStack(spacing: 0) {
+                HStack(spacing: 0) { undoTools }.fixedSize()
+                HStack(spacing: 0) { keepTools }.fixedSize()
+            }
         }
-        .fixedSize()
-        HStack(spacing: 0) {
-            CutoutTool(word: "Reset", symbol: "arrow.counterclockwise") { placer.resetCharacterPose() }
-            CutoutTool(word: "Save", symbol: "square.and.arrow.down") { savingPose = true }
-            CutoutTool(word: "Poses", symbol: "list.bullet") { showsPoses = true }
-            if placer.selectedHasFingers { CutoutTool(word: "Hands", symbol: "hand.raised") { showsHands = true } }
-        }
-        .fixedSize()
+    }
+
+    @ViewBuilder private var undoTools: some View {
+        CutoutTool(word: "Undo", symbol: "arrow.uturn.backward", tint: placer.canUndoPose ? .white : .gray, width: 52) { placer.undoPose() }
+        CutoutTool(word: "Redo", symbol: "arrow.uturn.forward", tint: placer.canRedoPose ? .white : .gray, width: 52) { placer.redoPose() }
+        CutoutTool(word: "Mirror", symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right", width: 52) { placer.mirrorPose() }
+    }
+
+    @ViewBuilder private var keepTools: some View {
+        CutoutTool(word: "Reset", symbol: "arrow.counterclockwise", width: 52) { placer.resetCharacterPose() }
+        CutoutTool(word: "Save", symbol: "square.and.arrow.down", width: 52) { savingPose = true }
+        CutoutTool(word: "Poses", symbol: "list.bullet", width: 52) { showsPoses = true }
+        if placer.selectedHasFingers { CutoutTool(word: "Hands", symbol: "hand.raised", width: 52) { showsHands = true } }
     }
 
     /// Down the left edge: what one finger does to the model (pick one), then Carry, Floor and Pose.
@@ -2363,6 +2377,8 @@ private struct CutoutTool: View {
     let symbol: String
     var tint: Color = .white
     var on = false
+    /// Narrower in the pose row along the bottom, so its seven fit between the corners.
+    var width: CGFloat = 58
     let action: () -> Void
 
     /// The button and the window's tap watcher can both fire for one tap (see WindowTapCatcher): once is enough.
@@ -2385,7 +2401,7 @@ private struct CutoutTool: View {
             .fontWeight(on ? .heavy : .semibold)
             .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
             .shadow(color: .black.opacity(0.5), radius: 6)
-            .frame(minWidth: 58, minHeight: 42)
+            .frame(minWidth: width, minHeight: 42)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
