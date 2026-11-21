@@ -2133,7 +2133,8 @@ struct CaptureStage: View {
                 }
                 VStack {
                     // Phil, 2026-11-12: on its side the instruction line goes to the bottom, out of the top row's way.
-                    if verticalSize != .compact { statusBanner }
+                    // Phil, 2026-11-21: the mapping line covered the top edge while working on a model; it waits until Done.
+                    if verticalSize != .compact, !editingModel { statusBanner }
                     Spacer()
                     TorchDial()
                     MeasureHint(measurer: recorder.measurer)

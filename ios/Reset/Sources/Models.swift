@@ -2117,7 +2117,7 @@ struct ModelOverlay: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 42, alignment: .bottom)
                 // Above the pose buttons, which hold the middle of the bottom edge while posing.
-                .padding(.bottom, placer.cutoutJob == .pose && placer.selectedHasRig ? (verticalSize == .compact ? 44 : 88) : 0)
+                .padding(.bottom, placer.cutoutJob == .pose && placer.selectedHasRig && verticalSize == .compact ? 44 : 0)
                 .task(id: "\(placer.selectedModel?.uuidString ?? "")-\(placer.cutoutJob.rawValue)") {
                     withAnimation { showsCutoutHelp = true }
                     try? await Task.sleep(for: .seconds(4))
@@ -2184,12 +2184,16 @@ struct ModelEdgeTools: View {
             // Phil, 2026-11-20 (the ring): the "hold, then drag" bubble and the size hints stand at the top edge, not
             // over the middle of the picture.
             .overlay(alignment: .top) {
-                ObjectNudge(placer: placer).padding(.top, verticalSize == .compact ? 0 : 36)
+                VStack(spacing: 4) {
+                    // Phil, 2026-11-21 (drawing on 1398, upright): the pose buttons spread out along the top edge, corner
+                    // to corner, as the top of the ring.
+                    if posingRig, verticalSize != .compact { poseRow }
+                    ObjectNudge(placer: placer).padding(.top, verticalSize == .compact ? 0 : 36)
+                }
             }
-            // Phil, 2026-11-21 (drawing on 1397): the pose buttons sat over the character at the top; they go along the
-            // bottom edge, between Pose and Delete. On its side one row; upright two short rows between the side columns.
+            // Phil, 2026-11-21 (drawing on 1397, on its side): one row along the bottom edge, between Pose and Delete.
             .overlay(alignment: .bottom) {
-                if posingRig { poseBar }
+                if posingRig, verticalSize == .compact { poseBar }
             }
             .sheet(isPresented: $showsHands) { HandsSheet { placer.setFingers($0, $1) } }
             .sheet(isPresented: $showsPoses) { PoseLibrarySheet { placer.applyCharacterPose($0) } }
@@ -2221,6 +2225,28 @@ struct ModelEdgeTools: View {
                 HStack(spacing: 0) { keepTools }.fixedSize()
             }
         }
+    }
+
+    /// The pose buttons spread across the whole top edge, the first and last in the corners.
+    private var poseRow: some View {
+        HStack(spacing: 0) {
+            CutoutTool(word: "Undo", symbol: "arrow.uturn.backward", tint: placer.canUndoPose ? .white : .gray, width: 46) { placer.undoPose() }
+            Spacer(minLength: 0)
+            CutoutTool(word: "Redo", symbol: "arrow.uturn.forward", tint: placer.canRedoPose ? .white : .gray, width: 46) { placer.redoPose() }
+            Spacer(minLength: 0)
+            CutoutTool(word: "Mirror", symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right", width: 46) { placer.mirrorPose() }
+            Spacer(minLength: 0)
+            CutoutTool(word: "Reset", symbol: "arrow.counterclockwise", width: 46) { placer.resetCharacterPose() }
+            Spacer(minLength: 0)
+            CutoutTool(word: "Save", symbol: "square.and.arrow.down", width: 46) { savingPose = true }
+            Spacer(minLength: 0)
+            CutoutTool(word: "Poses", symbol: "list.bullet", width: 46) { showsPoses = true }
+            if placer.selectedHasFingers {
+                Spacer(minLength: 0)
+                CutoutTool(word: "Hands", symbol: "hand.raised", width: 46) { showsHands = true }
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder private var undoTools: some View {
