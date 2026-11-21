@@ -337,3 +337,46 @@ struct HeldOutline: Sendable {
     /// Whether a fresh outline from Vision is the held thing, or only a part of it or something else.
     static func agrees(_ fresh: [Bool], with held: [Bool]) -> Bool { overlap(fresh, held) >= 0.6 }
 }
+
+/// A picked thing's outline as runs along each row with the real depth at each end (Phil, 2026-11-21 log on 1401:
+/// the depth mesh inside the outline was up to 176,000 triangles, took up to 375 ms and came and went with noisy LiDAR).
+/// The outline gives the edges; depth only says how near each part is, so holes in the depth are filled from the
+/// nearest reading in the row (or the row above) and a run is cut where the depth jumps or after `maxRun` pixels.
+enum DepthStrips {
+    struct Strip: Equatable { var x0: Int; var x1: Int; var y: Int; var d0: Float; var d1: Float }
+
+    static func make(width: Int, height: Int, depth: [Float], maxRun: Int = 16, jump: Float = 0.04,
+                     inside: (Int, Int) -> Bool) -> [Strip] {
+        guard width > 0, height > 0, depth.count >= width * height, maxRun >= 1 else { return [] }
+        var strips: [Strip] = []
+        var above = [Float](repeating: 0, count: width)
+        for y in 0..<height {
+            // This row's depth inside the outline, holes filled from the left, then the right, then the row above.
+            var row = [Float](repeating: 0, count: width)
+            var inRow = [Bool](repeating: false, count: width)
+            var last: Float = 0
+            for x in 0..<width where inside(x, y) {
+                inRow[x] = true
+                let d = depth[y * width + x]
+                if d.isFinite, d > 0.12, d < 8 { last = d; row[x] = d } else { row[x] = last }
+            }
+            last = 0
+            for x in stride(from: width - 1, through: 0, by: -1) where inRow[x] {
+                if row[x] > 0 { last = row[x] } else { row[x] = last > 0 ? last : above[x] }
+            }
+            var x = 0
+            while x < width {
+                guard inRow[x], row[x] > 0 else { x += 1; continue }
+                let start = x
+                var end = x + 1
+                while end < width, inRow[end], row[end] > 0, end - start < maxRun, abs(row[end] - row[end - 1]) < jump * max(1, row[end - 1]) {
+                    end += 1
+                }
+                strips.append(Strip(x0: start, x1: end, y: y, d0: row[start], d1: row[end - 1]))
+                x = end
+            }
+            for x in 0..<width where row[x] > 0 { above[x] = row[x] }
+        }
+        return strips
+    }
+}

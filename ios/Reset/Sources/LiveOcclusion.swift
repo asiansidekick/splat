@@ -698,24 +698,41 @@ final class LiveOccluder {
     nonisolated private static func depthShape(cells: [Bool], width cw: Int, height ch: Int,
                                                room: (depth: [Float], width: Int, height: Int), camera: ARCamera) -> OccluderMesh? {
         let gw = room.width, gh = room.height
-        guard cw > 0, ch > 0, gw > 8, gh > 8 else { return nil }
-        var masked = [Float](repeating: 0, count: gw * gh)
+        guard cw > 0, ch > 0, gw > 8, gh > 8, cells.count == cw * ch else { return nil }
+        // The depth at each cell of the outline (nearest sharpened reading); the outline itself gives the edges.
+        var depth = [Float](repeating: 0, count: cw * ch)
         var inside = 0, measured = 0
-        for y in 0..<gh {
-            let cy = min(ch - 1, y * ch / gh)
-            for x in 0..<gw where cells[cy * cw + min(cw - 1, x * cw / gw)] {
+        for y in 0..<ch {
+            let gy = min(gh - 1, y * gh / ch)
+            for x in 0..<cw where cells[y * cw + x] {
                 inside += 1
-                let d = room.depth[y * gw + x]
-                if d.isFinite, d > 0.12 { masked[y * gw + x] = d; measured += 1 }
+                let d = room.depth[gy * gw + min(gw - 1, x * gw / cw)]
+                if d.isFinite, d > 0.12 { depth[y * cw + x] = d; measured += 1 }
             }
         }
-        guard inside > 0, measured * 2 >= inside else { return nil }
-        let step = Float(camera.imageResolution.width) / Float(gw)
-        // No floor here: a picked thing's flat top (a handrail) still hides.
-        let mesh = OccluderMesh.build(depth: masked, width: gw, height: gh, intrinsics: camera.intrinsics, pose: camera.transform,
-                                      imageWidth: Float(gw) * step, imageHeight: Float(gh) * step, step: 1,
-                                      floor: -1_000_000, pushBack: 0.03, pushPerMetre: 0.02)
-        return (mesh?.indices.isEmpty ?? true) ? nil : mesh
+        guard inside > 0, measured * 3 >= inside else { return nil }
+        let strips = DepthStrips.make(width: cw, height: ch, depth: depth, maxRun: 24) { x, y in cells[y * cw + x] }
+        let image = camera.imageResolution
+        let k = camera.intrinsics
+        let pose = camera.transform
+        let sx = Float(image.width) / Float(cw), sy = Float(image.height) / Float(ch)
+        var mesh = OccluderMesh()
+        mesh.positions.reserveCapacity(strips.count * 12)
+        mesh.indices.reserveCapacity(strips.count * 6)
+        func vertex(_ x: Float, _ y: Float, _ d: Float) {
+            // A little behind the real surface (more far away, where LiDAR is rougher) so a model touching it isn't cut.
+            let back = d + 0.03 + 0.02 * d
+            let u = x * sx, v = y * sy
+            let p = pose * SIMD4((u - k[2][0]) / k[0][0] * back, -(v - k[2][1]) / k[1][1] * back, -back, 1)
+            mesh.positions.append(contentsOf: [p.x, p.y, p.z])
+        }
+        for strip in strips {
+            let first = UInt32(mesh.positions.count / 3)
+            let left = Float(strip.x0), right = Float(strip.x1), top = Float(strip.y), bottom = Float(strip.y + 1)
+            vertex(left, top, strip.d0); vertex(right, top, strip.d1); vertex(left, bottom, strip.d0); vertex(right, bottom, strip.d1)
+            mesh.indices.append(contentsOf: [first, first + 2, first + 1, first + 1, first + 2, first + 3])
+        }
+        return mesh.indices.isEmpty ? nil : mesh
     }
 
     /// The outline's cells as rows of strips on a sheet 30 cm in front of the camera, in the camera's own coordinates.

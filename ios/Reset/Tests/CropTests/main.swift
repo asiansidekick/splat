@@ -455,5 +455,25 @@ do {
     }
 }
 
+// Depth strips: a picked rail's outline keeps its edges; depth only says how near each part is.
+do {
+    // 20 x 2 pixels: the rail fills x 4..<16 on both rows. Row 0 recedes from 1.0 to 1.22 m; row 1 has a hole at 8..<11.
+    var depth = [Float](repeating: 3, count: 40)
+    for x in 4..<16 { depth[x] = 1 + Float(x - 4) * 0.02; depth[20 + x] = 1 + Float(x - 4) * 0.02 }
+    for x in 8..<11 { depth[20 + x] = 0 }
+    let strips = DepthStrips.make(width: 20, height: 2, depth: depth, maxRun: 6) { x, _ in x >= 4 && x < 16 }
+    let row0 = strips.filter { $0.y == 0 }, row1 = strips.filter { $0.y == 1 }
+    check(row0.first?.x0 == 4 && row0.last?.x1 == 16, "depth strips: the outline's edges are kept exactly")
+    check(row0.count == 2 && row0[0].x1 == 10, "depth strips: a long run is cut every 6 pixels")
+    check(row1.first?.x0 == 4 && row1.last?.x1 == 16 && row1.reduce(0) { $0 + $1.x1 - $1.x0 } == 12, "depth strips: a hole in the depth is filled, not left open")
+    check(near(row0[0].d0, 1, 0.001) && near(row0[0].d1, 1.10, 0.001), "depth strips: each run carries the depth at its ends")
+    // A jump inside the outline (rail in front of the steps behind) cuts the run.
+    var step = [Float](repeating: 1, count: 10)
+    for x in 5..<10 { step[x] = 2 }
+    let cut = DepthStrips.make(width: 10, height: 1, depth: step, maxRun: 16) { _, _ in true }
+    check(cut.count == 2 && cut[0].x1 == 5 && cut[1].d0 == 2, "depth strips: a jump in depth starts a new run")
+    check(DepthStrips.make(width: 4, height: 1, depth: [0, 0, 0, 0]) { _, _ in true }.isEmpty, "depth strips: no depth at all gives nothing")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)
