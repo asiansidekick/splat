@@ -42,7 +42,7 @@ func render(tint: SIMD3<Float>? = nil, way: SIMD3<Float> = [0, 1, 0], side: Floa
     material.diffuse.contents = NSColor(white: 0.7, alpha: 1)
     material.lightingModel = constant ? .constant : .blinn
     if let tint {
-        material.shaderModifiers = [.surface: ModelLightShader.source]
+        material.shaderModifiers = [.fragment: ModelLightShader.source]
         material.setValue(NSValue(scnVector3: SCNVector3(tint.x, tint.y, tint.z)), forKey: "resetTint")
         material.setValue(NSValue(scnVector3: SCNVector3(way.x, way.y, way.z)), forKey: "resetLightWay")
         material.setValue(NSNumber(value: side), forKey: "resetSideLight")

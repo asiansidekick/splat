@@ -44,6 +44,9 @@ enum FilmFrame {
 /// framing), never takes a touch. Lay it over the whole picture, like the other overlays.
 struct FilmFrameMatte: View {
     @AppStorage(FilmFrame.key) private var saved = 0.0
+    /// Phil, 2026-11-21: "view guides within the full screen display". With crop off the frame is a guide: bright
+    /// lines over the whole picture, barely shaded outside, as the photos will be.
+    @AppStorage(FilmFrame.cropKey) private var crops = true
     @Environment(\.chromeInsets) private var insets
 
     var body: some View {
@@ -60,10 +63,11 @@ struct FilmFrameMatte: View {
                         path.addRect(CGRect(origin: .zero, size: geometry.size))
                         path.addRect(frame)
                     }
-                    .fill(Color.black.opacity(0.62), style: FillStyle(eoFill: true))
+                    .fill(Color.black.opacity(crops ? 0.62 : 0.15), style: FillStyle(eoFill: true))
                     // Just outside the frame, so a cropped photo never carries it.
                     Path { $0.addRect(frame.insetBy(dx: -1, dy: -1)) }
-                        .stroke(Color.white.opacity(0.7), lineWidth: 1)
+                        .stroke(Color.white.opacity(crops ? 0.7 : 0.9), lineWidth: crops ? 1 : 1.5)
+                        .shadow(color: .black.opacity(crops ? 0 : 0.6), radius: 1)
                 }
             }
             .onAppear { remember(frame, global) }
@@ -74,6 +78,7 @@ struct FilmFrameMatte: View {
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .animation(.snappy(duration: 0.25), value: saved)
+        .animation(.snappy(duration: 0.25), value: crops)
     }
 
     private func remember(_ frame: CGRect?, _ global: CGRect) {
@@ -115,7 +120,7 @@ struct FilmFrameWord: View {
                 Button(choice == aspect ? "\(choice.menuName) ✓" : choice.menuName) { pick(choice) }
             }
             Button(crops ? "Photos: crop to the frame ✓" : "Photos: crop to the frame") { setCrops(true) }
-            Button(crops ? "Photos: keep the whole picture" : "Photos: keep the whole picture ✓") { setCrops(false) }
+            Button(crops ? "Guide lines only, keep the whole picture" : "Guide lines only, keep the whole picture ✓") { setCrops(false) }
         } message: {
             Text(crops ? "Snapshots and screenshots are cropped to the frame." : "The frame shows on the screen only; photos keep the whole picture.")
         }
@@ -133,7 +138,7 @@ struct FilmFrameWord: View {
         Haptics.tap()
         crops = on
         Diagnostics.log("Film frame: photos \(on ? "cropped to the frame" : "keep the whole picture")")
-        showToast?(on ? "Photos are cropped to the frame" : "Photos keep the whole picture; the frame shows on the screen only")
+        showToast?(on ? "Photos are cropped to the frame" : "Guide lines only: the whole picture shows and photos keep it all")
     }
 
     private func step() {

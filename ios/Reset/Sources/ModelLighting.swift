@@ -39,11 +39,11 @@ extension ModelPlacer {
         }
         gather(node)
         for material in materials {
-            let has = material.shaderModifiers?[.surface] == lightShader
+            let has = material.shaderModifiers?[.fragment] == lightShader
             if !has {
                 guard !light.isPlain else { continue }
                 var modifiers = material.shaderModifiers ?? [:]
-                modifiers[.surface] = lightShader
+                modifiers[.fragment] = lightShader
                 material.shaderModifiers = modifiers
             }
             for (key, value) in values { material.setValue(value, forKey: key) }
