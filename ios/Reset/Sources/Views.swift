@@ -2211,7 +2211,7 @@ struct CaptureStage: View {
         .overlay { MeasurePointer(measurer: recorder.measurer) }
         .overlay { MeasureEntry(measurer: recorder.measurer).hiddenInScreenshots() }
         .overlay { CleanViewControls(snap: shutterOnce) }
-        // Without the controls, a volume button takes a snapshot too.
+        // Phil, 2026-11-21: a volume button presses the shutter, with or without the controls, as in the iPhone Camera.
         .modifier(CaptureButtonAction(action: volumeShutter))
         // Phil, 2026-11-18: 3D models, the gallery and the scans list are one menu now: the gallery, with the ways to
         // add things along its top and an edit menu on each scan.
@@ -2302,9 +2302,16 @@ struct CaptureStage: View {
         }
     }
 
-    /// The button and the window's tap watcher can both fire for one tap: the second within 0.6 s is ignored.
+    /// A volume button (or Camera Control) presses the shutter, as in the iPhone Camera (Phil, 2026-11-21: it used to
+    /// work only without the controls). Not while a menu, sheet or other screen is open over the camera.
     private func volumeShutter() {
-        if ScreenshotMode.shared.viewing { shutterOnce() }
+        let window = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).first { $0.isKeyWindow }
+        guard window?.rootViewController?.presentedViewController == nil else {
+            Diagnostics.log("Capture button ignored: a screen is open over the camera")
+            return
+        }
+        shutterOnce()
     }
 
     private func toggleGuide() {
