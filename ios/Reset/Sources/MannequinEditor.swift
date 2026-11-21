@@ -155,12 +155,16 @@ private struct PoseStage: UIViewRepresentable {
         context.coordinator.placeCamera()
         context.coordinator.rebuild(pose)
         view.addGestureRecognizer(UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pan(_:))))
+        view.addGestureRecognizer(UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap(_:))))
         return view
     }
 
     func updateUIView(_ view: SCNView, context: Context) {
         context.coordinator.parent = self
-        if context.coordinator.shown != pose || context.coordinator.shownProportion != proportion { context.coordinator.rebuild(pose) }
+        if context.coordinator.shown != pose || context.coordinator.shownProportion != proportion {
+            context.coordinator.rebuild(pose)
+            context.coordinator.refreshWheels()
+        }
     }
 
     @MainActor
@@ -222,6 +226,7 @@ private struct PoseStage: UIViewRepresentable {
                 scene.rootNode.addChildNode(dot)
                 handles[name] = dot
             }
+            showSelected()
         }
 
         /// Hips, wrists and ankles bend by how far they are dragged; the rest reach.
@@ -229,15 +234,146 @@ private struct PoseStage: UIViewRepresentable {
 
         private var startPose = MannequinPose()
         private var startPoint: CGPoint = .zero
+        /// Phil, 2026-11-21: the dot last touched stays selected, with a wheel round its joint for each way it turns;
+        /// and the yellow dots turn their joint the way the finger goes, like the mint ones.
+        private let wheels = PoseWheelSet()
+        private var selected: String?
 
-        private func articulate(_ handle: String, to point: CGPoint) {
+        private static func joint(_ handle: String) -> PoseDrag.Joint {
             let side = handle.hasSuffix("L") ? 0 : 1
-            let joint: PoseDrag.Joint = handle == "pelvis" ? .hips : handle == "tip.crown" ? .headLook : handle == "tip.ear" ? .headTilt : handle.hasPrefix("tip.shoulder") ? .shoulder(side)
-                : handle.hasPrefix("tip.hand") ? .wrist(side) : .ankle(side)
-            let pose = PoseDrag.solve(joint, target: .zero, top: .zero, middle: .zero, end: .zero, hips: .zero, from: startPose,
-                                      screen: SIMD2(Float(point.x - startPoint.x), Float(point.y - startPoint.y)))
-            rebuild(pose.limited)
-            parent.pose = pose.limited
+            switch handle {
+            case "pelvis": return .hips
+            case "tip.crown": return .headLook
+            case "tip.ear": return .headTilt
+            case "end.head": return .head
+            default:
+                if handle.hasPrefix("tip.shoulder") { return .shoulder(side) }
+                if handle.hasPrefix("tip.hand") { return .wrist(side) }
+                if handle.hasPrefix("tip.foot") { return .ankle(side) }
+                if handle.hasPrefix("elbow.") { return .elbow(side) }
+                if handle.hasPrefix("knee.") { return .knee(side) }
+                if handle.hasPrefix("end.hand") { return .hand(side) }
+                return .foot(side)
+            }
+        }
+
+        private var project: (SIMD3<Float>) -> SIMD2<Float>? {
+            { [weak view] p in
+                guard let view else { return nil }
+                let shown = view.projectPoint(SCNVector3(p.x, p.y, p.z))
+                return shown.z > 0 && shown.z < 1 ? SIMD2(Float(shown.x), Float(shown.y)) : nil
+            }
+        }
+
+        /// The wheels round the selected dot's joint, for the pose shown now.
+        func refreshWheels() {
+            guard let selected, dragging == nil, let root = view?.scene?.rootNode else { return }
+            let pose = shown ?? parent.pose
+            let h = parent.height
+            func at(_ name: String) -> SIMD3<Float>? { node(name)?.simdWorldPosition }
+            /// A point fixed to a part of the figure, found again by name (the figure is made afresh for each pose).
+            func riding(_ name: String, _ world: SIMD3<Float>) -> () -> SIMD3<Float> {
+                guard let n = node(name) else { return { world } }
+                let local = n.simdConvertPosition(world, from: nil)
+                return { [weak self] in self?.node(name)?.simdConvertPosition(local, to: nil) ?? world }
+            }
+            let joint = Self.joint(selected)
+            let side = selected.hasSuffix("L") ? "L" : "R"
+            let isArm: Bool = { if case .knee = joint { return false }; if case .foot = joint { return false }; if case .ankle = joint { return false }; return true }()
+            let ratio: Float = {
+                guard let a = at(isArm ? "shoulder.\(side)" : "hip.\(side)"), let b = at(isArm ? "elbow.\(side)" : "knee.\(side)"),
+                      let e = at(isArm ? "end.hand.\(side)" : "end.foot.\(side)"), simd_distance(a, b) > 1e-5 else { return 1 }
+                return simd_distance(b, e) / simd_distance(a, b)
+            }()
+            let up = SIMD3<Float>(0, 1, 0), ahead = SIMD3<Float>(0, 0, 1)
+            let anchor: (PoseAxis) -> PoseWheelSet.Anchor? = { axis in
+                func letter(_ s: Int) -> String { s == 0 ? "L" : "R" }
+                switch axis {
+                case .headTurn, .headNod:
+                    guard let c = at("neck") else { return nil }
+                    return .init(pivot: riding("tip.crown", c), probe: riding("tip.crown", c + ahead * (h * 0.1)))
+                case .headTilt:
+                    guard let c = at("neck") else { return nil }
+                    return .init(pivot: riding("tip.crown", c), probe: riding("tip.crown", c + up * (h * 0.12)))
+                case .shrug(let s), .roll(let s):
+                    guard let l = at("shoulder.L"), let r = at("shoulder.R") else { return nil }
+                    let middle = (l + r) / 2
+                    return .init(pivot: { middle }, probe: riding("shoulder.\(letter(s))", s == 0 ? l : r))
+                case .wristBend(let s), .wristSide(let s):
+                    guard let w = at("wrist.\(letter(s))"), let tip = at("tip.hand.\(letter(s))") else { return nil }
+                    return .init(pivot: riding("tip.hand.\(letter(s))", w), probe: riding("tip.hand.\(letter(s))", tip))
+                case .anklePoint(let s), .ankleTurn(let s):
+                    guard let a = at("ankle.\(letter(s))") else { return nil }
+                    return .init(pivot: riding("tip.foot.\(letter(s))", a), probe: riding("tip.foot.\(letter(s))", a + ahead * (h * 0.08)))
+                case .hipTurn, .hipTilt:
+                    guard let c = at("pelvis"), let hip = at("hip.L") else { return nil }
+                    return .init(pivot: riding("pelvis", c), probe: riding("hip.L", hip))
+                case .leanForward, .leanSide:
+                    guard let c = at("pelvis"), let n = at("neck") else { return nil }
+                    return .init(pivot: riding("pelvis", c), probe: riding("neck", n))
+                case .swivel(let arm, let s):
+                    let l = letter(s)
+                    guard let t = at(arm ? "shoulder.\(l)" : "hip.\(l)"), let m = at(arm ? "elbow.\(l)" : "knee.\(l)"),
+                          let e = at(arm ? "end.hand.\(l)" : "end.foot.\(l)"), simd_distance(t, e) > 1e-4 else { return nil }
+                    let line = simd_normalize(e - t)
+                    let foot = t + line * simd_dot(m - t, line)
+                    return .init(pivot: { foot }, probe: riding(arm ? "elbow.\(l)" : "knee.\(l)", m))
+                case .bend(let arm, let s):
+                    let l = letter(s)
+                    guard let m = at(arm ? "elbow.\(l)" : "knee.\(l)"), let e = at(arm ? "end.hand.\(l)" : "end.foot.\(l)") else { return nil }
+                    return .init(pivot: riding(arm ? "elbow.\(l)" : "knee.\(l)", m), probe: riding(arm ? "end.hand.\(l)" : "end.foot.\(l)", e))
+                }
+            }
+            wheels.build(joint, pose: pose, ratio: ratio, smallest: h * 0.05, colours: [Theme.accentUI, .systemYellow],
+                         show: { [weak self] in self?.rebuild($0) }, anchor: anchor, parent: root)
+            rebuild(pose)
+            showSelected()
+        }
+
+        /// The selected dot white, the others their own colour.
+        private func showSelected() {
+            for (name, dot) in handles {
+                dot.geometry?.firstMaterial?.diffuse.contents = name == selected ? UIColor.white
+                    : Coordinator.articulates(name) ? UIColor.systemYellow : Theme.accentUI
+            }
+        }
+
+        private func select(_ name: String?) {
+            selected = name
+            if name == nil { wheels.clear() } else { refreshWheels() }
+            showSelected()
+        }
+
+        /// The dot nearest the finger, within about a thumb's width.
+        private func nearestHandle(_ point: CGPoint, within: CGFloat) -> (name: String, gap: CGFloat, depth: Float)? {
+            guard let view else { return nil }
+            var best: (name: String, gap: CGFloat, depth: Float)?
+            for (name, handle) in handles {
+                let p = view.projectPoint(handle.position)
+                let gap = hypot(CGFloat(p.x) - point.x, CGFloat(p.y) - point.y)
+                if gap < (best?.gap ?? within) { best = (name, gap, p.z) }
+            }
+            return best
+        }
+
+        @objc func tap(_ gesture: UITapGestureRecognizer) {
+            guard let view else { return }
+            select(nearestHandle(gesture.location(in: view), within: 44)?.name)
+        }
+
+        /// A yellow dot: its joint turns so the point it moves goes the way the finger has gone.
+        private func articulate(to point: CGPoint) {
+            let finger = SIMD2(Float(point.x), Float(point.y))
+            guard let moved = wheels.dragHandle(to: finger, project: project) else { return }
+            rebuild(moved.pose)
+            parent.pose = moved.pose
+            if moved.far {
+                let was = dragging
+                dragging = nil
+                refreshWheels()
+                dragging = was
+                wheels.beginHandle(moved.pose, finger: finger)
+            }
         }
 
         private func node(_ name: String) -> SCNNode? { figure?.childNode(withName: name, recursively: true) }
@@ -248,28 +384,53 @@ private struct PoseStage: UIViewRepresentable {
             switch gesture.state {
             case .began:
                 dragging = nil
-                var best: CGFloat = 44
-                for (name, handle) in handles {
-                    let p = view.projectPoint(handle.position)
-                    let gap = hypot(CGFloat(p.x) - point.x, CGFloat(p.y) - point.y)
-                    if gap < best { best = gap; dragging = name; depth = p.z }
+                startPoint = point
+                startPose = shown ?? parent.pose
+                lastPoint = point
+                // A wheel of the selected dot first: the joint turns as the wheel does.
+                if wheels.pick(SIMD2(Float(point.x), Float(point.y)), pose: startPose, project: project) {
+                    dragging = "wheel"
+                    parent.onBegin()
+                    return
                 }
+                let near = nearestHandle(point, within: 44)
+                let best: CGFloat = near?.gap ?? 44
+                if let near { dragging = near.name; depth = near.depth }
                 if turnKnob != nil {
                     let reach = parent.height * 0.3
                     let p = view.projectPoint(SCNVector3(sin(yaw) * reach, 0.004, cos(yaw) * reach))
                     if hypot(CGFloat(p.x) - point.x, CGFloat(p.y) - point.y) < (dragging == nil ? 50 : best) { dragging = "turn" }
                 }
-                lastPoint = point
-                startPoint = point
-                startPose = shown ?? parent.pose
-                if dragging != nil, dragging != "turn" { parent.onBegin() }
+                if let name = dragging, name != "turn" {
+                    parent.onBegin()
+                    if Coordinator.articulates(name) {
+                        if selected != name || wheels.joint != Self.joint(name) {
+                            let was = dragging
+                            dragging = nil
+                            selected = name
+                            refreshWheels()
+                            dragging = was
+                        }
+                        wheels.beginHandle(startPose, finger: SIMD2(Float(point.x), Float(point.y)))
+                    } else {
+                        // The limb reaches: its wheels come back where it ends up.
+                        selected = name
+                        wheels.clear()
+                        showSelected()
+                    }
+                }
             case .changed:
-                if dragging == "turn" {
+                if dragging == "wheel" {
+                    if let pose = wheels.turnWheel(to: SIMD2(Float(point.x), Float(point.y)), project: project), pose != shown {
+                        rebuild(pose)
+                        parent.pose = pose
+                    }
+                } else if dragging == "turn" {
                     yaw -= Float(point.x - lastPoint.x) * 0.012
                     lastPoint = point
                     placeCamera()
                 } else if let dragging, Coordinator.articulates(dragging) {
-                    articulate(dragging, to: point)
+                    articulate(to: point)
                 } else if let dragging {
                     let world = view.unprojectPoint(SCNVector3(Float(point.x), Float(point.y), depth))
                     move(dragging, to: SIMD3(world.x, world.y, world.z))
@@ -279,7 +440,10 @@ private struct PoseStage: UIViewRepresentable {
                     placeCamera()
                 }
             default:
+                let posed = dragging != nil && dragging != "turn"
                 dragging = nil
+                wheels.letGo()
+                if posed, selected != nil { refreshWheels() }
             }
         }
 

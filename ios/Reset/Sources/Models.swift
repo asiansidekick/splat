@@ -544,8 +544,9 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     /// The held dot white and solid with a soft halo, its line white; the others back to see-through.
     private func showHeldDot() {
+        let chosen = poseHandle ?? poseSelected
         for (node, joint) in poseDots {
-            let held = joint == poseHandle
+            let held = joint == chosen
             let colour = poseDotColour[node] ?? .white
             node.geometry?.firstMaterial?.diffuse.contents = held ? UIColor.white : colour.withAlphaComponent(0.6)
             node.childNode(withName: "posehalo", recursively: false)?.removeFromParentNode()
@@ -558,7 +559,20 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             }
             poseLines[node]?.childNodes.first?.geometry?.firstMaterial?.diffuse.contents = held ? UIColor.white : colour.withAlphaComponent(0.7)
         }
-        heldPoseWord = poseHandle.map(Self.poseWord)
+        showPoseWord()
+    }
+
+    /// The hint: what the turning wheel does, or the held dot, or the selected one with its wheels.
+    private func showPoseWord() {
+        if let words = poseWheels.turningWords {
+            heldPoseWord = words
+        } else if let joint = poseHandle {
+            heldPoseWord = Self.poseWord(joint)
+        } else if let joint = poseSelected {
+            heldPoseWord = poseWheels.wheels.isEmpty ? Self.poseWord(joint) : Self.poseWord(joint) + " · or turn a ring"
+        } else {
+            heldPoseWord = nil
+        }
     }
 
     /// What each dot does, as the hint says it while it is held.
@@ -570,7 +584,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         case .knee: return "Knee: swing the bend"
         case .wrist: return "Wrist: bend the hand"
         case .ankle: return "Ankle: point the foot"
-        case .shoulder: return "Shoulder: shrug"
+        case .shoulder: return "Shoulder: shrug and roll"
         case .head: return "Neck: lean the body"
         case .headLook: return "Top of head: turn and nod"
         case .headTilt: return "Ear: tilt the head"
@@ -589,6 +603,113 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private var poseUndo: [UUID: [MannequinPose?]] = [:]
     private var poseRedo: [UUID: [MannequinPose?]] = [:]
     @Published private(set) var poseHistory = 0
+    /// Phil, 2026-11-21: a dot stays selected when the finger lifts, with a wheel round its joint for each way the
+    /// joint turns; and the dots that turn a joint (yellow) move it the way the finger goes, like the others.
+    private let poseWheels = PoseWheelSet()
+    private var poseSelected: PoseDrag.Joint? { didSet { if poseSelected != oldValue { showHeldDot() } } }
+    private var poseWheelGrab = false
+
+    /// The dots that turn a joint, rather than reach with it.
+    private static func turnsJoint(_ joint: PoseDrag.Joint) -> Bool {
+        switch joint {
+        case .wrist, .ankle, .shoulder, .headLook, .headTilt, .hips: return true
+        default: return false
+        }
+    }
+
+    /// Where a point in the world shows on the screen (nil behind the camera).
+    private static func onScreen(_ view: SCNView) -> (SIMD3<Float>) -> SIMD2<Float>? {
+        { p in
+            let shown = view.projectPoint(SCNVector3(p.x, p.y, p.z))
+            return shown.z > 0 && shown.z < 1 ? SIMD2(Float(shown.x), Float(shown.y)) : nil
+        }
+    }
+
+    /// The wheels round the selected dot's joint, worked out from the character as it is posed now.
+    private func buildPoseWheels(id: UUID) {
+        guard let joint = poseSelected, let rig = rigs[id], let node = modelNodes[id],
+              let model = models.first(where: { $0.id == id }) else {
+            poseWheels.clear()
+            showPoseWord()
+            return
+        }
+        let map = rig.poser.map
+        let pose = model.rigPose ?? rig.poser.restPose
+        let h = max(rig.height * node.simdScale.x, 0.2)
+        let up = node.simdWorldOrientation.act(SIMD3(0, 1, 0))
+        let ahead = node.simdWorldOrientation.act(SIMD3(0, 0, map.facing))
+        func at(_ index: Int?) -> SIMD3<Float>? { index.flatMap { rig.joint($0)?.simdWorldPosition } }
+        /// A point fixed to a bone where it is now, read again wherever the bone goes.
+        func riding(_ bone: Int?, _ world: SIMD3<Float>) -> () -> SIMD3<Float> {
+            guard let n = bone.flatMap({ rig.joint($0) }) else { return { world } }
+            let local = n.simdConvertPosition(world, from: nil)
+            return { n.simdConvertPosition(local, to: nil) }
+        }
+        func chain(_ side: Int, arm: Bool) -> [Int] { arm ? (side == 0 ? map.armL : map.armR) : (side == 0 ? map.legL : map.legR) }
+        let ratio: Float = {
+            var c: [Int]?
+            switch joint {
+            case .elbow(let s), .hand(let s), .wrist(let s), .shoulder(let s): c = chain(s, arm: true)
+            case .knee(let s), .foot(let s), .ankle(let s): c = chain(s, arm: false)
+            default: c = nil
+            }
+            guard let c, c.count > 2, let a = at(c[0]), let b = at(c[1]), let e = at(c[2]), simd_distance(a, b) > 1e-5 else { return 1 }
+            return simd_distance(b, e) / simd_distance(a, b)
+        }()
+        let anchor: (PoseAxis) -> PoseWheelSet.Anchor? = { axis in
+            switch axis {
+            case .headTurn, .headNod:
+                let head = map.head ?? map.neck
+                guard let c = at(head) else { return nil }
+                return .init(pivot: riding(head, c), probe: riding(head, c + ahead * (h * 0.1)))
+            case .headTilt:
+                let head = map.head ?? map.neck
+                guard let c = at(head) else { return nil }
+                return .init(pivot: riding(head, c), probe: riding(head, c + up * (h * 0.12)))
+            case .shrug(let s), .roll(let s):
+                let upper = chain(s, arm: true)[0]
+                let collar = s < rig.poser.collars.count ? rig.poser.collars[s] : nil
+                guard let collar, let c = at(collar), let u = at(upper) else { return nil }
+                return .init(pivot: riding(collar, c), probe: riding(upper, u))
+            case .wristBend(let s), .wristSide(let s):
+                let c = chain(s, arm: true)
+                guard let w = at(c[2]), let e = at(c[1]), simd_distance(w, e) > 1e-5 else { return nil }
+                return .init(pivot: riding(c[2], w), probe: riding(c[2], w + simd_normalize(w - e) * (h * 0.08)))
+            case .anklePoint(let s), .ankleTurn(let s):
+                let c = chain(s, arm: false)
+                guard let a = at(c[2]) else { return nil }
+                return .init(pivot: riding(c[2], a), probe: riding(c[2], a + ahead * (h * 0.08)))
+            case .hipTurn, .hipTilt:
+                guard let c = at(map.hips), let leg = at(map.legL[0]) else { return nil }
+                return .init(pivot: riding(map.hips, c), probe: riding(map.legL[0], leg))
+            case .leanForward, .leanSide:
+                guard let c = at(map.hips), let neck = map.neck ?? map.head ?? map.spine.last, let n = at(neck) else { return nil }
+                return .init(pivot: riding(map.hips, c), probe: riding(neck, n))
+            case .swivel(let arm, let s):
+                // About the line from shoulder to hand (hip to foot), which the swing keeps where it is.
+                let c = chain(s, arm: arm)
+                guard let t = at(c[0]), let m = at(c[1]), let e = at(c[2]), simd_distance(t, e) > 1e-4 else { return nil }
+                let line = simd_normalize(e - t)
+                let foot = t + line * simd_dot(m - t, line)
+                return .init(pivot: { foot }, probe: riding(c[1], m))
+            case .bend(let arm, let s):
+                let c = chain(s, arm: arm)
+                guard let m = at(c[1]), let e = at(c[2]) else { return nil }
+                return .init(pivot: riding(c[1], m), probe: riding(c[2], e))
+            }
+        }
+        poseWheels.build(joint, pose: pose, ratio: ratio, smallest: h * 0.05, colours: [Theme.accentUI, .systemYellow],
+                         show: { rig.apply($0) }, anchor: anchor, parent: node)
+        rig.apply(model.rigPose)
+        showPoseWord()
+    }
+
+    /// Lets go of the selected dot and its wheels.
+    private func deselectPoseDot() {
+        poseWheels.clear()
+        poseSelected = nil
+        showPoseWord()
+    }
 
     /// The selected model is an imported character that can be posed by its joints.
     var selectedHasRig: Bool {
@@ -607,6 +728,9 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         poseDots = []
         poseLines = [:]
         poseDotColour = [:]
+        poseWheels.clear()
+        poseWheelGrab = false
+        poseSelected = nil
         heldPoseWord = nil
         poseHandle = nil
         poseTurnIcon?.removeFromParentNode()
@@ -723,10 +847,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         return atan2(hit.x - floor.x, hit.z - floor.z)
     }
 
-    private func posePick(at finger: CGPoint, in view: SCNView, id: UUID) {
-        poseHandle = nil
-        poseTurning = false
-        guard let eye = self.eye?.columns.3.xyz else { return }
+    /// The dot nearest the finger, within about a thumb's width.
+    private func nearestPoseDot(to finger: CGPoint, in view: SCNView, eye: SIMD3<Float>) -> (joint: PoseDrag.Joint, distance: CGFloat, depth: Float)? {
         var best: (joint: PoseDrag.Joint, distance: CGFloat, depth: Float)?
         for dot in poseDots {
             let world = dot.node.simdWorldPosition
@@ -735,6 +857,41 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             let distance = hypot(CGFloat(shown.x) - finger.x, CGFloat(shown.y) - finger.y)
             if distance < (best?.distance ?? 50) { best = (dot.joint, distance, simd_distance(world, eye)) }
         }
+        return best
+    }
+
+    /// A tap in Pose: on a dot selects it and shows its wheels; anywhere else lets go of the selected dot first.
+    private func poseTap(at finger: CGPoint, in view: SCNView) -> Bool {
+        guard cutoutJob == .pose, let id = selectedModel, rigs[id] != nil, let eye = self.eye?.columns.3.xyz else { return false }
+        if let best = nearestPoseDot(to: finger, in: view, eye: eye) {
+            poseSelected = best.joint
+            buildPoseWheels(id: id)
+            Haptics.tap()
+            return true
+        }
+        guard poseSelected != nil else { return false }
+        deselectPoseDot()
+        return true
+    }
+
+    private func posePick(at finger: CGPoint, in view: SCNView, id: UUID) {
+        poseHandle = nil
+        poseTurning = false
+        poseWheelGrab = false
+        guard let eye = self.eye?.columns.3.xyz else { return }
+        let here = SIMD2(Float(finger.x), Float(finger.y))
+        // A wheel of the selected dot first: the joint turns as the wheel does.
+        if let rig = rigs[id], let model = models.first(where: { $0.id == id }),
+           poseWheels.pick(here, pose: model.rigPose ?? rig.poser.restPose, project: Self.onScreen(view)) {
+            poseWheelGrab = true
+            poseUndo[id, default: []].append(model.rigPose)
+            poseRedo[id] = []
+            poseHistory += 1
+            showPoseWord()
+            Haptics.firm()
+            return
+        }
+        let best = nearestPoseDot(to: finger, in: view, eye: eye)
         if let knob = turnKnobPoint() {
             let shown = view.projectPoint(SCNVector3(knob.x, knob.y, knob.z))
             let distance = hypot(CGFloat(shown.x) - finger.x, CGFloat(shown.y) - finger.y)
@@ -745,11 +902,23 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 return
             }
         }
-        guard let best, let rig = rigs[id], let model = models.first(where: { $0.id == id }) else { return }
+        guard let best, let rig = rigs[id], let model = models.first(where: { $0.id == id }) else {
+            // A drag that starts on nothing lets go of the selected dot.
+            deselectPoseDot()
+            return
+        }
         poseHandle = best.joint
         poseDepth = best.depth
         poseStartFinger = finger
         poseStartPose = model.rigPose ?? rig.poser.restPose
+        if Self.turnsJoint(best.joint) {
+            if poseSelected != best.joint || poseWheels.joint != best.joint { poseSelected = best.joint; buildPoseWheels(id: id) }
+            poseWheels.beginHandle(model.rigPose ?? rig.poser.restPose, finger: here)
+        } else {
+            // The limb reaches: its wheels come back where it ends up.
+            poseSelected = best.joint
+            poseWheels.clear()
+        }
         // One undo step per drag.
         poseUndo[id, default: []].append(model.rigPose)
         poseRedo[id] = []
@@ -766,6 +935,24 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             if delta > .pi { delta -= 2 * .pi } else if delta < -.pi { delta += 2 * .pi }
             poseTurnLast = angle
             node.simdWorldOrientation = simd_normalize(simd_quatf(angle: delta, axis: SIMD3(0, 1, 0)) * node.simdWorldOrientation)
+            return
+        }
+        if poseWheelGrab {
+            guard let rig = rigs[id], let model = models.first(where: { $0.id == id }),
+                  let pose = poseWheels.turnWheel(to: SIMD2(Float(finger.x), Float(finger.y)), project: Self.onScreen(view)) else { return }
+            if pose != (model.rigPose ?? rig.poser.restPose) { applyDragPose(pose, rig: rig, id: id) }
+            return
+        }
+        if let joint = poseHandle, Self.turnsJoint(joint), let rig = rigs[id], !poseWheels.wheels.isEmpty {
+            // The joint turns so the point it moves goes the way the finger goes (Phil: head and shoulder went the
+            // other way to everything else). After a long drag the wheels are measured again from where it is now.
+            let here = SIMD2(Float(finger.x), Float(finger.y))
+            guard let moved = poseWheels.dragHandle(to: here, project: Self.onScreen(view)) else { return }
+            applyDragPose(moved.pose, rig: rig, id: id)
+            if moved.far {
+                buildPoseWheels(id: id)
+                poseWheels.beginHandle(moved.pose, finger: here)
+            }
             return
         }
         guard let joint = poseHandle, let rig = rigs[id], let eye = self.eye?.columns.3.xyz,
@@ -816,8 +1003,22 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let pose = PoseDrag.solve(joint, target: local(world), top: at(chain[0]), middle: at(chain[1]), end: at(chain[2]),
                                   hips: at(map.hips), from: basis, screen: screen, frames: frames, body: body)
         guard pose != before else { return }
+        applyDragPose(pose, rig: rig, id: id)
+    }
+
+    private func applyDragPose(_ pose: MannequinPose, rig: FBXRig, id: UUID) {
         rig.apply(pose)
         if let index = models.firstIndex(where: { $0.id == id }) { models[index].rigPose = pose }
+    }
+
+    /// The finger is lifted: the selected dot keeps its wheels, measured again for the pose now.
+    private func poseLetGo(id: UUID) {
+        let wasPosing = poseHandle != nil || poseWheelGrab || poseTurning
+        poseHandle = nil
+        poseTurning = false
+        poseWheelGrab = false
+        poseWheels.letGo()
+        if wasPosing, poseSelected != nil { buildPoseWheels(id: id) } else { showPoseWord() }
     }
 
     private func setRigPose(_ pose: MannequinPose?, id: UUID) {
@@ -826,6 +1027,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         models[index].rigPose = pose
         models[index].moved = Date()
         poseHistory += 1
+        if poseSelected != nil { buildPoseWheels(id: id) }
     }
 
     func undoPose() {
@@ -1169,6 +1371,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             return
         }
         if dimensionTap(at: gesture.location(in: view), in: view) { return }
+        if poseTap(at: gesture.location(in: view), in: view) { return }
         let hits = view.hitTest(gesture.location(in: view), options: ReviewPick.options)
         selectedModel = hits.lazy.compactMap { self.modelID(of: $0.node) }.first
     }
@@ -1466,7 +1669,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             let finger = gesture.location(in: view)
             if gesture.state == .began { posePick(at: finger, in: view, id: id) }
             poseDrag(to: finger, in: view, node: node, id: id)
-            if gesture.state == .ended || gesture.state == .cancelled { poseHandle = nil; poseTurning = false }
+            if gesture.state == .ended || gesture.state == .cancelled { poseLetGo(id: id) }
         case .move:
             break
         }
@@ -2565,7 +2768,7 @@ private struct MoveHint: View {
         case .size: return ("arrow.up.and.down.circle", "pinch, or drag ↕, to scale · the figures follow")
         case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "push a lever's knob to swing it · or drag anywhere · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
-        case .pose: return ("hand.draw", "mint dot: reach · yellow: shoulder, hips, wrist, ankle, head · white arrows: turn")
+        case .pose: return ("hand.draw", "drag a dot · tap one for its turning rings · white arrows: turn round")
         }
     }
 
