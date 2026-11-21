@@ -82,6 +82,18 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         Diagnostics.log("In front: model moved \(step > 0 ? "back" : "forward"), now behind \(next) of \(inFrontCount) picked things")
     }
 
+    /// Whether the selected model was moved by Push back / Bring forward away from where real distance puts it.
+    var selectedLayerChanged: Bool { selectedModel.map { (layerShift[$0] ?? 0) != 0 } ?? false }
+
+    /// Back to the order real distance gives (Phil, 2026-11-21: distance arranges the scene; your own order is separate).
+    func resetSelectedLayer() {
+        guard let id = selectedModel, layerShift[id] != nil else { return }
+        layerShift[id] = nil
+        Haptics.tap()
+        applyLayers()
+        Diagnostics.log("In front: model back to the order real distance gives")
+    }
+
     /// Draws each model just after the picked things in front of it and before those behind it (LiveOcclusion.swift
     /// draws the k-th nearest picked thing at 10k + 5), so only the things in front hide it. Handles and dots (1000 and up) stay on top.
     func applyLayers() {
@@ -2480,6 +2492,7 @@ struct ModelEdgeTools: View {
                     let layer = placer.layer(of: id)
                     if layer > 0 { CutoutTool(word: "Bring forward", symbol: "square.2.layers.3d.top.filled") { placer.moveSelectedLayer(by: -1) } }
                     if layer < placer.inFrontCount { CutoutTool(word: "Push back", symbol: "square.2.layers.3d.bottom.filled") { placer.moveSelectedLayer(by: 1) } }
+                    if placer.selectedLayerChanged { CutoutTool(word: "Real order", symbol: "ruler.fill", tint: Theme.accent) { placer.resetSelectedLayer() } }
                 }
             }
         }
