@@ -22,7 +22,7 @@ enum Screenshot {
     }
 
     /// The handles drawn on a model while posing or turning it (Phil, 2026-11-20: they showed in snapshots).
-    static let handleNames: Set<String> = ["posedot", "turnicon", "groupMark"]
+    static let handleNames: Set<String> = ["posedot", "turnicon", "groupMark", "posering"]
 
     /// Hides the posing handles in the camera view and gives back what puts them back.
     @MainActor static func hideHandles(in camera: SCNView?) -> () -> Void {
