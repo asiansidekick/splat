@@ -418,8 +418,8 @@ do {
         for i in rects.indices { for j in rects.indices where j > i && rects[i].insetBy(dx: 0.5, dy: 0.5).intersects(rects[j]) { overlaps += 1 } }
         check(overlaps == 0, "edge tools \(screen.name): no two overlap (\(overlaps))")
         check(rects.allSatisfy { $0.minY >= screen.top - 0.5 }, "edge tools \(screen.name): the top stays free")
-        // Every tool stands against an edge: the left, the right or the bottom (narrower ones centred in their column).
-        let onEdge = rects.allSatisfy { $0.minX < 10 || $0.maxX > screen.width - 10 || $0.maxY > screen.height - 1 }
+        // Every tool stands against an edge: the left, the right, the bottom or the top (narrower ones centred in their column).
+        let onEdge = rects.allSatisfy { $0.minX < 10 || $0.maxX > screen.width - 10 || $0.maxY > screen.height - 1 || $0.minY < screen.top + 1 }
         check(onEdge, "edge tools \(screen.name): every tool is against an edge")
         // The middle of the picture (its middle third each way) is clear.
         let centre = CGRect(x: screen.width / 3, y: screen.height / 3, width: screen.width / 3, height: screen.height / 3)
@@ -434,6 +434,17 @@ do {
     check(Set(upright.map(\.x)).count == 1, "edge tools upright: one column")
     check((upright.last!.y - upright.first!.y) > 400, "edge tools upright: spread along the edge (\(Int(upright.last!.y - upright.first!.y)) points)")
     check(EdgeLayoutMath.places(sizes: [], width: 100, height: 100, leading: true, top: 0, middle: 0, maxGap: 18).isEmpty, "edge tools: none is fine")
+    // Eleven on one side, on its side: what the bottom has no room for goes along the top (the ring), still apart and clear of the middle.
+    do {
+        let many = tools(Array(repeating: 60, count: 11))
+        let points = EdgeLayoutMath.places(sizes: many, width: 338, height: 312, leading: false, top: 0, middle: 124, maxGap: 18)
+        let rects = zip(points, many).map { CGRect(x: $0.x - $1.width / 2, y: $0.y - $1.height / 2, width: $1.width, height: $1.height) }
+        var overlaps = 0
+        for i in rects.indices { for j in rects.indices where j > i && rects[i].insetBy(dx: 0.5, dy: 0.5).intersects(rects[j]) { overlaps += 1 } }
+        check(overlaps == 0, "edge tools eleven: no two overlap (\(overlaps))")
+        check(rects.contains { $0.minY < 1 && $0.maxX < 338 - 61 }, "edge tools eleven: some go along the top edge")
+        check(rects.allSatisfy { $0.minX >= 124 - 0.5 }, "edge tools eleven: the middle stays clear")
+    }
 }
 
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")

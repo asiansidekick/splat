@@ -17,18 +17,34 @@ enum EdgeLayoutMath {
             let y = height - cell / 2 - CGFloat(onSide - 1 - i) * (cell + gap)
             points.append(CGPoint(x: x, y: y))
         }
-        // The rest along the bottom, from the corner toward the middle.
-        let rest = sizes.dropFirst(onSide).map(\.width)
+        // The rest along the bottom, from the corner toward the middle; what the bottom has no room for goes along the
+        // top the same way (the ring), and only past that do any run on into the middle of the bottom.
+        let rest = Array(sizes.dropFirst(onSide).map(\.width))
         if !rest.isEmpty {
-            let room = width - column - middle
-            let rowGap = rest.count > 0 ? max(0, min(maxGap, (room - rest.reduce(0, +)) / CGFloat(rest.count))) : 0
-            var along = column
+            let room = max(0, width - column - middle)
+            var bottom: [CGFloat] = [], topRow: [CGFloat] = [], over: [CGFloat] = []
             for w in rest {
-                along += rowGap
-                let centre = along + w / 2
-                points.append(CGPoint(x: leading ? centre : width - centre, y: height - cell / 2))
-                along += w
+                if over.isEmpty, topRow.isEmpty, bottom.reduce(0, +) + w <= room { bottom.append(w) }
+                else if over.isEmpty, topRow.reduce(0, +) + w <= room { topRow.append(w) }
+                else { over.append(w) }
             }
+            func row(_ widths: [CGFloat], y: CGFloat, spread: Bool) -> [CGPoint] {
+                let gap = spread && !widths.isEmpty ? max(0, min(maxGap, (room - widths.reduce(0, +)) / CGFloat(widths.count))) : 0
+                var along = column
+                var placed: [CGPoint] = []
+                for w in widths {
+                    along += gap
+                    let centre = along + w / 2
+                    placed.append(CGPoint(x: leading ? centre : width - centre, y: y))
+                    along += w
+                }
+                return placed
+            }
+            // In the tools' own order: the bottom row, the top row, then any that run on along the bottom.
+            let along = row(bottom + over, y: height - cell / 2, spread: over.isEmpty)
+            points += along.prefix(bottom.count)
+            points += row(topRow, y: height - cell / 2 - CGFloat(onSide - 1) * (cell + gap), spread: true)
+            points += along.dropFirst(bottom.count)
         }
         return points
     }

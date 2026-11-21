@@ -2095,10 +2095,13 @@ struct CaptureStage: View {
                 // (its last picture, standing still), so it steps aside while another lens is live.
                 .opacity(lensLive.session == nil ? 1 : 0)
                 .overlay(alignment: .top) {
-                    StoryboardLookBar {
-                        lookPanel = LookPanel.make(from: holder.view, scene: scene, shot: shot)
+                    // The picked model's tools take the edges while it is picked (the ring).
+                    if !editingModel {
+                        StoryboardLookBar {
+                            lookPanel = LookPanel.make(from: holder.view, scene: scene, shot: shot)
+                        }
+                        .padding(.top, 112)
                     }
-                    .padding(.top, 112)
                 }
                 .fullScreenCover(item: $lookPanel) { PanelEditor(panel: $0.panel, close: { lookPanel = nil }) }
                 // Phil, 2026-11-19: wide and telephoto were black behind the room view. The other lens now draws on top of it.
@@ -2140,7 +2143,9 @@ struct CaptureStage: View {
                         Text(error).font(Theme.callout).padding(10)
                             .background(Color.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 10))
                     }
-                    if verticalSize == .compact { statusBanner }
+                    // Phil's drawing on 1396: on its side this ran under Delete along the bottom. While a model's tools
+                    // hold the edges the saving line waits.
+                    if verticalSize == .compact, !editingModel { statusBanner }
                 }
                 .padding(8)
                 .clearOfControls()
@@ -2510,6 +2515,8 @@ final class LastTime {
 struct ResetStage: View {
     /// Whether the ruler is on: drags then draw lines, so the swipe for ghost strength steps aside.
     @State private var measuring = false
+    /// A model is picked: its tools take the edges, so the layer chips and the Look buttons step aside.
+    @State private var modelPicked = false
     @StateObject private var restorer: Restorer
     @Binding var reference: Reference
     @ObservedObject var thumbnails: Thumbnails
@@ -2874,10 +2881,13 @@ struct ResetStage: View {
                     holder.view = view
                 }, storyboardLook: true)
                 .overlay(alignment: .top) {
-                    StoryboardLookBar {
-                        lookPanel = LookPanel.make(from: holder.view, scene: reference.scene, shot: reference.shot)
+                    // The picked model's tools take the edges while it is picked (the ring).
+                    if !modelPicked {
+                        StoryboardLookBar {
+                            lookPanel = LookPanel.make(from: holder.view, scene: reference.scene, shot: reference.shot)
+                        }
+                        .padding(.top, 112)
                     }
-                    .padding(.top, 112)
                 }
                 .fullScreenCover(item: $lookPanel) { PanelEditor(panel: $0.panel, close: { lookPanel = nil }) }
                 if ghostShown, !restorer.backdropOn {
@@ -2950,7 +2960,8 @@ struct ResetStage: View {
                         held: restorer.held, plainReference: reference.photoOnly ? restorer.startPhoto : restorer.heldPhoto,
                         toNow: $toNow, wipe: wipe)
                 }
-                if !layers.isEmpty, !restorer.paused {
+                // The picked model's tools take the right edge while it is picked (the ring).
+                if !layers.isEmpty, !restorer.paused, !modelPicked {
                     HStack {
                         Spacer()
                         LayerChips(layers: $layers, references: others, thumbnails: thumbnails)
@@ -3115,23 +3126,28 @@ struct ResetStage: View {
     }
 
     /// While the room is being found: the first reference photo, so the person starts there.
+    /// Phil, 2026-11-20 (the ring): a small photo and a line or two in the top-left corner, not a panel over the picture.
     private func findingHint(_ photo: UIImage) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 8) {
             Image(uiImage: photo)
                 .resizable()
                 .scaledToFit()
-                .frame(maxWidth: 110, maxHeight: 110)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .frame(maxWidth: 64, maxHeight: 64)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             Text(restorer.slowToFind
-                ? "Still looking. Stand where this photo was taken and point at the same spot. Turn the lights back to how they were, and move slowly side to side."
-                : "Start where this photo was taken and point at the same spot.")
-                .font(Theme.caption)
+                ? "Still looking. Stand where this was taken, same lights, move slowly side to side."
+                : "Start where this was taken, pointing at the same spot.")
+                .font(Theme.caption.weight(.semibold))
                 .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
+                .shadow(color: .black.opacity(0.5), radius: 6)
+                .lineLimit(3)
+                .frame(maxWidth: 200, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(8)
-        .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
-        .frame(maxWidth: 480)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .dynamicTypeSize(...DynamicTypeSize.large)
+        .allowsHitTesting(false)
     }
 
     /// Only while there is no ghost to line up: loading, finding the room, a problem, or the 3D
@@ -3170,6 +3186,7 @@ struct ResetStage: View {
     /// What the Reset screen keeps an eye on: models, marks, pause, status.
     private func watching<V: View>(_ content: V) -> some View {
         content
+            .onReceive(restorer.placer.$selectedModel) { modelPicked = $0 != nil }
             .onReceive(restorer.placer.$models.dropFirst()) { models in
                 reference.models = models
                 save()

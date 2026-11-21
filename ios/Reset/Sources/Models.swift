@@ -495,7 +495,48 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     // MARK: Posing an imported character in live view (Phil, 2026-11-18)
 
     private var poseDots: [(node: SCNNode, joint: PoseDrag.Joint)] = []
-    private var poseHandle: PoseDrag.Joint?
+    private var poseHandle: PoseDrag.Joint? { didSet { if poseHandle != oldValue { showHeldDot() } } }
+    /// Each dot's own colour, and the line from an offset dot to its joint.
+    private var poseDotColour: [SCNNode: UIColor] = [:]
+    private var poseLines: [SCNNode: SCNNode] = [:]
+    /// What the held dot works, in a few words, for the hint at the bottom (nil when none is held).
+    @Published private(set) var heldPoseWord: String?
+
+    /// The held dot white and solid with a soft halo, its line white; the others back to see-through.
+    private func showHeldDot() {
+        for (node, joint) in poseDots {
+            let held = joint == poseHandle
+            let colour = poseDotColour[node] ?? .white
+            node.geometry?.firstMaterial?.diffuse.contents = held ? UIColor.white : colour.withAlphaComponent(0.6)
+            node.childNode(withName: "posehalo", recursively: false)?.removeFromParentNode()
+            if held, let sphere = node.geometry as? SCNSphere {
+                let halo = SCNNode(geometry: SCNSphere(radius: sphere.radius * 1.9))
+                halo.name = "posehalo"
+                halo.geometry?.materials = [ModelDimensions.flat(colour.withAlphaComponent(0.3))]
+                halo.renderingOrder = 1998
+                node.addChildNode(halo)
+            }
+            poseLines[node]?.childNodes.first?.geometry?.firstMaterial?.diffuse.contents = held ? UIColor.white : colour.withAlphaComponent(0.7)
+        }
+        heldPoseWord = poseHandle.map(Self.poseWord)
+    }
+
+    /// What each dot does, as the hint says it while it is held.
+    static func poseWord(_ joint: PoseDrag.Joint) -> String {
+        switch joint {
+        case .hand: return "Hand: reach, the arm follows"
+        case .elbow: return "Elbow: swing the bend"
+        case .foot: return "Foot: step, the leg follows"
+        case .knee: return "Knee: swing the bend"
+        case .wrist: return "Wrist: bend the hand"
+        case .ankle: return "Ankle: point the foot"
+        case .shoulder: return "Shoulder: shrug"
+        case .head: return "Neck: lean the body"
+        case .headLook: return "Top of head: turn and nod"
+        case .headTilt: return "Ear: tilt the head"
+        case .hips: return "Hips: turn and tilt"
+        }
+    }
     /// Phil, 2026-11-20: curved arrows on the floor under a character in Pose; drag them left or right to turn it round.
     private var poseTurnIcon: SCNNode?
     private var poseTurnReach: Float = 0
@@ -522,7 +563,11 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// Mint dots reach (the limb follows); yellow dots articulate (hips turn and tilt, wrists and ankles bend).
     func refreshPoseDots() {
         for dot in poseDots { dot.node.removeFromParentNode() }
+        for line in poseLines.values { line.removeFromParentNode() }
         poseDots = []
+        poseLines = [:]
+        poseDotColour = [:]
+        heldPoseWord = nil
         poseHandle = nil
         poseTurnIcon?.removeFromParentNode()
         poseTurnIcon = nil
@@ -564,18 +609,45 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             wanted.append((head, .headTilt, 0.02, at + up * (worldHeight * 0.06) + side * (worldHeight * 0.055), yellow))
         }
         wanted.append((map.hips, .hips, 0.04, nil, yellow))
+        // Phil, 2026-11-20: the dots were big and solid, it was hard to tell which was held and what each one moved.
+        // Now a little smaller and see-through; a held dot turns white with a halo; and a dot that sits off its joint
+        // (wrist, ankle, shoulder, the two head dots) has a thin line to the joint it works.
         for (index, joint, share, place, colour) in wanted {
             guard let bone = rig.joint(index) else { continue }
             let scale = max(simd_length(bone.simdWorldTransform.columns.0.xyz), 1e-6)
-            let sphere = SCNSphere(radius: CGFloat(worldHeight * share))
+            let radius = worldHeight * share * 0.75
+            let sphere = SCNSphere(radius: CGFloat(radius))
             sphere.segmentCount = 16
-            sphere.materials = [ModelDimensions.flat(colour)]
+            sphere.materials = [ModelDimensions.flat(colour.withAlphaComponent(0.6))]
             let dot = SCNNode(geometry: sphere)
             dot.name = "posedot"
             dot.simdScale = SIMD3(repeating: 1 / scale)
             dot.renderingOrder = 2000
             bone.addChildNode(dot)
-            if let place { dot.simdPosition = SIMD3(bone.convertPosition(SCNVector3(place.x, place.y, place.z), from: nil)) }
+            if let place {
+                dot.simdPosition = SIMD3(bone.convertPosition(SCNVector3(place.x, place.y, place.z), from: nil))
+                // The line, in world-sized units (its node undoes the bone's scale), from the joint to the dot's edge.
+                let offset = dot.simdPosition * scale
+                let length = simd_length(offset) - radius
+                if length > radius * 0.5 {
+                    let rod = SCNCylinder(radius: CGFloat(max(worldHeight * 0.0018, 0.0012)), height: CGFloat(length))
+                    rod.radialSegmentCount = 6
+                    rod.materials = [ModelDimensions.flat(colour.withAlphaComponent(0.7))]
+                    let line = SCNNode(geometry: rod)
+                    line.name = "posedot"
+                    line.renderingOrder = 1999
+                    let holder = SCNNode()
+                    holder.name = "posedot"
+                    holder.simdScale = SIMD3(repeating: 1 / scale)
+                    let along = simd_normalize(offset)
+                    line.simdPosition = along * (length / 2)
+                    line.simdOrientation = simd_quatf(from: SIMD3(0, 1, 0), to: along)
+                    holder.addChildNode(line)
+                    bone.addChildNode(holder)
+                    poseLines[dot] = holder
+                }
+            }
+            poseDotColour[dot] = colour
             poseDots.append((dot, joint))
         }
         // The turning arrows lie on the floor under the feet, on the side nearest the phone.
@@ -2010,10 +2082,6 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 struct ModelOverlay: View {
     @ObservedObject var placer: ModelPlacer
     @State private var showsCutoutHelp = true
-    @State private var showsPoses = false
-    @State private var savingPose = false
-    @State private var showsHands = false
-    @State private var poseName = ""
 
     var body: some View {
         VStack(spacing: 6) {
@@ -2040,33 +2108,19 @@ struct ModelOverlay: View {
                 // Phil, 2026-11-10: the help is a small picture of the finger's move, not a sentence, and it goes after a few seconds.
                 let cutout = placer.selectedIsCutout
                 VStack(spacing: 4) {
-                    if placer.cutoutJob == .pose, placer.selectedHasRig { poseBar }
-                    if showsCutoutHelp || placer.carrying || placer.pinStep != nil || placer.pickingInFront {
+                    if showsCutoutHelp || placer.carrying || placer.pinStep != nil || placer.pickingInFront || placer.heldPoseWord != nil {
                         MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText, pin: placer.pinStep, cutout: cutout,
-                                 picking: placer.pickingInFront)
+                                 picking: placer.pickingInFront, held: placer.heldPoseWord)
                             .transition(.opacity)
                     }
                 }
                 .frame(maxWidth: .infinity, minHeight: 42, alignment: .bottom)
-                .overlay(alignment: .center) { ObjectNudge(placer: placer).offset(y: -110) }
                 .task(id: "\(placer.selectedModel?.uuidString ?? "")-\(placer.cutoutJob.rawValue)") {
                     withAnimation { showsCutoutHelp = true }
                     try? await Task.sleep(for: .seconds(4))
                     withAnimation { showsCutoutHelp = false }
                 }
             }
-        }
-        .sheet(isPresented: $showsHands) { HandsSheet { placer.setFingers($0, $1) } }
-        .sheet(isPresented: $showsPoses) { PoseLibrarySheet { placer.applyCharacterPose($0) } }
-        .alert("Save pose", isPresented: $savingPose) {
-            TextField("Name", text: $poseName)
-            Button("Save") {
-                if let pose = placer.currentCharacterPose { PoseLibrary.shared.save(pose, name: poseName) }
-                poseName = ""
-            }
-            Button("Cancel", role: .cancel) { poseName = "" }
-        } message: {
-            Text("Keep this pose to use again on any character.")
         }
         .alert("3D model", isPresented: Binding(get: { placer.modelError != nil }, set: { if !$0 { placer.modelError = nil } })) {
             Button("OK", role: .cancel) {}
@@ -2075,22 +2129,6 @@ struct ModelOverlay: View {
         }
     }
 
-    /// Phil, 2026-11-19 (Magic Poser): undo, redo, flip left and right, and back to the file's pose.
-    @ViewBuilder private var poseBar: some View {
-        HStack(spacing: 0) {
-            CutoutTool(word: "Undo", symbol: "arrow.uturn.backward", tint: placer.canUndoPose ? .white : .gray) { placer.undoPose() }
-            CutoutTool(word: "Redo", symbol: "arrow.uturn.forward", tint: placer.canRedoPose ? .white : .gray) { placer.redoPose() }
-            CutoutTool(word: "Mirror", symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right") { placer.mirrorPose() }
-        }
-        .fixedSize()
-        HStack(spacing: 0) {
-            CutoutTool(word: "Reset", symbol: "arrow.counterclockwise") { placer.resetCharacterPose() }
-            CutoutTool(word: "Save", symbol: "square.and.arrow.down") { savingPose = true }
-            CutoutTool(word: "Poses", symbol: "list.bullet") { showsPoses = true }
-            if placer.selectedHasFingers { CutoutTool(word: "Hands", symbol: "hand.raised") { showsHands = true } }
-        }
-        .fixedSize()
-    }
 }
 
 /// The picked model's tools, round the edges of the picture so the middle stays clear (Phil, 2026-11-20: "fill more
@@ -2111,6 +2149,10 @@ struct ModelEdgeTools: View {
     var sidewaysTop: CGFloat = 0
     @Environment(\.verticalSizeClass) private var verticalSize
     @State private var posing = false
+    @State private var showsPoses = false
+    @State private var savingPose = false
+    @State private var showsHands = false
+    @State private var poseName = ""
 
     private static func symbol(_ job: ModelPlacer.CutoutJob) -> String {
         switch job {
@@ -2133,12 +2175,51 @@ struct ModelEdgeTools: View {
                 EdgeColumn(leading: false, top: top, middle: 124) { actionTools(cutout: cutout) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Phil, 2026-11-20 (the ring): the "hold, then drag" bubble and the size hints stand at the top edge, not
+            // over the middle of the picture.
+            // Phil, 2026-11-20 (drawing on 1396): the pose buttons along the top edge, out of the middle of the bottom.
+            .overlay(alignment: .top) {
+                VStack(spacing: 4) {
+                    if placer.cutoutJob == .pose, placer.selectedHasRig { poseBar }
+                    ObjectNudge(placer: placer)
+                }
+                .padding(.top, verticalSize == .compact ? 0 : 36)
+            }
+            .sheet(isPresented: $showsHands) { HandsSheet { placer.setFingers($0, $1) } }
+            .sheet(isPresented: $showsPoses) { PoseLibrarySheet { placer.applyCharacterPose($0) } }
+            .alert("Save pose", isPresented: $savingPose) {
+                TextField("Name", text: $poseName)
+                Button("Save") {
+                    if let pose = placer.currentCharacterPose { PoseLibrary.shared.save(pose, name: poseName) }
+                    poseName = ""
+                }
+                Button("Cancel", role: .cancel) { poseName = "" }
+            } message: {
+                Text("Keep this pose to use again on any character.")
+            }
             .fullScreenCover(isPresented: $posing) {
                 if let id = placer.selectedModel, let spec = placer.selectedPoseSpec {
                     MannequinPoseEditor(spec: spec) { placer.repose(id, as: $0) }
                 }
             }
         }
+    }
+
+    /// Phil, 2026-11-19 (Magic Poser): undo, redo, flip left and right, and back to the file's pose.
+    @ViewBuilder private var poseBar: some View {
+        HStack(spacing: 0) {
+            CutoutTool(word: "Undo", symbol: "arrow.uturn.backward", tint: placer.canUndoPose ? .white : .gray) { placer.undoPose() }
+            CutoutTool(word: "Redo", symbol: "arrow.uturn.forward", tint: placer.canRedoPose ? .white : .gray) { placer.redoPose() }
+            CutoutTool(word: "Mirror", symbol: "arrow.left.and.right.righttriangle.left.righttriangle.right") { placer.mirrorPose() }
+        }
+        .fixedSize()
+        HStack(spacing: 0) {
+            CutoutTool(word: "Reset", symbol: "arrow.counterclockwise") { placer.resetCharacterPose() }
+            CutoutTool(word: "Save", symbol: "square.and.arrow.down") { savingPose = true }
+            CutoutTool(word: "Poses", symbol: "list.bullet") { showsPoses = true }
+            if placer.selectedHasFingers { CutoutTool(word: "Hands", symbol: "hand.raised") { showsHands = true } }
+        }
+        .fixedSize()
     }
 
     /// Down the left edge: what one finger does to the model (pick one), then Carry, Floor and Pose.
@@ -2231,8 +2312,11 @@ private struct MoveHint: View {
     var pin: ModelPlacer.PinStep?
     var cutout = false
     var picking = false
+    /// The posing dot held now, in a few words.
+    var held: String? = nil
 
     private var parts: (arrow: String, words: String) {
+        if let held { return ("hand.draw", held) }
         if picking { return ("square.3.layers.3d.top.filled", "tap the real thing that goes in front · tap it again to take it out") }
         switch pin {
         case .stepAside: return ("arrow.left.and.right", "1 of 2: step sideways, keep it in view")
