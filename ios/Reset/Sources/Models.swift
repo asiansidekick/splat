@@ -22,14 +22,39 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 stopCarrying()
                 cancelPin()
                 cutoutJob = .move
+                // A model already in the group becomes the main one and the group stays; any other choice ends it.
+                if let picked = selectedModel, let old = oldValue, group.contains(picked) {
+                    group.remove(picked)
+                    group.insert(old)
+                } else if !group.isEmpty || pickingGroup {
+                    group = []
+                    pickingGroup = false
+                }
+                refreshGroupMarks()
             }
         }
     }
+    /// Phil, 2026-11-21: "selecting multiple highlighted models and moving them all". Models picked with "Select more"
+    /// go along with the selected one: drag, hold-to-lift, Lift, Turn (round the selected one) and Carry move them
+    /// all. Each gets a yellow ring on the floor under it while the group is on.
+    @Published private(set) var group: Set<UUID> = []
+    /// While on, a tap on another model adds it to the group (or takes it out again).
+    @Published var pickingGroup = false {
+        didSet {
+            guard pickingGroup != oldValue else { return }
+            // The tap on "Select more" itself can reach the camera view too: it neither picks nor lets go of the model.
+            pickingGroupSince = Date()
+            if pickingGroup { pickingInFront = false }
+            refreshGroupMarks()
+        }
+    }
+    private var pickingGroupSince = Date.distantPast
+    private var groupMarks: [UUID: SCNNode] = [:]
     @Published var modelError: String?
     /// Phil, 2026-11-20: "selecting what is foreground": after "In front", the next tap on the camera picture picks the
     /// real thing that goes in front of the models (LiveOcclusion.swift). Tapping a picked thing again takes it out.
     @Published var pickingInFront = false {
-        didSet { if pickingInFront { pickingSince = Date() } }
+        didSet { if pickingInFront { pickingSince = Date(); pickingGroup = false } }
     }
     private var pickingSince = Date.distantPast
     /// How many real things are in front of the models now.
@@ -381,6 +406,9 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         stopCutoutTimer()
         models = []
         selectedModel = nil
+        group = []
+        pickingGroup = false
+        refreshGroupMarks()
     }
 
     /// Copies the model files into another folder, for example a newly saved reference.
@@ -932,7 +960,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let rotate = UIRotationGestureRecognizer(target: self, action: #selector(handleRotate(_:)))
         // Hold a finger on an object, then drag up or down to raise or lower it (Phil, 2026-11-18: "hold to lift").
         let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleHold(_:)))
-        hold.minimumPressDuration = 0.45
+        hold.minimumPressDuration = 0.35
         hold.allowableMovement = 14
         hold.name = "hold"
         // Two fingers dragging tips and slants a cut-out: up and down tilts it, sideways slants it.
@@ -1016,12 +1044,17 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             HintStore.learned("objectFirst"); HintStore.learned("objectIdle")
             guard selectionAllowed(), !isSuspended(), !carrying,
                   let touched = view.hitTest(finger, options: ReviewPick.options).lazy.compactMap({ self.modelID(of: $0.node) }).first,
-                  let node = modelNodes[touched]
+                  modelNodes[touched] != nil
             else { return }
-            selectedModel = touched
+            if selectedModel != touched, !group.contains(touched) {
+                if pickingGroup, selectedModel != nil { addToGroup(touched) } else { selectedModel = touched }
+            }
+            // Holding any model of the group lifts the whole group with the selected one leading.
+            let lead = group.contains(touched) ? (selectedModel ?? touched) : touched
+            guard let node = modelNodes[lead] else { return }
             cancelPin()
-            pinned.remove(touched)
-            holdLift = (touched, finger)
+            pinned.remove(lead)
+            holdLift = (lead, finger)
             holdTarget = node.simdWorldPosition.y
             showHoldHint(in: view, at: finger)
             startMeter()
@@ -1040,14 +1073,20 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 let camera = eye?.columns.3.xyz ?? node.simdWorldPosition
                 metresPerPoint = 0.0016 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
             }
-            holdTarget -= Float(finger.y - lift.last.y) * metresPerPoint
-            node.simdWorldPosition.y += (holdTarget - node.simdWorldPosition.y) * 0.8
+            // Phil, 2026-11-21: "make the lift a bit faster": a quarter more than the finger, and less easing behind it.
+            holdTarget -= Float(finger.y - lift.last.y) * metresPerPoint * 1.25
+            let before = node.simdWorldPosition
+            node.simdWorldPosition.y += (holdTarget - node.simdWorldPosition.y) * 0.9
+            moveGroup(by: node.simdWorldPosition - before)
             holdLift = (lift.id, finger)
             holdHint?.center = hintCenter(for: finger, in: view)
         case .ended, .cancelled, .failed:
-            if let lift = holdLift {
-                modelNodes[lift.id]?.simdWorldPosition.y = holdTarget
+            if let lift = holdLift, let node = modelNodes[lift.id] {
+                let before = node.simdWorldPosition
+                node.simdWorldPosition.y = holdTarget
+                moveGroup(by: node.simdWorldPosition - before)
                 commit(lift.id)
+                commitGroup()
             }
             holdLift = nil
             hideHoldHint()
@@ -1101,6 +1140,22 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             return
         }
         guard selectionAllowed(), let view = gesture.view as? SCNView else { return }
+        // Picking the group: a tap on another model adds it, a tap on one in the group takes it out, and a tap on
+        // nothing does nothing (so a missed tap never loses the picks).
+        if Date().timeIntervalSince(pickingGroupSince) < 0.4 { return }
+        if pickingGroup, let main = selectedModel {
+            let hits = view.hitTest(gesture.location(in: view), options: ReviewPick.options)
+            if let id = hits.lazy.compactMap({ self.modelID(of: $0.node) }).first, id != main {
+                if group.contains(id) {
+                    group.remove(id)
+                    Haptics.tap()
+                } else {
+                    addToGroup(id)
+                }
+                refreshGroupMarks()
+            }
+            return
+        }
         if dimensionTap(at: gesture.location(in: view), in: view) { return }
         let hits = view.hitTest(gesture.location(in: view), options: ReviewPick.options)
         selectedModel = hits.lazy.compactMap { self.modelID(of: $0.node) }.first
@@ -1118,7 +1173,10 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             ignoringPan = strictTouch() && touched == nil
             if ignoringPan { return }
             if let touched {
-                selectedModel = touched
+                // A drag on any model of the group moves the group; while picking, a drag on another adds it first.
+                if touched != selectedModel, !group.contains(touched) {
+                    if pickingGroup, selectedModel != nil { addToGroup(touched) } else { selectedModel = touched }
+                }
             } else if selectedModel == nil, models.count == 1 {
                 selectedModel = models[0].id
             }
@@ -1141,10 +1199,13 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 let delta = gesture.translation(in: view)
                 gesture.setTranslation(.zero, in: view)
                 let camera = eye?.columns.3.xyz ?? node.simdWorldPosition
-                // About a millimetre and a half per point for each metre away.
-                node.simdWorldPosition.y -= Float(delta.y) * 0.0016 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
+                // About two millimetres per point for each metre away (1.6 until Phil asked for a bit faster, 2026-11-21).
+                let rise = -Float(delta.y) * 0.002 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
+                node.simdWorldPosition.y += rise
+                moveGroup(by: SIMD3(0, rise, 0))
             case .ended, .cancelled:
                 commit(id)
+                commitGroup()
             default:
                 break
             }
@@ -1176,7 +1237,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
                 let shown = view.projectPoint(SCNVector3(reference.x, reference.y, reference.z))
                 if shown.z > 0, shown.z < 1 {
                     let moved = SIMD3<Float>(view.unprojectPoint(SCNVector3(shown.x + Float(delta.x), shown.y, shown.z)))
-                    var sideways = (moved - reference) * (range / near)
+                    // Phil, 2026-11-21: "move just a tiny bit faster": a fifth more than the finger sideways.
+                    var sideways = (moved - reference) * (range / near) * 1.2
                     sideways.y = 0
                     if simd_length(sideways) < max(1, range) { target += sideways }
                 }
@@ -1185,17 +1247,24 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             away.y = 0
             let distance = simd_length(away)
             if distance > 0.05 {
-                let wanted = min(max(distance * exp(-Float(delta.y) * 0.0022), 0.3), 500)
+                let wanted = min(max(distance * exp(-Float(delta.y) * 0.0027), 0.3), 500)
                 target += away / distance * (wanted - distance)
             }
             dragTarget = target
-            node.simdWorldPosition = simd_mix(node.simdWorldPosition, target, SIMD3(repeating: 0.75))
+            let before = node.simdWorldPosition
+            node.simdWorldPosition = simd_mix(node.simdWorldPosition, target, SIMD3(repeating: 0.85))
+            moveGroup(by: node.simdWorldPosition - before)
         case .ended, .cancelled:
-            if let target = dragTarget { node.simdWorldPosition = target }
+            if let target = dragTarget {
+                let before = node.simdWorldPosition
+                node.simdWorldPosition = target
+                moveGroup(by: node.simdWorldPosition - before)
+            }
             dragTarget = nil
             stopMeter("drag")
             pinned.remove(id)
             commit(id)
+            commitGroup()
         default:
             break
         }
@@ -1342,13 +1411,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         switch cutoutJob {
         case .turn:
             let step = Float(moved.x) * 0.012
-            node.simdEulerAngles.y += step
-            if let package = cutoutPackages[id], let plane = cutouts[id]?.plane {
-                let turn = (cutoutTurn[id] ?? 0) + step
-                let wrapped = atan2(sin(turn), cos(turn))
-                cutoutTurn[id] = wrapped
-                plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: wrapped)
-            }
+            turnOne(id, node: node, by: step)
+            turnGroup(about: node.simdWorldPosition, by: step)
         case .size:
             let factor = exp(-Float(moved.y) * 0.004)
             let next = node.simdScale * factor
@@ -1381,8 +1445,10 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             if gesture.state == .ended { savePose(package, id: id, file: model.file, plane: plane) }
         case .lift:
             let camera = eye?.columns.3.xyz ?? node.simdWorldPosition
-            // About a millimetre and a half per point for each metre away.
-            node.simdWorldPosition.y -= Float(moved.y) * 0.0016 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
+            // About two millimetres per point for each metre away (1.6 until Phil asked for a bit faster, 2026-11-21).
+            let rise = -Float(moved.y) * 0.002 * max(simd_distance(camera, node.simdWorldPosition), 0.3)
+            node.simdWorldPosition.y += rise
+            moveGroup(by: SIMD3(0, rise, 0))
         case .pose:
             guard let view = gesture.view as? SCNView else { return }
             let finger = gesture.location(in: view)
@@ -1392,7 +1458,107 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         case .move:
             break
         }
-        if gesture.state == .ended || gesture.state == .cancelled { commit(id) }
+        if gesture.state == .ended || gesture.state == .cancelled {
+            commit(id)
+            if cutoutJob == .turn || cutoutJob == .lift { commitGroup() }
+        }
+    }
+
+    // MARK: Moving several together
+
+    /// Adds a model to the group (with a bump, so the finger feels it was taken).
+    private func addToGroup(_ id: UUID) {
+        guard id != selectedModel, modelNodes[id] != nil else { return }
+        group.insert(id)
+        pinned.remove(id)
+        Haptics.bump()
+        refreshGroupMarks()
+    }
+
+    /// Moves the other models of the group by the same step as the selected one.
+    private func moveGroup(by step: SIMD3<Float>) {
+        guard !group.isEmpty else { return }
+        if simd_length(step) > 0 {
+            for id in group { modelNodes[id]?.simdWorldPosition += step }
+        }
+        positionGroupMarks()
+    }
+
+    /// Turns one model about its own upright, the way the Turn job and the twist always have.
+    private func turnOne(_ id: UUID, node: SCNNode, by step: Float) {
+        node.simdEulerAngles.y += step
+        if let package = cutoutPackages[id], let plane = cutouts[id]?.plane {
+            let turn = (cutoutTurn[id] ?? 0) + step
+            let wrapped = atan2(sin(turn), cos(turn))
+            cutoutTurn[id] = wrapped
+            plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: wrapped)
+        }
+    }
+
+    /// Swings the rest of the group round the selected one (like turning a tray they all stand on), each turning too.
+    private func turnGroup(about centre: SIMD3<Float>, by step: Float) {
+        guard !group.isEmpty, step != 0 else { return }
+        let swing = simd_quatf(angle: step, axis: SIMD3(0, 1, 0))
+        for id in group {
+            guard let node = modelNodes[id] else { continue }
+            node.simdWorldPosition = centre + swing.act(node.simdWorldPosition - centre)
+            turnOne(id, node: node, by: step)
+        }
+        positionGroupMarks()
+    }
+
+    private func commitGroup() {
+        for id in group {
+            pinned.remove(id)
+            commit(id)
+        }
+        positionGroupMarks()
+    }
+
+    /// The yellow rings: under the selected model and each one in the group, while picking or while there is a group.
+    private func refreshGroupMarks() {
+        var wanted = group
+        if let main = selectedModel, pickingGroup || !group.isEmpty { wanted.insert(main) }
+        for (id, mark) in groupMarks where !wanted.contains(id) {
+            mark.removeFromParentNode()
+            groupMarks[id] = nil
+        }
+        for id in wanted where groupMarks[id] == nil {
+            let ring = SCNTube(innerRadius: 0.84, outerRadius: 1, height: 0.006)
+            ring.radialSegmentCount = 48
+            ring.materials = [Self.gizmoMaterial(UIColor(red: 1, green: 0.84, blue: 0.04, alpha: 1), alpha: 0.85)]
+            let mark = SCNNode(geometry: ring)
+            mark.name = "groupMark"
+            mark.renderingOrder = 1900
+            root.addChildNode(mark)
+            groupMarks[id] = mark
+        }
+        positionGroupMarks()
+    }
+
+    /// Each ring lies at the foot of its model, a little wider than the model.
+    private func positionGroupMarks() {
+        for (id, mark) in groupMarks {
+            guard let node = modelNodes[id], let box = boxes[id] else {
+                mark.isHidden = true
+                continue
+            }
+            let transform = node.simdWorldTransform
+            var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+            var high = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+            for corner in 0..<8 {
+                let local = SIMD3<Float>(corner & 1 == 0 ? box.low.x : box.high.x,
+                                         corner & 2 == 0 ? box.low.y : box.high.y,
+                                         corner & 4 == 0 ? box.low.z : box.high.z)
+                let world = (transform * SIMD4(local, 1)).xyz
+                low = simd_min(low, world)
+                high = simd_max(high, world)
+            }
+            let radius = min(max(max(high.x - low.x, high.z - low.z) * 0.6, 0.08), 20)
+            mark.isHidden = false
+            mark.simdPosition = SIMD3((low.x + high.x) / 2, low.y + 0.004, (low.z + high.z) / 2)
+            mark.simdScale = SIMD3(radius, 1, radius)
+        }
     }
 
     /// While Carry is held the selected cut-out (or model) stays in front of the phone at the distance it was
@@ -1420,6 +1586,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         carrying = false
         if let id = carried {
             commit(id)
+            commitGroup()
             Haptics.success()
         }
         carried = nil
@@ -1433,7 +1600,9 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         forward = simd_normalize(forward)
         var target = camera.columns.3.xyz + forward * carryDistance
         target.y = node.simdWorldPosition.y
+        let before = node.simdWorldPosition
         node.simdWorldPosition = simd_mix(node.simdWorldPosition, target, SIMD3(repeating: 0.25))
+        moveGroup(by: node.simdWorldPosition - before)
     }
 
     // Phil, 2026-11-18: scale and turn got mixed when both fingers moved, but pinch and twist stay the same gestures.
@@ -1503,15 +1672,13 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             if gesture.state == .ended { commit(id) }
             return
         }
-        node.simdEulerAngles.y -= Float(gesture.rotation)
-        if let package = cutoutPackages[id], let plane = cutouts[id]?.plane {
-            let turn = (cutoutTurn[id] ?? 0) - Float(gesture.rotation)
-            let wrapped = atan2(sin(turn), cos(turn))
-            cutoutTurn[id] = wrapped
-            plane.simdTransform = Self.poseMatrix(tilt: package.tilt, skew: package.skew, turn: wrapped)
-        }
+        turnOne(id, node: node, by: -Float(gesture.rotation))
+        turnGroup(about: node.simdWorldPosition, by: -Float(gesture.rotation))
         gesture.rotation = 0
-        if gesture.state == .ended { commit(id) }
+        if gesture.state == .ended {
+            commit(id)
+            commitGroup()
+        }
     }
 
     /// Moves every model by `change`, for a camera that started again with new coordinates.
@@ -1528,6 +1695,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         models[index].transform = flatten(node.simdTransform)
         models[index].moved = Date()
         if id == selectedModel { updateTilted() }
+        if groupMarks[id] != nil { positionGroupMarks() }
     }
 
     /// Free rotation about the model's own middle, like turning an object in your hands (Phil, 2026-11-18: rotate in
@@ -2109,9 +2277,9 @@ struct ModelOverlay: View {
                 // Phil, 2026-11-10: the help is a small picture of the finger's move, not a sentence, and it goes after a few seconds.
                 let cutout = placer.selectedIsCutout
                 VStack(spacing: 4) {
-                    if showsCutoutHelp || placer.carrying || placer.pinStep != nil || placer.pickingInFront || placer.heldPoseWord != nil {
+                    if showsCutoutHelp || placer.carrying || placer.pinStep != nil || placer.pickingInFront || placer.pickingGroup || placer.heldPoseWord != nil {
                         MoveHint(job: placer.cutoutJob, carrying: placer.carrying, size: cutout ? nil : placer.sizeText, pin: placer.pinStep, cutout: cutout,
-                                 picking: placer.pickingInFront, held: placer.heldPoseWord)
+                                 picking: placer.pickingInFront, grouping: placer.pickingGroup, held: placer.heldPoseWord)
                             .transition(.opacity)
                     }
                 }
@@ -2295,6 +2463,11 @@ struct ModelEdgeTools: View {
         if let onAdd {
             CutoutTool(word: "Add", symbol: "plus", tint: Theme.accent, action: onAdd)
         }
+        // Phil, 2026-11-21: pick several and move them together. The word says how many are picked.
+        if placer.models.count > 1 {
+            CutoutTool(word: placer.group.isEmpty ? "Select more" : "\(placer.group.count + 1) selected", symbol: "square.on.square",
+                       on: placer.pickingGroup) { placer.pickingGroup.toggle() }
+        }
         CutoutTool(word: "Place here", symbol: "scope") { placer.bringToView() }
         // Sets its true distance from two views, so it stays put as the camera moves. Live camera only.
         if showsFloor {
@@ -2357,12 +2530,15 @@ private struct MoveHint: View {
     var pin: ModelPlacer.PinStep?
     var cutout = false
     var picking = false
+    /// Picking models to move together.
+    var grouping = false
     /// The posing dot held now, in a few words.
     var held: String? = nil
 
     private var parts: (arrow: String, words: String) {
         if let held { return ("hand.draw", held) }
         if picking { return ("square.3.layers.3d.top.filled", "tap the real thing that goes in front · tap it again to take it out") }
+        if grouping { return ("square.on.square", "tap others to move them together · tap again to leave out") }
         switch pin {
         case .stepAside: return ("arrow.left.and.right", "1 of 2: step sideways, keep it in view")
         case .dragBack: return ("hand.draw", "2 of 2: drag it back onto its spot")
