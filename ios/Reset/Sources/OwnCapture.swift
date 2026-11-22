@@ -364,6 +364,37 @@ extension ScanFolder {
 }
 
 enum ScanBake {
+    /// Whether the cameras hardly change height (a phone standing still while the person turns): such a fit can't
+    /// tell up from down.
+    static func flatRing(_ cameras: [String: [Float]]) -> Bool {
+        let heights = cameras.values.compactMap { $0.count == 3 ? $0[1] : nil }
+        guard heights.count >= 4 else { return false }
+        let mean = heights.reduce(0, +) / Float(heights.count)
+        let spread = sqrt(heights.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Float(heights.count))
+        return spread < 0.1
+    }
+
+    /// For a model of a standing person: false when it is wider round its bottom fifth than round its top fifth
+    /// (ankles below shoulders and arms the right way up), nil when it can't be told.
+    @MainActor static func standsUpright(_ url: URL) -> Bool? {
+        guard let (mesh, _) = ScanCharacterMaker.read(url), mesh.positions.count > 100 else { return nil }
+        var low = Float.greatestFiniteMagnitude, high = -Float.greatestFiniteMagnitude
+        for p in mesh.positions { low = min(low, p.y); high = max(high, p.y) }
+        let tall = high - low
+        guard tall > 0.3 else { return nil }
+        func width(_ from: Float, _ to: Float) -> Float {
+            var lo = SIMD2<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
+            for p in mesh.positions where p.y >= low + from * tall && p.y <= low + to * tall {
+                lo = simd_min(lo, SIMD2(p.x, p.z)); hi = simd_max(hi, SIMD2(p.x, p.z))
+            }
+            return lo.x <= hi.x ? max(hi.x - lo.x, hi.y - lo.y) : 0
+        }
+        let top = width(0.7, 0.85), bottom = width(0.15, 0.3)
+        ScanLog.add(String(format: "Standing check: %.2f m wide near the top, %.2f m near the bottom", top, bottom))
+        guard top > 0, bottom > 0, abs(top - bottom) > 0.05 else { return nil }
+        return top > bottom
+    }
+
     /// Writes the model real size, upright and standing on its own middle, from the fit between the model
     /// builder's camera places and the room's. Without a fit the model is copied as it is.
     @MainActor static func bake(_ source: URL, to out: URL, fit: ScanAlign.Fit?) -> Bool {

@@ -598,8 +598,19 @@ final class ScanModel: ObservableObject {
         if !cropped, folder.hasFull, folder.cameras != nil {
             // Reset's own pictures: no crop step yet (the builder's space is not upright), the model is made real
             // size and upright and that is it.
-            let fit = folder.fit
-            let ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
+            var fit = folder.fit
+            var ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
+            // Phil, 2026-11-22: a Selfie turn person came out upside down. Pictures taken by a phone standing still
+            // while the person turns lie in a flat ring round them, and a flat ring fits just as well either way up.
+            // Then the model's own shape decides: a standing person is wider at the shoulders than at the ankles.
+            if ok, var known = fit, let cameras = folder.cameras, ScanBake.flatRing(cameras), let upright = ScanBake.standsUpright(folder.model), !upright {
+                let q = simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0)) * known.quaternion
+                known.rotation = [q.imag.x, q.imag.y, q.imag.z, q.real]
+                if let data = try? JSONEncoder().encode(known) { try? data.write(to: folder.fitFile) }
+                fit = known
+                ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
+                ScanLog.add("Own camera model: pictures in a flat ring and the model stood on its head, turned the right way up")
+            }
             ScanLog.add("Own camera model: fit \(fit.map { String(format: "scale %.3f, error %.3f m", $0.scale, $0.error) } ?? "none"), written \(ok)")
             library = ScanFolder.all()
             guard ok else { phase = .failed("The model couldn't be saved."); return }
@@ -689,7 +700,16 @@ final class ScanModel: ObservableObject {
         }
         ScanLog.add(String(format: "Poses: %d matched of %d pictures, scale %.3f, error %.3f m", from.count, cameras.count, fit.scale, fit.error))
         // A fit that leaves the cameras more than a hand's width out is not to be trusted.
-        guard fit.error < 0.15, let data = try? JSONEncoder().encode(fit) else { return }
+        // A phone standing still while the person turns is a metre or two away and placed from the body's turn, which
+        // ARKit or Vision read a few degrees out (Phil's 1414 log: 20 to 27 cm left at about 2 m), so there the fit
+        // may be out by a sixth of the distance. Without a fit the model stood on its head.
+        let middle = to.reduce(SIMD3<Float>(0, 0, 0), +) / Float(max(1, to.count))
+        let reach = to.map { simd_distance($0, middle) }.reduce(0, +) / Float(max(1, to.count))
+        let allowed = max(0.15, 0.18 * reach)
+        guard fit.error < allowed, let data = try? JSONEncoder().encode(fit) else {
+            ScanLog.add(String(format: "Poses: fit not used (error %.3f m, %.3f allowed)", fit.error, allowed))
+            return
+        }
         try? data.write(to: folder.fitFile)
     }
 
