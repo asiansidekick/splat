@@ -111,6 +111,19 @@ final class ScanModel: ObservableObject {
             if personMode != oldValue { switchedMode() }
         }
     }
+    /// Person mode: the phone stands still and the person turns on the spot (back camera, body tracking), instead of
+    /// someone walking round them. Remembered.
+    @Published var personTurn = UserDefaults.standard.bool(forKey: "scanPersonTurn") && OwnCapture.turningSupported {
+        didSet {
+            UserDefaults.standard.set(personTurn, forKey: "scanPersonTurn")
+            if personTurn != oldValue, ownCamera, phase == .ready, let folder {
+                ScanLog.add("Person: \(personTurn ? "turn on the spot" : "walk round")")
+                own.session.pause()
+                startOwn(folder, recording: false)
+            }
+        }
+    }
+    var turningOnSpot: Bool { ownCamera && own.turning }
     static let personWords = "Building just the person in more detail"
     /// Words under the progress ring while building.
     @Published var buildingWords = "Building the 3D model on the phone"
@@ -186,7 +199,7 @@ final class ScanModel: ObservableObject {
         maxShots = OwnCapture.maxShots
         passes = 1
         hint = ""
-        own.begin(folder)
+        own.begin(folder, turning: personMode && personTurn)
         own.recording = recording
         phase = recording ? .capturing : .ready
         ScanLog.add("Own camera start: \(folder.name), recording \(recording)")
@@ -199,6 +212,11 @@ final class ScanModel: ObservableObject {
     /// Person mode needs Reset's own camera: Apple's capture, not yet recording, is swapped for it.
     private func switchedMode() {
         ScanLog.add("Mode: \(personMode ? "person" : "object")")
+        if ownCamera, phase == .ready, let folder, own.turning != (personMode && personTurn) {
+            own.session.pause()
+            startOwn(folder, recording: false)
+            return
+        }
         guard personMode, session != nil, phase == .ready || phase == .starting else { return }
         session?.cancel()
         stopSession()
@@ -249,9 +267,14 @@ final class ScanModel: ObservableObject {
     private func tick() {
         if ownCamera {
             shots = own.shots
-            let text = !own.tracking ? "Move slowly" : own.tooFast ? "Slow down" : ""
+            let text: String
+            if own.turning {
+                text = !own.seesBody ? "Whole body in view" : own.tooFast ? "Turn slower" : phase == .capturing ? String(format: "%.0f°", min(360, abs(own.turned) * 180 / .pi)) : ""
+            } else {
+                text = !own.tracking ? "Move slowly" : own.tooFast ? "Slow down" : ""
+            }
             if hint != text { hint = text }
-            if phase == .capturing, shots >= OwnCapture.maxShots { finish() }
+            if phase == .capturing, shots >= OwnCapture.maxShots || own.turnedRound { finish() }
             return
         }
         guard let session else { return }

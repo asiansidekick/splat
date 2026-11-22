@@ -2708,7 +2708,7 @@ struct ModelOverlay: View {
                 PoseCopyBar(copier: copier)
             }
             if let taker = placer.poseTaker {
-                PoseTakeBar(taker: taker)
+                PoseTakeLayer(taker: taker)
             }
             if placer.dimLight {
                 Text("Dim light: cut-outs may drift. Try the torch.")

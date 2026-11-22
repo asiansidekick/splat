@@ -130,6 +130,7 @@ struct ScanScreen: View {
             TorchDial().padding(.top, 8)
             Spacer()
             if model.phase == .passDone { passChoices }
+            if (model.phase == .ready || model.phase == .starting) && model.personMode && OwnCapture.turningSupported { personWayPicker }
             if model.phase == .ready || model.phase == .starting { modePicker }
             Text(stepText)
                 .font(.footnote.weight(.semibold))
@@ -184,9 +185,26 @@ struct ScanScreen: View {
         .padding(.bottom, 10)
     }
 
+    /// Phil, 2026-11-22: a person can also turn on the spot in front of the phone standing still.
+    private var personWayPicker: some View {
+        HStack(spacing: 22) {
+            ForEach([false, true], id: \.self) { turn in
+                Button(turn ? "Turn on the spot" : "Walk round") { model.personTurn = turn }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(model.personTurn == turn ? Color.yellow : Color.white)
+                    .fixedSize()
+            }
+        }
+        .shadow(radius: 3)
+        .padding(.bottom, 8)
+    }
+
     private var stepText: String {
         switch model.phase {
         case .starting: return "Starting camera…"
+        case .ready where model.personMode && model.turningOnSpot:
+            return "Stand the phone up, whole body in view. Tap, then turn slowly on the spot, arms a little out"
+        case .capturing where model.personMode && model.turningOnSpot: return "Small steps, all the way round. It stops by itself"
         case .ready where model.personMode: return "Tap to record, then walk slowly round the person, high and low"
         case .capturing where model.personMode: return "Arms a little out, standing still. Tap to stop"
         case .ready where model.ownCamera: return "Tap to record, then walk slowly round the object"
