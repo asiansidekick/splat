@@ -249,6 +249,8 @@ private struct HeadCaptureControls: View {
         switch model.phase {
         case .starting: return "Starting camera…"
         case .ready where model.selfie: return "Phone at arm's length. Tap, then turn your head slowly to fill the circle"
+        case .capturing where model.selfie && capture.backOfHead:
+            return "Now the back: stand the phone up, then turn slowly all the way round until you face it again"
         case .capturing where model.selfie: return "Slowly left, right, up and down"
         case .ready: return "Tap, then walk slowly round the actor, head in the middle"
         case .capturing: return "All the way round, phone a little above the head. Tap to stop"
