@@ -125,6 +125,8 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     private var pinGrip = CGPoint.zero
     /// While copying an actor's pose (PoseCopy.swift).
     @Published var poseCopier: PoseCopier?
+    /// Copying a person's pose from the live camera onto the selected character (Phil, 2026-11-22).
+    @Published var poseTaker: PoseTaker?
     /// The selected model's real size, for example "62 × 40 × 75 cm · 100%".
     @Published private(set) var sizeText = ""
     /// True while a pinch is changing the size, to show it large.
@@ -1097,6 +1099,34 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         poseRedo[id] = []
         setRigPose(pose, id: id)
         Haptics.tap()
+    }
+
+    /// Phil, 2026-11-22: a person's pose, read from the camera or a photo, onto a character (one undo step) or a
+    /// mannequin (rebuilt in the new pose). The fingers keep their curl: the reading has none.
+    func applyCopiedPose(_ pose: MannequinPose, to id: UUID) {
+        guard let index = models.firstIndex(where: { $0.id == id }) else { return }
+        if let rig = rigs[id] {
+            let before = models[index].rigPose
+            var copied = pose
+            let now = before ?? rig.poser.restPose
+            copied.detail.leftFingers = now.detail.leftFingers
+            copied.detail.rightFingers = now.detail.rightFingers
+            poseUndo[id, default: []].append(before)
+            poseRedo[id] = []
+            setRigPose(copied, id: id)
+            Diagnostics.log("Pose copied onto \(models[index].name): \(copied.summary)")
+        } else if var spec = models[index].mannequin {
+            spec.pose = pose
+            repose(id, as: spec)
+        }
+    }
+
+    /// Starts copying from the live camera onto the selected character.
+    func startPoseTaker() {
+        // The other copier has the camera tracking a body for a new mannequin: one at a time.
+        guard poseCopier == nil, let id = selectedModel, let model = models.first(where: { $0.id == id }) else { return }
+        poseTaker?.finish()
+        poseTaker = PoseTaker(placer: self, target: id, name: model.name)
     }
 
     /// Back to the pose the file has.
@@ -2663,6 +2693,9 @@ struct ModelOverlay: View {
             if let copier = placer.poseCopier {
                 PoseCopyBar(copier: copier)
             }
+            if let taker = placer.poseTaker {
+                PoseTakeBar(taker: taker)
+            }
             if placer.dimLight {
                 Text("Dim light: cut-outs may drift. Try the torch.")
                     .font(Theme.footnote)
@@ -2733,6 +2766,7 @@ struct ModelEdgeTools: View {
     @State private var savingPose = false
     @State private var showsHands = false
     @State private var poseName = ""
+    @State private var copyingPose = false
 
     private static func symbol(_ job: ModelPlacer.CutoutJob) -> String {
         switch job {
@@ -2798,6 +2832,7 @@ struct ModelEdgeTools: View {
             } message: {
                 Text("Keep this pose to use again on any character.")
             }
+            .modifier(CopyPoseChooser(placer: placer, isPresented: $copyingPose, live: showsFloor))
             .fullScreenCover(isPresented: $posing) {
                 if let id = placer.selectedModel, let spec = placer.selectedPoseSpec {
                     MannequinPoseEditor(spec: spec) { placer.repose(id, as: $0) }
@@ -2872,6 +2907,10 @@ struct ModelEdgeTools: View {
             CutoutTool(word: "Pose", symbol: "figure.arms.open", on: placer.cutoutJob == .pose) { placer.cutoutJob = .pose }
         } else if placer.selectedPoseSpec != nil {
             CutoutTool(word: "Pose", symbol: "figure.arms.open", tint: Theme.accent) { posing = true }
+        }
+        // Phil, 2026-11-22: take the pose of a person in the camera or in a photo.
+        if placer.selectedHasRig || placer.selectedMannequin != nil {
+            CutoutTool(word: "Copy pose", symbol: "figure.stand.line.dotted.figure.stand", on: placer.poseTaker != nil) { copyingPose = true }
         }
     }
 

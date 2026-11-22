@@ -47,13 +47,12 @@ final class PoseCopier: ObservableObject {
     func copy() {
         guard let anchor = bodyAnchor, let placer else { return }
         let skeleton = anchor.skeleton
-        func model(_ name: String) -> SIMD3<Float>? {
-            skeleton.modelTransform(for: ARSkeleton.JointName(rawValue: name)).map { $0.columns.3.xyz }
-        }
         func world(_ name: String) -> SIMD3<Float>? {
-            model(name).map { (anchor.transform * SIMD4($0, 1)).xyz }
+            skeleton.modelTransform(for: ARSkeleton.JointName(rawValue: name)).map { (anchor.transform * SIMD4($0.columns.3.xyz, 1)).xyz }
         }
-        guard let pose = PoseFromSkeleton.pose(model) else {
+        // The room's up is known here, so the lean is the real lean.
+        let joints = BodyJoints.fromARKit(world)
+        guard let pose = PoseFromBody.pose(joints), let axes = PoseFromBody.frame(joints, up: SIMD3(0, 1, 0)) else {
             placer.modelError = "Couldn't read the whole body. Step back so all of the actor is in view."
             return
         }
@@ -63,12 +62,10 @@ final class PoseCopier: ObservableObject {
         let headTop = (world("head_joint")?.y ?? floor + 1.6) + 0.1
         let height = min(2.1, max(1.2, headTop - floor))
         let hips = anchor.transform.columns.3.xyz
-        var forward = anchor.transform.columns.2.xyz
-        forward.y = 0
-        forward = simd_length(forward) > 0.01 ? simd_normalize(forward) : SIMD3(0, 0, 1)
+        // Facing the way the actor's hips and shoulders face (its left +X, front +Z).
         var transform = matrix_identity_float4x4
-        transform.columns.0 = SIMD4(forward.z, 0, -forward.x, 0)
-        transform.columns.2 = SIMD4(forward, 0)
+        transform.columns.0 = SIMD4(axes.columns.0, 0)
+        transform.columns.2 = SIMD4(axes.columns.2, 0)
         transform.columns.3 = SIMD4(hips.x, floor, hips.z, 1)
         let name = "\(body.rawValue), copied pose"
         Diagnostics.log(String(format: "Pose copy: height %.2f m, floor %.2f, %@", height, floor, pose.summary))
@@ -86,51 +83,19 @@ final class PoseCopier: ObservableObject {
     }
 }
 
-/// Turns the tracked skeleton (positions in the body's own space: Y up, facing +Z, its left +X) into joint angles.
-enum PoseFromSkeleton {
-    private static func deg(_ r: Float) -> Float { r * 180 / .pi }
-    private static func rz(_ a: Float) -> simd_float3x3 { simd_float3x3(simd_quatf(angle: a, axis: SIMD3(0, 0, 1))) }
-    private static func rx(_ a: Float) -> simd_float3x3 { simd_float3x3(simd_quatf(angle: a, axis: SIMD3(1, 0, 0))) }
-    private static func ry(_ a: Float) -> simd_float3x3 { simd_float3x3(simd_quatf(angle: a, axis: SIMD3(0, 1, 0))) }
-
-    /// Angles (z, x, y) that hang a limb along `upper`, twisted so its lower part bends only about x, and that bend.
-    /// Elbows bend the lower part forward, knees backward (`bendsForward`). Checked against the forward maths in Python.
-    static func aim(upper: SIMD3<Float>, lower: SIMD3<Float>, bendsForward: Bool) -> (z: Float, x: Float, y: Float, bend: Float) {
-        let d = simd_normalize(upper)
-        let x = asin(max(-1, min(1, -d.z)))
-        let z = atan2(d.x, -d.y)
-        let g = (rz(z) * rx(x)).transpose * simd_normalize(lower)
-        // A nearly straight limb has no clear twist: leave it untwisted.
-        let y: Float = hypot(g.x, g.z) < 0.05 ? 0 : (bendsForward ? atan2(g.x, g.z) : atan2(-g.x, -g.z))
-        let t = ry(y).transpose * g
-        return (z, x, y, atan2(-t.z, -t.y))
-    }
-
-    static func pose(_ at: (String) -> SIMD3<Float>?) -> MannequinPose? {
-        guard let root = at("hips_joint"), let neck = at("neck_1_joint") else { return nil }
-        var p = MannequinPose()
-        // Spine: lean forward (x) and to the side (z), from hips to neck.
-        let up = simd_normalize(neck - root)
-        let spineX = asin(max(-1, min(1, up.z)))
-        let spineZ = atan2(-up.x, up.y)
-        p.spineForward = deg(spineX)
-        p.spineSide = deg(spineZ)
-        let spine = rz(spineZ) * rx(spineX)
-        if let head = at("head_joint") {
-            let h = spine.transpose * simd_normalize(head - neck)
-            p.headDown = deg(asin(max(-1, min(1, h.z))))
-        }
-        for (side, prefix) in [(Float(1), "left"), (Float(-1), "right")] {
-            guard let shoulder = at("\(prefix)_arm_joint"), let elbow = at("\(prefix)_forearm_joint"), let wrist = at("\(prefix)_hand_joint"),
-                  let hip = at("\(prefix)_upLeg_joint"), let knee = at("\(prefix)_leg_joint"), let ankle = at("\(prefix)_foot_joint")
-            else { return nil }
-            let a = aim(upper: spine.transpose * (elbow - shoulder), lower: spine.transpose * (wrist - elbow), bendsForward: true)
-            let arm = MannequinPose.Arm(out: deg(a.z) * side, forward: -deg(a.x), inward: -deg(a.y) * side, elbow: -deg(a.bend))
-            let l = aim(upper: knee - hip, lower: ankle - knee, bendsForward: false)
-            let leg = MannequinPose.Leg(out: deg(l.z) * side, forward: -deg(l.x), inward: -deg(l.y) * side, knee: deg(l.bend))
-            if side > 0 { p.left = arm; p.leftLeg = leg } else { p.right = arm; p.rightLeg = leg }
-        }
-        return p
+extension BodyJoints {
+    /// From ARKit's tracked skeleton (joint names as ARKit gives them), in the room's space where up is +Y.
+    static func fromARKit(_ at: (String) -> SIMD3<Float>?) -> BodyJoints {
+        var body = BodyJoints()
+        let names: [(Joint, String)] = [
+            (.hips, "hips_joint"), (.neck, "neck_1_joint"), (.head, "head_joint"),
+            (.leftShoulder, "left_arm_joint"), (.leftElbow, "left_forearm_joint"), (.leftWrist, "left_hand_joint"),
+            (.rightShoulder, "right_arm_joint"), (.rightElbow, "right_forearm_joint"), (.rightWrist, "right_hand_joint"),
+            (.leftHip, "left_upLeg_joint"), (.leftKnee, "left_leg_joint"), (.leftAnkle, "left_foot_joint"),
+            (.rightHip, "right_upLeg_joint"), (.rightKnee, "right_leg_joint"), (.rightAnkle, "right_foot_joint"),
+        ]
+        for (joint, name) in names { body[joint] = at(name) }
+        return body
     }
 }
 
