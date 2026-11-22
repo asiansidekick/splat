@@ -369,8 +369,12 @@ enum ScanBake {
     static func flatRing(_ cameras: [String: [Float]]) -> Bool {
         let heights = cameras.values.compactMap { $0.count == 3 ? $0[1] : nil }
         guard heights.count >= 4 else { return false }
-        let mean = heights.reduce(0, +) / Float(heights.count)
-        let spread = sqrt(heights.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Float(heights.count))
+        var total: Float = 0
+        for h in heights { total += h }
+        let mean = total / Float(heights.count)
+        var squares: Float = 0
+        for h in heights { squares += (h - mean) * (h - mean) }
+        let spread = (squares / Float(heights.count)).squareRoot()
         return spread < 0.1
     }
 
@@ -387,7 +391,9 @@ enum ScanBake {
             for p in mesh.positions where p.y >= low + from * tall && p.y <= low + to * tall {
                 lo = simd_min(lo, SIMD2(p.x, p.z)); hi = simd_max(hi, SIMD2(p.x, p.z))
             }
-            return lo.x <= hi.x ? max(hi.x - lo.x, hi.y - lo.y) : 0
+            guard lo.x <= hi.x else { return 0 }
+            let size: SIMD2<Float> = hi - lo
+            return max(size.x, size.y)
         }
         let top = width(0.7, 0.85), bottom = width(0.15, 0.3)
         ScanLog.add(String(format: "Standing check: %.2f m wide near the top, %.2f m near the bottom", top, bottom))
