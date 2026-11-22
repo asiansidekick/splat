@@ -468,6 +468,28 @@ enum HeadVision {
         return out
     }
 
+    /// An outline grown by `by` of its own pixels each way (the brightest nearby value).
+    static func widen(_ mask: (width: Int, height: Int, bytes: [UInt8]), by r: Int) -> (width: Int, height: Int, bytes: [UInt8]) {
+        let w = mask.width, h = mask.height
+        var across = [UInt8](repeating: 0, count: w * h)
+        for y in 0..<h {
+            for x in 0..<w {
+                var m: UInt8 = 0
+                for dx in max(0, x - r)...min(w - 1, x + r) { m = max(m, mask.bytes[y * w + dx]) }
+                across[y * w + x] = m
+            }
+        }
+        var out = [UInt8](repeating: 0, count: w * h)
+        for y in 0..<h {
+            for x in 0..<w {
+                var m: UInt8 = 0
+                for dy in max(0, y - r)...min(h - 1, y + r) { m = max(m, across[dy * w + x]) }
+                out[y * w + x] = m
+            }
+        }
+        return (w, h, out)
+    }
+
     /// A saved person outline: width, height and its bytes.
     static func loadMask(_ url: URL) -> (width: Int, height: Int, bytes: [UInt8])? {
         guard let data = try? Data(contentsOf: url), data.count > 8 else { return nil }
@@ -670,7 +692,9 @@ enum HeadBuilder {
                 let hull = HeadMath.hull(outline)
                 guard hull.count >= 3 else { return }
                 let rows = HeadMath.rows(of: hull, width: w, height: h)
-                let person = shot.mask.flatMap { HeadVision.loadMask(folder.shotsFolder.appendingPathComponent($0)) }
+                // Widened a little: the builder colours the head from these pictures, and black just outside a tight outline
+                // came through as dark teeth round the neck and the side of the face (Phil's 1411 test).
+                let person = shot.mask.flatMap { HeadVision.loadMask(folder.shotsFolder.appendingPathComponent($0)) }.map { HeadVision.widen($0, by: 3) }
                 // The picture drawn into memory, then every pixel outside the head made black.
                 let bytesPerRow = w * 4
                 var pixels = [UInt8](repeating: 0, count: bytesPerRow * h)
