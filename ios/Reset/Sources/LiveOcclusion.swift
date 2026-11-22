@@ -88,6 +88,8 @@ final class LiveOccluder {
         var held: HeldOutline?
         var history: [[Bool]] = []
         var differentSince: TimeInterval?
+        /// A plain surface (a wall) grown from the touch by colour and depth, not a thing Vision found.
+        var grown = false
     }
     private var picks: [Pick] = [] { didSet { placer?.inFrontCount = picks.count } }
     /// The picked things' outlines, cut from the camera picture: a sheet 30 cm in front of the camera that hides every
@@ -303,6 +305,58 @@ final class LiveOccluder {
 
     // MARK: Picked things in front (Phil, 2026-11-20)
 
+    /// The camera picture at about 480 wide, as brightness and the two colour differences per pixel.
+    nonisolated static func colour(_ buffer: CVPixelBuffer, step: Int) -> (values: [SIMD3<Float>], width: Int, height: Int)? {
+        guard step >= 2, CVPixelBufferGetPlaneCount(buffer) >= 2 else { return nil }
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        guard let lumaBase = CVPixelBufferGetBaseAddressOfPlane(buffer, 0), let chromaBase = CVPixelBufferGetBaseAddressOfPlane(buffer, 1) else { return nil }
+        let w = CVPixelBufferGetWidthOfPlane(buffer, 0), h = CVPixelBufferGetHeightOfPlane(buffer, 0)
+        let lumaRow = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0), chromaRow = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1)
+        let cw = CVPixelBufferGetWidthOfPlane(buffer, 1), ch = CVPixelBufferGetHeightOfPlane(buffer, 1)
+        let ow = w / step, oh = h / step
+        guard ow > 8, oh > 8, cw > 0, ch > 0 else { return nil }
+        let luma = lumaBase.assumingMemoryBound(to: UInt8.self), chroma = chromaBase.assumingMemoryBound(to: UInt8.self)
+        var out = [SIMD3<Float>](repeating: .zero, count: ow * oh)
+        for y in 0..<oh {
+            let ly = y * step, cy = min(ch - 1, ly * ch / h)
+            for x in 0..<ow {
+                let lx = x * step, cx = min(cw - 1, lx * cw / w)
+                out[y * ow + x] = SIMD3(Float(luma[ly * lumaRow + lx]), Float(chroma[cy * chromaRow + cx * 2]), Float(chroma[cy * chromaRow + cx * 2 + 1]))
+            }
+        }
+        return (out, ow, oh)
+    }
+
+    /// The latest LiDAR depth, if any, for growing a surface.
+    private static func depthGrid(_ frame: ARFrame) -> (values: [Float], width: Int, height: Int)? {
+        guard let map = (frame.smoothedSceneDepth ?? frame.sceneDepth)?.depthMap else { return nil }
+        return (DepthMap.floats(DepthMap.copy(map)), CVPixelBufferGetWidth(map), CVPixelBufferGetHeight(map))
+    }
+
+    /// The plain surface under a point of the picture (0 to 1 each way), grown by colour and, where known, depth
+    /// (RegionGrow); nil when it is a speck or the whole picture.
+    nonisolated private static func surface(in image: CVPixelBuffer, depth: (values: [Float], width: Int, height: Int)?,
+                                            at n: CGPoint) -> (cells: [Bool], width: Int, height: Int)? {
+        let full = CVPixelBufferGetWidth(image)
+        guard let picture = colour(image, step: max(2, full / 480)) else { return nil }
+        let w = picture.width, h = picture.height
+        var grid: [Float]?
+        if let depth, depth.width > 0, depth.height > 0 {
+            var values = [Float](repeating: 0, count: w * h)
+            for y in 0..<h {
+                let dy = min(depth.height - 1, y * depth.height / h)
+                for x in 0..<w { values[y * w + x] = depth.values[dy * depth.width + min(depth.width - 1, x * depth.width / w)] }
+            }
+            grid = values
+        }
+        let seedX = min(w - 1, max(0, Int(n.x * CGFloat(w)))), seedY = min(h - 1, max(0, Int(n.y * CGFloat(h))))
+        let cells = RegionGrow.grow(colour: picture.values, depth: grid, width: w, height: h, seedX: seedX, seedY: seedY)
+        let count = cells.filter { $0 }.count
+        guard count * 300 >= w * h, count * 100 <= w * h * 85 else { return nil }
+        return (cells, w, h)
+    }
+
     /// A tap while picking: finds the thing under the finger in the camera picture (Vision's subject finder) and puts it
     /// in front, or takes it out if it is in front already.
     private func pick(at point: CGPoint, in view: ARSCNView) {
@@ -316,14 +370,45 @@ final class LiveOccluder {
         let image = frame.capturedImage
         let camera = frame.camera
         let existing = picks
+        // Tapping inside something already in front takes it out.
+        let lens = Self.lens(camera)
+        let touched = existing.filter { pick in
+            guard let held = pick.held else { return false }
+            let seen = held.seen(from: camera.transform, lens: lens)
+            let x = min(held.width - 1, Int(n.x * CGFloat(held.width))), y = min(held.height - 1, Int(n.y * CGFloat(held.height)))
+            return seen[y * held.width + x]
+        }
+        if !touched.isEmpty {
+            let gone = Set(touched.map(\.id))
+            picks.removeAll { gone.contains($0.id) }
+            Haptics.tap()
+            Diagnostics.log("In front: taken out, \(picks.count) left")
+            return
+        }
+        let depth = Self.depthGrid(frame)
         Task.detached(priority: .userInitiated) {
             let found = Self.instances(in: image)
+            // No thing there (a wall, a door frame): grow the touched surface by colour and depth instead.
+            let surface = (found?.label(at: n) ?? 0) == 0 ? Self.surface(in: image, depth: depth, at: n) : nil
             await MainActor.run { [weak self] in
                 guard let self else { return }
+                if let surface {
+                    let held = HeldOutline(cells: surface.cells, width: surface.width, height: surface.height, pose: camera.transform,
+                                           lens: lens, distance: HeldOutline.distance(of: anchor, from: camera.transform))
+                    var pick = Pick(anchor: anchor, held: held)
+                    pick.grown = true
+                    self.picks.append(pick)
+                    Haptics.success()
+                    Diagnostics.log(String(format: "In front: picked a surface at %.2f, %.2f, %.2f m away, %d%% of the picture, %d in front", n.x, n.y,
+                                           simd_length(anchor - camera.transform.columns.3.xyz),
+                                           surface.cells.filter { $0 }.count * 100 / max(1, surface.cells.count), self.picks.count))
+                    self.pickFound = true
+                    return
+                }
                 guard let found, let label = found.label(at: n), label > 0 else {
-                    self.placer?.modelError = "Couldn't tell that thing apart from what's behind it. Tap the middle of it, or step back so all of it shows."
+                    self.placer?.modelError = "Couldn't tell that apart from what's around it. Tap the middle of it, or step back so all of it shows."
                     Haptics.warning()
-                    Diagnostics.log(String(format: "In front: nothing found at %.2f, %.2f (%d things in the picture)", n.x, n.y, found?.count ?? 0))
+                    Diagnostics.log(String(format: "In front: nothing found at %.2f, %.2f (%d things in the picture, no surface either)", n.x, n.y, found?.count ?? 0))
                     return
                 }
                 // Tapping a thing already in front takes it out.
@@ -569,6 +654,7 @@ final class LiveOccluder {
             depthSize = (CVPixelBufferGetWidth(map), CVPixelBufferGetHeight(map))
         }
         let guide = depthValues == nil ? nil : Self.luma(image, step: max(2, Int(camera.imageResolution.width) / 480))
+        let depthGrid = picks.contains(where: \.grown) ? Self.depthGrid(frame) : nil
         if !still { pickDepthHistory = [] }
         let depthHistory = pickDepthHistory
         Task.detached(priority: .userInitiated) {
@@ -592,8 +678,15 @@ final class LiveOccluder {
                 let held = pick.held?.seen(from: pose, lens: lens)
                 var fresh: [Bool]?
                 var width = 0
+                if pick.grown {
+                    if let n = Self.imagePoint(of: pick.anchor, camera: camera), let grown = Self.surface(in: image, depth: depthGrid, at: n),
+                       grown.width == pick.held?.width {
+                        fresh = grown.cells
+                        width = grown.width
+                    }
+                }
                 // The thing under the held outline, else under the tapped point.
-                let label = found.flatMap { found in
+                let label = pick.grown ? nil : found.flatMap { found in
                     held.flatMap { found.label(covering: $0, width: pick.held!.width, height: pick.held!.height) }
                         ?? Self.imagePoint(of: pick.anchor, camera: camera).flatMap { found.label(at: $0) }
                 }

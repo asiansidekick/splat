@@ -584,5 +584,30 @@ do {
     check(HeadMath.chin(head.filter { $0.y > 0.05 }) == nil, "Head: no chin found without a face")
 }
 
+// Picking a plain wall: the area grows from the touch over like colour, stopping at edges and depth steps.
+do {
+    // 40 x 30: a dark grey wall on the right (x >= 20) with a gentle light fall-off and grain; a lit yellow corridor left.
+    var colour = [SIMD3<Float>](repeating: SIMD3(200, 90, 170), count: 40 * 30)
+    for y in 0..<30 {
+        for x in 20..<40 {
+            let grain = Float((x * 7 + y * 13) % 5) - 2
+            colour[y * 40 + x] = SIMD3(60 + Float(x - 20) * 1.5 + grain, 128, 128)
+        }
+    }
+    let wall = RegionGrow.grow(colour: colour, depth: nil, width: 40, height: 30, seedX: 30, seedY: 15)
+    // The column where the softened picture mixes wall and corridor may go either way.
+    let onWall = (0..<30).allSatisfy { y in (21..<40).allSatisfy { wall[y * 40 + $0] } }
+    let offWall = (0..<30).allSatisfy { y in (0..<20).allSatisfy { !wall[y * 40 + $0] } }
+    check(onWall, "wall pick: the whole wall is taken, grain and light fall-off included")
+    check(offWall, "wall pick: it stops at the edge to the corridor")
+    // Same colour but a step in depth (a wall 1 m, a pillar of the same paint 2.5 m behind on the left half).
+    let grey = [SIMD3<Float>](repeating: SIMD3(80, 128, 128), count: 40 * 30)
+    var depth = [Float](repeating: 1, count: 40 * 30)
+    for y in 0..<30 { for x in 0..<20 { depth[y * 40 + x] = 2.5 } }
+    let near = RegionGrow.grow(colour: grey, depth: depth, width: 40, height: 30, seedX: 30, seedY: 15)
+    check(near[15 * 40 + 35] && !near[15 * 40 + 5], "wall pick: a step in depth stops it where the colour can't")
+    check(RegionGrow.grow(colour: grey, depth: nil, width: 40, height: 30, seedX: 99, seedY: 0).isEmpty, "wall pick: a touch off the picture picks nothing")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

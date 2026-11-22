@@ -380,3 +380,77 @@ enum DepthStrips {
         return strips
     }
 }
+
+/// A plain surface picked by touch (Phil, 2026-11-22: "a wall I could not select as in front"): Vision's subject
+/// finder only knows things, not walls, so the picked area grows out from the touch over pixels of like colour,
+/// stopping at edges in the picture and, where depth is known, at steps in depth. Works with the camera alone.
+enum RegionGrow {
+    /// `colour` holds brightness and the two colour differences per pixel (0-255 each), `depth` metres or 0.
+    static func grow(colour: [SIMD3<Float>], depth: [Float]?, width: Int, height: Int, seedX: Int, seedY: Int,
+                     step: Float = 7, drift: Float = 55, depthJump: Float = 0.06) -> [Bool] {
+        guard width > 2, height > 2, colour.count >= width * height, seedX >= 0, seedX < width, seedY >= 0, seedY < height else { return [] }
+        // Soften the picture (3 by 3) so a surface's grain and noise don't stop the growing.
+        var soft = colour
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                var sum = SIMD3<Float>(repeating: 0)
+                for dy in -1...1 { for dx in -1...1 { sum += colour[(y + dy) * width + x + dx] } }
+                soft[y * width + x] = sum / 9
+            }
+        }
+        func distance(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
+            let d = a - b
+            return abs(d.x) + 1.5 * (abs(d.y) + abs(d.z))
+        }
+        // The seed's colour: the middle of its 5 by 5 patch.
+        var seedSum = SIMD3<Float>(repeating: 0), seedCount: Float = 0
+        for y in max(0, seedY - 2)...min(height - 1, seedY + 2) {
+            for x in max(0, seedX - 2)...min(width - 1, seedX + 2) { seedSum += soft[y * width + x]; seedCount += 1 }
+        }
+        let seedColour = seedSum / seedCount
+        var inside = [Bool](repeating: false, count: width * height)
+        var queue = [seedY * width + seedX]
+        inside[queue[0]] = true
+        var head = 0
+        while head < queue.count {
+            let i = queue[head]; head += 1
+            let x = i % width, y = i / width
+            for (nx, ny) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] {
+                guard nx >= 0, nx < width, ny >= 0, ny < height else { continue }
+                let n = ny * width + nx
+                guard !inside[n] else { continue }
+                guard distance(soft[n], soft[i]) <= step, distance(soft[n], seedColour) <= drift else { continue }
+                if let depth {
+                    let a = depth[i], b = depth[n]
+                    if a > 0.12, b > 0.12, abs(a - b) > depthJump * max(1, a) { continue }
+                }
+                inside[n] = true
+                queue.append(n)
+            }
+        }
+        return close(inside, width: width, height: height, radius: 2)
+    }
+
+    /// Fills specks and thin cracks left inside the grown area (grow by `radius`, then shrink back).
+    static func close(_ mask: [Bool], width: Int, height: Int, radius: Int) -> [Bool] {
+        func spread(_ m: [Bool], _ value: Bool) -> [Bool] {
+            var out = m
+            for y in 0..<height {
+                for x in 0..<width where m[y * width + x] == value {
+                    for dy in -radius...radius {
+                        let yy = y + dy
+                        guard yy >= 0, yy < height else { continue }
+                        for dx in -radius...radius {
+                            let xx = x + dx
+                            guard xx >= 0, xx < width else { continue }
+                            out[yy * width + xx] = value
+                        }
+                    }
+                }
+            }
+            return out
+        }
+        // Shrinking: the outside grows back; the picture's border doesn't count as outside.
+        return spread(spread(mask, true), false)
+    }
+}
