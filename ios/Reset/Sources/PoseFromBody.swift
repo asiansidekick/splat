@@ -189,7 +189,8 @@ extension PoseFromBody {
     static func change(_ a: MannequinPose, _ b: MannequinPose) -> Float {
         let down = SIMD3<Float>(0, -1, 0)
         func angle(_ u: SIMD3<Float>, _ v: SIMD3<Float>) -> Float {
-            acos(max(-1, min(1, simd_dot(simd_normalize(u), simd_normalize(v))))) * 180 / .pi
+            // atan2, not acos: exact near 0°, where acos of a rounded dot product is a few hundredths of a degree off.
+            atan2(simd_length(simd_cross(u, v)), simd_dot(u, v)) * 180 / .pi
         }
         var worst = max(abs(a.spineForward - b.spineForward), abs(a.spineSide - b.spineSide))
         let pairs: [(HumanLimits.Limb, HumanLimits.Limb, Bool)] = [
