@@ -199,13 +199,7 @@ struct AssetGallery: View {
                     // Phil, 2026-11-22: "Disambiguate". Says what it does, and how it differs from picking with In front.
                     Toggle(isOn: $wholeRoom) {
                         Label {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Hide models behind anything nearer")
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Text("Automatic, uses LiDAR. Off: only what you pick with In front hides them.")
-                                    .font(Theme.footnote).foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+                            Text("Hide models behind anything nearer").lineLimit(1).minimumScaleFactor(0.8)
                         } icon: { Image(systemName: "square.2.layers.3d") }
                     }
                         .font(Theme.footnote.weight(.semibold))
@@ -228,8 +222,13 @@ struct AssetGallery: View {
                                     .frame(maxWidth: .infinity)
                                     .aspectRatio(1, contentMode: .fit)
                                     .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
-                                Text(asset.name).font(columns >= 4 ? Theme.caption2.weight(.semibold) : Theme.caption.weight(.semibold)).lineLimit(3).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                                Text(asset.kind).font(Theme.caption2).foregroundStyle(.secondary)
+                                // Phil, 2026-11-22: "The text in the gallery takes up too much space": one short line, the kind
+                                // only when it isn't a plain scan or model.
+                                Text(Self.shortName(asset.name)).font(Theme.caption2.weight(.semibold))
+                                    .lineLimit(2).minimumScaleFactor(0.8).multilineTextAlignment(.center)
+                                if let kind = Self.shownKind(asset.kind) {
+                                    Text(kind).font(Theme.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                }
                             }
                         }
                         .buttonStyle(.plain)
@@ -402,6 +401,21 @@ struct AssetGallery: View {
             }
             Button(role: .destructive) { delete(asset) } label: { Label("Delete", systemImage: "trash") }
         }
+    }
+
+    /// "Scan 2026-11-23 00.51.48" as "23 Nov 00:51"; other names as they are.
+    static func shortName(_ name: String) -> String {
+        let parts = name.split(separator: " ")
+        guard parts.count == 3, parts[0] == "Scan" else { return name }
+        let date = parts[1].split(separator: "-"), time = parts[2].split(separator: ".")
+        guard date.count == 3, time.count >= 2, let month = Int(date[1]), (1...12).contains(month), let day = Int(date[2]) else { return name }
+        let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        return "\(day) \(months[month - 1]) \(time[0]):\(time[1])"
+    }
+
+    /// The kind under a tile only when it tells something: plain scans and models say nothing more.
+    static func shownKind(_ kind: String) -> String? {
+        kind == "3D scan" || kind == "3D model" ? nil : kind
     }
 
     private static func picture(of asset: Asset) -> Data? {
