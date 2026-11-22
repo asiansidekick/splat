@@ -369,8 +369,12 @@ enum ScanBake {
     static func flatRing(_ cameras: [String: [Float]]) -> Bool {
         let heights = cameras.values.compactMap { $0.count == 3 ? $0[1] : nil }
         guard heights.count >= 4 else { return false }
-        let mean = heights.reduce(0, +) / Float(heights.count)
-        let spread = sqrt(heights.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Float(heights.count))
+        var total: Float = 0
+        for h in heights { total += h }
+        let mean = total / Float(heights.count)
+        var squares: Float = 0
+        for h in heights { squares += (h - mean) * (h - mean) }
+        let spread = (squares / Float(heights.count)).squareRoot()
         return spread < 0.1
     }
 
@@ -387,7 +391,9 @@ enum ScanBake {
             for p in mesh.positions where p.y >= low + from * tall && p.y <= low + to * tall {
                 lo = simd_min(lo, SIMD2(p.x, p.z)); hi = simd_max(hi, SIMD2(p.x, p.z))
             }
-            return lo.x <= hi.x ? max(hi.x - lo.x, hi.y - lo.y) : 0
+            guard lo.x <= hi.x else { return 0 }
+            let size: SIMD2<Float> = hi - lo
+            return max(size.x, size.y)
         }
         let top = width(0.7, 0.85), bottom = width(0.15, 0.3)
         ScanLog.add(String(format: "Standing check: %.2f m wide near the top, %.2f m near the bottom", top, bottom))
@@ -420,8 +426,41 @@ enum ScanBake {
 /// Phil's 1411 tests: black smears down the arms, sides and neck of scanned people and heads. The builder colours each
 /// part from a picture that saw it, and a part just outside a picture's person outline came out black. Outside the
 /// outline, a band of about 32 pixels is now filled with the person's own nearest colours, and only beyond it black.
+/// Gaps between the legs, or between an arm and the body, stay black (Phil, 1414: filled in, they joined the limbs
+/// into the body and the people came out like starfish): anywhere with the person within `gap` pixels on both sides,
+/// across or along the picture.
 enum MaskFill {
-    static func fill(_ pixels: inout [UInt8], width w: Int, height h: Int, keep: [Bool], band: Int = 32) {
+    static func fill(_ pixels: inout [UInt8], width w: Int, height h: Int, keep: [Bool], band: Int = 32, gap: Int = 200) {
+        var between = [Bool](repeating: false, count: w * h)
+        // Across: the nearest person to the left and to the right of each pixel.
+        var lastLeft = [Int](repeating: -1_000_000, count: w)
+        for y in 0..<h {
+            var last = -1_000_000
+            for x in 0..<w {
+                if keep[y * w + x] { last = x } else { lastLeft[x] = last }
+            }
+            last = 1_000_000
+            for x in stride(from: w - 1, through: 0, by: -1) {
+                if keep[y * w + x] { last = x; continue }
+                if x - lastLeft[x] < gap && last - x < gap { between[y * w + x] = true }
+            }
+        }
+        // Along: the nearest person above and below.
+        var above = [Int](repeating: -1_000_000, count: w * h)
+        var lastUp = [Int](repeating: -1_000_000, count: w)
+        for y in 0..<h {
+            for x in 0..<w {
+                if keep[y * w + x] { lastUp[x] = y } else { above[y * w + x] = lastUp[x] }
+            }
+        }
+        var lastDown = [Int](repeating: 1_000_000, count: w)
+        for y in stride(from: h - 1, through: 0, by: -1) {
+            for x in 0..<w {
+                let i = y * w + x
+                if keep[i] { lastDown[x] = y; continue }
+                if y - above[i] < gap && lastDown[x] - y < gap { between[i] = true }
+            }
+        }
         let step = 4
         let cw = (w + step - 1) / step, ch = (h + step - 1) / step
         var colour = [SIMD3<Float>](repeating: .zero, count: cw * ch)
@@ -462,7 +501,7 @@ enum MaskFill {
         for y in 0..<h {
             for x in 0..<w where !keep[y * w + x] {
                 let c = (y / step) * cw + x / step, p = (y * w + x) * 4
-                let value = has[c] ? colour[c] : SIMD3<Float>(0, 0, 0)
+                let value = has[c] && !between[y * w + x] ? colour[c] : SIMD3<Float>(0, 0, 0)
                 pixels[p] = UInt8(min(255, max(0, value.x))); pixels[p + 1] = UInt8(min(255, max(0, value.y))); pixels[p + 2] = UInt8(min(255, max(0, value.z)))
             }
         }
