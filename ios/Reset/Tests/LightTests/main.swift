@@ -79,7 +79,7 @@ print(String(format: "INFO  ball middle %.0f, neutral %.0f, darker %.0f, brighte
              grey(colour(darker, 0.5, 0.5)), grey(colour(brighter, 0.5, 0.5))))
 check(middle > 40, "the ball is drawn and lit (\(Int(middle)))")
 check(abs(grey(colour(neutral, 0.5, 0.5)) - middle) < 4, "the shader step at its normal setting changes nothing")
-check(grey(colour(darker, 0.5, 0.5)) < middle * 0.75, "half brightness is clearly darker")
+check(grey(colour(darker, 0.5, 0.5)) < middle * 0.8, "half brightness is clearly darker")
 check(grey(colour(brighter, 0.5, 0.5)) > middle * 1.15, "1.6 brightness is clearly brighter")
 let w = colour(warm, 0.5, 0.5)
 check(w.x - w.z > 25, "warm tint: red well above blue (\(Int(w.x)) vs \(Int(w.z)))")
@@ -89,7 +89,9 @@ check(leftOfLeft > rightOfLeft + 25, "light from the left: the ball's left side 
 check(grey(colour(fromRight, 0.7, 0.5)) > grey(colour(fromRight, 0.3, 0.5)) + 25, "light from the right: the ball's right side is brighter")
 check(abs(grey(colour(fromLeft, 0.5, 0.5)) - grey(colour(fromRight, 0.5, 0.5))) < 12, "side light left or right: the middle matches")
 let scanMiddle = grey(colour(scanPlain, 0.5, 0.5))
-check(scanMiddle > 100 && grey(colour(scanDark, 0.5, 0.5)) < scanMiddle * 0.7, "an unlit scan darkens too (\(Int(scanMiddle)))")
+// Colours are mixed in linear light: half brightness shows as about 0.73 of the screen value.
+let scanDarkMiddle = grey(colour(scanDark, 0.5, 0.5))
+check(scanMiddle > 100 && scanDarkMiddle < scanMiddle * 0.8, "an unlit scan darkens too (\(Int(scanMiddle)) to \(Int(scanDarkMiddle)))")
 
 if let folder = CommandLine.arguments.dropFirst().first {
     try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
