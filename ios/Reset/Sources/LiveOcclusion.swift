@@ -319,10 +319,15 @@ final class LiveOccluder {
         let luma = lumaBase.assumingMemoryBound(to: UInt8.self), chroma = chromaBase.assumingMemoryBound(to: UInt8.self)
         var out = [SIMD3<Float>](repeating: .zero, count: ow * oh)
         for y in 0..<oh {
-            let ly = y * step, cy = min(ch - 1, ly * ch / h)
+            let ly: Int = y * step
+            let cy: Int = min(ch - 1, ly * ch / h)
             for x in 0..<ow {
-                let lx = x * step, cx = min(cw - 1, lx * cw / w)
-                out[y * ow + x] = SIMD3(Float(luma[ly * lumaRow + lx]), Float(chroma[cy * chromaRow + cx * 2]), Float(chroma[cy * chromaRow + cx * 2 + 1]))
+                let lx: Int = x * step
+                let cx: Int = min(cw - 1, lx * cw / w)
+                let c: Int = cy * chromaRow + cx * 2
+                let l: Float = Float(luma[ly * lumaRow + lx])
+                let u: Float = Float(chroma[c]), v: Float = Float(chroma[c + 1])
+                out[y * ow + x] = SIMD3<Float>(l, u, v)
             }
         }
         return (out, ow, oh)
@@ -353,7 +358,8 @@ final class LiveOccluder {
         let seedX = min(w - 1, max(0, Int(n.x * CGFloat(w)))), seedY = min(h - 1, max(0, Int(n.y * CGFloat(h))))
         let cells = RegionGrow.grow(colour: picture.values, depth: grid, width: w, height: h, seedX: seedX, seedY: seedY)
         let count = cells.filter { $0 }.count
-        guard count * 300 >= w * h, count * 100 <= w * h * 85 else { return nil }
+        let total: Int = w * h
+        guard count * 300 >= total, count * 100 <= total * 85 else { return nil }
         return (cells, w, h)
     }
 
@@ -399,9 +405,10 @@ final class LiveOccluder {
                     pick.grown = true
                     self.picks.append(pick)
                     Haptics.success()
-                    Diagnostics.log(String(format: "In front: picked a surface at %.2f, %.2f, %.2f m away, %d%% of the picture, %d in front", n.x, n.y,
-                                           simd_length(anchor - camera.transform.columns.3.xyz),
-                                           surface.cells.filter { $0 }.count * 100 / max(1, surface.cells.count), self.picks.count))
+                    let distance: Float = simd_length(anchor - camera.transform.columns.3.xyz)
+                    let share: Int = surface.cells.filter { $0 }.count * 100 / max(1, surface.cells.count)
+                    Diagnostics.log(String(format: "In front: picked a surface at %.2f, %.2f, %.2f m away, %d%% of the picture, %d in front",
+                                           Double(n.x), Double(n.y), Double(distance), share, self.picks.count))
                     self.pickFound = true
                     return
                 }
