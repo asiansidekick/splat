@@ -700,7 +700,16 @@ final class ScanModel: ObservableObject {
         }
         ScanLog.add(String(format: "Poses: %d matched of %d pictures, scale %.3f, error %.3f m", from.count, cameras.count, fit.scale, fit.error))
         // A fit that leaves the cameras more than a hand's width out is not to be trusted.
-        guard fit.error < 0.15, let data = try? JSONEncoder().encode(fit) else { return }
+        // A phone standing still while the person turns is a metre or two away and placed from the body's turn, which
+        // ARKit or Vision read a few degrees out (Phil's 1414 log: 20 to 27 cm left at about 2 m), so there the fit
+        // may be out by a sixth of the distance. Without a fit the model stood on its head.
+        let middle = to.reduce(SIMD3<Float>(0, 0, 0), +) / Float(max(1, to.count))
+        let reach = to.map { simd_distance($0, middle) }.reduce(0, +) / Float(max(1, to.count))
+        let allowed = max(0.15, 0.18 * reach)
+        guard fit.error < allowed, let data = try? JSONEncoder().encode(fit) else {
+            ScanLog.add(String(format: "Poses: fit not used (error %.3f m, %.3f allowed)", fit.error, allowed))
+            return
+        }
         try? data.write(to: folder.fitFile)
     }
 
