@@ -706,6 +706,7 @@ enum HeadBuilder {
                 }
                 guard drawn else { return }
                 var kept = 0
+                var keeps = [Bool](repeating: false, count: w * h)
                 for y in 0..<h {
                     let (from, to) = rows[y]
                     for x in 0..<w {
@@ -722,13 +723,11 @@ enum HeadBuilder {
                             }
                             keep = person.bytes[my * person.width + mx] > 60
                         }
-                        if keep { kept += 1 } else {
-                            let p = y * bytesPerRow + x * 4
-                            pixels[p] = 0; pixels[p + 1] = 0; pixels[p + 2] = 0
-                        }
+                        if keep { kept += 1; keeps[y * w + x] = true }
                     }
                 }
                 guard kept > w * h / 200 else { return }
+                MaskFill.fill(&pixels, width: w, height: h, keep: keeps)
                 let data = Data(pixels)
                 guard let provider = CGDataProvider(data: data as CFData),
                       let cut = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bytesPerRow,

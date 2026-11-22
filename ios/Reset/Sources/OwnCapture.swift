@@ -38,9 +38,21 @@ final class OwnCapture: NSObject, ARSessionDelegate {
     private(set) var turnedRound = false
     private(set) var seesBody = false
     private var lastYaw: Float?
+    /// Phil, 2026-11-22: "use front facing camera to scan a person so they can see themselves". The selfie camera has
+    /// no body tracking, so Vision's 3D body pose of each picture says where the camera was from the body instead
+    /// (and how tall the body is, which gives the size). Kept as camera place and the body's up, in Vision's body space.
+    private(set) var selfieTurn = false
+    static var selfieTurnSupported: Bool { ARFaceTrackingConfiguration.isSupported }
+    private var visionPlaces: [String: (place: SIMD3<Float>, up: SIMD3<Float>)] = [:]
+    private var lastKeptAt: TimeInterval = 0
+    private var heights: [Float] = []
 
-    func begin(_ folder: ScanFolder, turning: Bool = false) {
-        self.turning = turning && Self.turningSupported
+    func begin(_ folder: ScanFolder, turning: Bool = false, selfie: Bool = false) {
+        selfieTurn = turning && selfie && Self.selfieTurnSupported
+        self.turning = turning && (selfieTurn || Self.turningSupported)
+        visionPlaces = [:]
+        lastKeptAt = 0
+        heights = []
         turned = 0
         turnedRound = false
         seesBody = false
@@ -53,7 +65,16 @@ final class OwnCapture: NSObject, ARSessionDelegate {
         recording = false
         tooFast = false
         session.delegate = self
-        if self.turning {
+        if selfieTurn {
+            let configuration = ARFaceTrackingConfiguration()
+            configuration.isLightEstimationEnabled = false
+            if let best = ARFaceTrackingConfiguration.supportedVideoFormats.filter({ $0.framesPerSecond >= 30 })
+                .max(by: { $0.imageResolution.width * $0.imageResolution.height < $1.imageResolution.width * $1.imageResolution.height }) {
+                configuration.videoFormat = best
+            }
+            session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+            ScanLog.add(String(format: "Turn on the spot: selfie camera %.0f x %.0f", configuration.videoFormat.imageResolution.width, configuration.videoFormat.imageResolution.height))
+        } else if self.turning {
             let configuration = ARBodyTrackingConfiguration()
             configuration.automaticSkeletonScaleEstimationEnabled = true
             session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
@@ -68,6 +89,16 @@ final class OwnCapture: NSObject, ARSessionDelegate {
         recording = false
         session.pause()
         await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
+        var waited = 0
+        while writing > 0, waited < 150 {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            waited += 1
+        }
+        if selfieTurn { cameras = Self.upright(visionPlaces) }
+        if selfieTurn, !heights.isEmpty {
+            let sorted = heights.sorted()
+            ScanLog.add(String(format: "Selfie turn: %d of %d pictures placed by Vision's body pose, body %.2f m tall", cameras.count, shots, sorted[sorted.count / 2]))
+        }
         if let folder, !cameras.isEmpty, let data = try? JSONEncoder().encode(cameras) {
             try? data.write(to: folder.camerasFile)
         }
@@ -79,6 +110,10 @@ final class OwnCapture: NSObject, ARSessionDelegate {
     }
 
     private func handle(_ frame: ARFrame) {
+        if selfieTurn {
+            handleSelfieTurn(frame)
+            return
+        }
         if turning {
             handleTurning(frame)
             return
@@ -193,6 +228,79 @@ final class OwnCapture: NSObject, ARSessionDelegate {
         }
     }
 
+    /// Selfie camera, person turning: a picture every 0.45 s; Vision places each one from the body it sees.
+    private func handleSelfieTurn(_ frame: ARFrame) {
+        guard recording, shots < Self.maxShots, writing < 3, let folder, frame.timestamp - lastKeptAt >= 0.45 else { return }
+        lastKeptAt = frame.timestamp
+        shots += 1
+        let name = String(format: "IMG_%04d.jpg", shots)
+        let image = CIImage(cvPixelBuffer: frame.capturedImage).copyRendered()
+        let url = folder.images.appendingPathComponent(name)
+        let context = context
+        writing += 1
+        queue.async {
+            let pose = OwnCapture.bodyPose(image, context: context)
+            if let jpeg = OwnCapture.personOnly(image, context: context) { try? jpeg.write(to: url) }
+            Task { @MainActor in
+                self.writing -= 1
+                guard let pose else {
+                    self.seesBody = false
+                    return
+                }
+                self.seesBody = true
+                self.visionPlaces[name] = (pose.place, pose.up)
+                self.heights.append(pose.height)
+                // How far round: the camera's way round the body, about the body's up.
+                let up = simd_normalize(pose.up)
+                var flat = pose.place - up * simd_dot(pose.place, up)
+                guard simd_length(flat) > 0.1 else { return }
+                flat = simd_normalize(flat)
+                let side = simd_normalize(simd_cross(up, abs(up.x) < 0.9 ? SIMD3(1, 0, 0) : SIMD3(0, 0, 1)))
+                let yaw = atan2(simd_dot(flat, simd_cross(up, side)), simd_dot(flat, side))
+                if let last = self.lastYaw {
+                    var step = yaw - last
+                    if step > .pi { step -= 2 * .pi }
+                    if step < -.pi { step += 2 * .pi }
+                    if abs(step) < 1.2 { self.turned += step }
+                }
+                self.lastYaw = yaw
+                if self.recording, !self.turnedRound, abs(self.turned) > 2 * .pi + 0.25, self.shots >= 30 {
+                    self.turnedRound = true
+                    ScanLog.add("Selfie turn: all the way round, \(self.shots) pictures")
+                }
+            }
+        }
+    }
+
+    /// Vision's 3D body pose of a picture written on its side: where the camera was from the body's root (hips), the
+    /// body's up (root to the middle of the head) in the same space, and the body's height.
+    nonisolated static func bodyPose(_ image: CIImage, context: CIContext) -> (place: SIMD3<Float>, up: SIMD3<Float>, height: Float)? {
+        guard let cg = context.createCGImage(image, from: image.extent) else { return nil }
+        let request = VNDetectHumanBodyPose3DRequest()
+        let handler = VNImageRequestHandler(cgImage: cg, orientation: .right, options: [:])
+        guard (try? handler.perform([request])) != nil, let body = request.results?.first,
+              let head = try? body.recognizedPoint(.centerHead) else { return nil }
+        let up = head.position.columns.3.xyz
+        guard simd_length(up) > 0.1 else { return nil }
+        return (body.cameraOriginMatrix.columns.3.xyz, up, body.bodyHeight)
+    }
+
+    /// Vision's camera places turned so the body's up (the average over all pictures) is +Y, for the model's fit.
+    static func upright(_ places: [String: (place: SIMD3<Float>, up: SIMD3<Float>)]) -> [String: [Float]] {
+        guard !places.isEmpty else { return [:] }
+        let sum = places.values.reduce(SIMD3<Float>(0, 0, 0)) { $0 + simd_normalize($1.up) }
+        guard simd_length(sum) > 1e-3 else { return [:] }
+        let y = simd_normalize(sum)
+        let x = simd_normalize(simd_cross(y, abs(y.x) < 0.9 ? SIMD3(1, 0, 0) : SIMD3(0, 0, 1)))
+        let z = simd_cross(x, y)
+        var out: [String: [Float]] = [:]
+        for (name, value) in places {
+            let p = value.place
+            out[name] = [simd_dot(p, x), simd_dot(p, y), simd_dot(p, z)]
+        }
+        return out
+    }
+
     /// The picture with everything but the person (Vision's outline, kept generous for hair) made black. The picture
     /// is as the camera wrote it, on its side: Vision is told so (.right) and its outline is turned back.
     nonisolated static func personOnly(_ image: CIImage, context: CIContext) -> Data? {
@@ -216,6 +324,7 @@ final class OwnCapture: NSObject, ARSessionDelegate {
         }
         guard drawn else { return nil }
         var kept = 0
+        var keep = [Bool](repeating: false, count: w * h)
         for y in 0..<h {
             for x in 0..<w {
                 // The outline is upright when Vision turned it (taller than wide); the picture is on its side.
@@ -227,13 +336,12 @@ final class OwnCapture: NSObject, ARSessionDelegate {
                     mx = min(mw - 1, x * mw / w)
                     my = min(mh - 1, y * mh / h)
                 }
-                if base[my * row + mx] > 40 { kept += 1; continue }
-                let p = (y * w + x) * 4
-                pixels[p] = 0; pixels[p + 1] = 0; pixels[p + 2] = 0
+                if base[my * row + mx] > 40 { kept += 1; keep[y * w + x] = true }
             }
         }
         // No person in the picture: it is left out.
         guard kept > w * h / 100 else { return nil }
+        MaskFill.fill(&pixels, width: w, height: h, keep: keep)
         guard let provider = CGDataProvider(data: Data(pixels) as CFData),
               let made = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
@@ -274,5 +382,58 @@ enum ScanBake {
         scene.rootNode.addChildNode(holder)
         if scene.write(to: out, options: nil, delegate: nil, progressHandler: nil) { return true }
         return (try? FileManager.default.copyItem(at: source, to: out)) != nil
+    }
+}
+
+
+/// Phil's 1411 tests: black smears down the arms, sides and neck of scanned people and heads. The builder colours each
+/// part from a picture that saw it, and a part just outside a picture's person outline came out black. Outside the
+/// outline, a band of about 32 pixels is now filled with the person's own nearest colours, and only beyond it black.
+enum MaskFill {
+    static func fill(_ pixels: inout [UInt8], width w: Int, height h: Int, keep: [Bool], band: Int = 32) {
+        let step = 4
+        let cw = (w + step - 1) / step, ch = (h + step - 1) / step
+        var colour = [SIMD3<Float>](repeating: .zero, count: cw * ch)
+        var has = [Bool](repeating: false, count: cw * ch)
+        var counts = [Int](repeating: 0, count: cw * ch)
+        for y in 0..<h {
+            for x in 0..<w where keep[y * w + x] {
+                let c = (y / step) * cw + x / step, p = (y * w + x) * 4
+                colour[c] += SIMD3(Float(pixels[p]), Float(pixels[p + 1]), Float(pixels[p + 2]))
+                counts[c] += 1
+            }
+        }
+        for c in 0..<(cw * ch) where counts[c] > 0 {
+            colour[c] /= Float(counts[c])
+            has[c] = true
+        }
+        // Grown outward a cell at a time, each new cell the average of its filled neighbours.
+        for _ in 0..<max(1, band / step) {
+            var grown: [(Int, SIMD3<Float>)] = []
+            for cy in 0..<ch {
+                for cx in 0..<cw where !has[cy * cw + cx] {
+                    var sum = SIMD3<Float>(0, 0, 0)
+                    var n: Float = 0
+                    for dy in -1...1 {
+                        for dx in -1...1 {
+                            let nx = cx + dx, ny = cy + dy
+                            guard nx >= 0, ny >= 0, nx < cw, ny < ch, has[ny * cw + nx] else { continue }
+                            sum += colour[ny * cw + nx]
+                            n += 1
+                        }
+                    }
+                    if n > 0 { grown.append((cy * cw + cx, sum / n)) }
+                }
+            }
+            if grown.isEmpty { break }
+            for (c, value) in grown { colour[c] = value; has[c] = true }
+        }
+        for y in 0..<h {
+            for x in 0..<w where !keep[y * w + x] {
+                let c = (y / step) * cw + x / step, p = (y * w + x) * 4
+                let value = has[c] ? colour[c] : SIMD3<Float>(0, 0, 0)
+                pixels[p] = UInt8(min(255, max(0, value.x))); pixels[p + 1] = UInt8(min(255, max(0, value.y))); pixels[p + 2] = UInt8(min(255, max(0, value.z)))
+            }
+        }
     }
 }
