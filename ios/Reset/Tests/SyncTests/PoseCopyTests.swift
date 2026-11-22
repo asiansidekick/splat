@@ -144,7 +144,8 @@ func runPoseCopyTests() {
         let hips = lying.worlds[map.hips].columns.3.y + lying.lift
         let head = lying.worlds[map.head!].columns.3.y + lying.lift
         let toe = lying.worlds[index["mixamorig:LeftToeBase"]!].columns.3.y + lying.lift
-        expect(abs(upright.lift) < 0.005, "pose presets: standing stays where it stood (lift \(upright.lift))")
+        // (A few millimetres: the test figure's knees are a little bent at rest and the toes tip as the shins straighten.)
+        expect(abs(upright.lift) < 0.01, "pose presets: standing stays where it stood (lift \(upright.lift))")
         expect(hips > 0.04 && hips < 0.2 && head > 0.02 && head < 0.25 && toe < 0.35,
                "pose presets: on its back the body rests on the floor (hips \(hips), head \(head), toe \(toe) m up)")
         let spineTop = lying.worlds[map.spine.last!].columns.3.xyz - lying.worlds[map.hips].columns.3.xyz

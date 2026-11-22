@@ -563,8 +563,10 @@ struct RigPoser {
         var worlds = nodes.map(\.world)
         for i in order {
             let parent = nodes[i].parent
-            guard parent >= 0, parent < nodes.count else { continue }
-            var world = worlds[parent] * nodes[i].local
+            // A bone at the top of the tree (hips with no parent) turns in place: a body lying down turns about it.
+            let hasParent = parent >= 0 && parent < nodes.count
+            guard hasParent || byBone[i] != nil else { continue }
+            var world = hasParent ? worlds[parent] * nodes[i].local : nodes[i].world
             if let turn = byBone[i] {
                 var rest = nodes[i].world
                 rest.columns.3 = SIMD4(0, 0, 0, 1)
@@ -592,7 +594,11 @@ struct RigPoser {
         var locals = nodes.map(\.local)
         for i in 0..<nodes.count {
             let parent = nodes[i].parent
-            guard parent >= 0, parent < nodes.count else { continue }
+            guard parent >= 0, parent < nodes.count else {
+                // A top bone that turned (see worlds(for:)): its place is the model's.
+                if posed.worlds[i] != nodes[i].world { locals[i] = nodes[i].local * nodes[i].world.inverse * posed.worlds[i] }
+                continue
+            }
             locals[i] = posed.worlds[parent].inverse * posed.worlds[i]
         }
         return (locals, posed.lift)
