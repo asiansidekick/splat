@@ -4,8 +4,9 @@ import simd
 
 /// Putting a scanned head on a body (Phil, 2026-11-22: "it's too small, needs adjustment, the head to body menu is
 /// ugly, need to see the body"). The bodies are pictures along the bottom edge; the chosen one stands in the middle
-/// wearing the head, sized at first to its own head. Pinch sizes the head, dragging up or down raises or lowers it,
-/// dragging sideways turns the body to look at it from the side. Place puts it in the room as shown.
+/// wearing the head, sized at first to its own head. Pinch sizes the head, dragging up or down raises or lowers it.
+/// From the front, dragging sideways turns the head; from the side (Phil's 1408 test: the head stood too far
+/// forward), it moves the head forward or back. Place puts it in the room as shown.
 struct HeadFitScreen: View {
     let head: HeadFolder
     /// A character to begin with (from a character's own menu); else the first body.
@@ -20,7 +21,8 @@ struct HeadFitScreen: View {
     @State private var fits: [Int: HeadFit] = [:]
     @State private var fit = HeadFit()
     @State private var pinchFrom: Float?
-    @State private var dragFrom: (lift: Float, turn: Float)?
+    @State private var dragFrom: (lift: Float, across: Float)?
+    @State private var side = false
     @State private var dragUpDown: Bool?
     @State private var close = true
 
@@ -40,6 +42,13 @@ struct HeadFitScreen: View {
                 HStack {
                     Button("Back", action: cancel).font(.body.weight(.semibold)).foregroundStyle(.white)
                     Spacer()
+                    Button(side ? "Front" : "Side") {
+                        side.toggle()
+                        stage.setTurn(side ? .pi / 2 : 0)
+                    }
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Color.white.opacity(0.15), in: Capsule())
                     Button(close ? "Whole body" : "Close up") {
                         close.toggle()
                         stage.frame(close: close)
@@ -52,7 +61,7 @@ struct HeadFitScreen: View {
                 .padding(.horizontal, 18).padding(.top, 10)
                 Spacer()
                 HStack(alignment: .bottom) {
-                    Text("Pinch to size the head. Drag up or down to raise it, sideways to look round.")
+                    Text(side ? "Pinch to size the head. Drag to move it up, down, forward or back." : "Pinch to size the head. Drag up or down to raise it, sideways to turn it.")
                         .font(.caption.weight(.semibold)).foregroundStyle(.white)
                         .shadow(color: .black, radius: 3)
                         .fixedSize(horizontal: false, vertical: true)
@@ -132,7 +141,7 @@ struct HeadFitScreen: View {
         DragGesture(minimumDistance: 6)
             .onChanged { value in
                 if dragFrom == nil {
-                    dragFrom = (fit.lift, stage.turn)
+                    dragFrom = (fit.lift, side ? fit.forward : fit.turn)
                     dragUpDown = abs(value.translation.height) > abs(value.translation.width)
                 }
                 guard let from = dragFrom else { return }
@@ -142,7 +151,14 @@ struct HeadFitScreen: View {
                     fit.lift = min(0.25, max(-0.25, from.lift - Float(value.translation.height) * perPoint))
                     stage.apply(fit)
                 } else {
-                    stage.setTurn(from.turn + Float(value.translation.width) * 0.01)
+                    if side {
+                        // Seen from the side the face looks right: right is forward.
+                        let perPoint: Float = close ? 0.0004 : 0.0015
+                        fit.forward = min(0.2, max(-0.2, from.across + Float(value.translation.width) * perPoint))
+                    } else {
+                        fit.turn = from.across + Float(value.translation.width) * 0.006
+                    }
+                    stage.apply(fit)
                 }
             }
             .onEnded { _ in
@@ -226,7 +242,7 @@ final class HeadFitStage: ObservableObject {
         let node: SCNNode
         switch target {
         case .mannequin(let body):
-            if given == nil { fit = HeadFit.auto(mesh, room: Mannequin.headRoom(body, height: nil, proportion: nil)) }
+            if given == nil { fit = Mannequin.headFit(mesh, info: HeadInfo.load(head.url), body: body, height: nil, proportion: nil) }
             node = Mannequin.make(body, pose: MannequinPose.standing, head: HeadFit.wrap(mesh, pictures: head.url, fit: fit))
             height = Mannequin.defaultHeight(body)
         case .character(let url):

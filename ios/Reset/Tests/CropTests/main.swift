@@ -548,7 +548,7 @@ do {
     let chin = HeadMath.chin(head)
     check(chin.map { abs($0 - -0.115) < 0.02 } ?? false, "Head: chin found from the face's profile (\(chin ?? 0), truly -0.115)")
     let cut = HeadMath.neckCut(head, chin: chin ?? -0.115)
-    check(abs(cut.x) < 0.01 && abs(cut.z - -0.02) < 0.015 && abs(cut.y - ((chin ?? -0.115) - 0.035)) < 1e-4, "Head: neck cut across the middle of the neck (\(cut))")
+    check(abs(cut.x) < 0.01 && abs(cut.z - (0.115 - 0.12)) < 0.01 && abs(cut.y - ((chin ?? -0.115) - 0.035)) < 1e-4, "Head: neck cut across the middle of the neck (\(cut))")
     check(HeadMath.chin(head.filter { $0.y > 0.05 }) == nil, "Head: no chin found without a face")
 }
 

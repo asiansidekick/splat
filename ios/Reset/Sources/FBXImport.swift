@@ -136,6 +136,18 @@ enum FBXImport {
             }
         }
         var headTrianglesLeftOut = 0
+        // Phil's 1408 test: bits of the character's own neck and hair stuck out round a scanned head. Everything of the
+        // skin above the character's chin, close round its neck, goes too. The chin is taken as 70% of the way from the
+        // neck joint to the head joint (Mixamo's skeletons put the head joint level with the jaw).
+        var chinCut: (y: Float, x: Float, z: Float, reach: Float)?
+        if let map = rigMap, let headIndex = map.head, !headBones.isEmpty {
+            let headAt = rigNodes[headIndex].position
+            var neck = headAt - SIMD3<Float>(0, 10, 0)
+            let below = rigNodes[headIndex].parent
+            if let neckIndex = map.neck { neck = rigNodes[neckIndex].position } else if below >= 0, below < rigNodes.count { neck = rigNodes[below].position }
+            let span = max(1e-4, headAt.y - neck.y)
+            chinCut = (neck.y + 0.7 * span, headAt.x, headAt.z, 1.6 * span)
+        }
         /// The top of the character's own head (file units), to size a scanned head to it.
         var ownHeadTop = -Float.greatestFiniteMagnitude
         // Points of the skin with the bone that pulls each most, to measure the torso (Phil, 2026-11-20: arms must not
@@ -167,6 +179,12 @@ enum FBXImport {
                     return w > 0.5
                 }
                 if let onHead { for v in 0..<count where onHead[v] { ownHeadTop = max(ownHeadTop, positions[v * 3 + 1]) } }
+                if let chin = chinCut, let marked = onHead {
+                    onHead = (0..<count).map { v in
+                        let dx = positions[v * 3] - chin.x, dz = positions[v * 3 + 2] - chin.z
+                        return marked[v] || (positions[v * 3 + 1] > chin.y && dx * dx + dz * dz < chin.reach * chin.reach)
+                    }
+                }
             }
             var sources = [
                 SCNGeometrySource(data: Data(bytes: positions, count: count * 12), semantic: .vertex, vectorCount: count, usesFloatComponents: true,
@@ -312,8 +330,9 @@ enum FBXImport {
             // Phil, 2026-11-22: "it's too small, needs adjustment". As set on the Put on a body screen, or else as tall
             // as the character's own head was.
             let cutY = ScanRig.neckCut(neck: neck, head: headAt).y
-            let room = ownHeadTop > cutY ? (ownHeadTop - cutY) * scale : 0.24
-            let fit = HeadFit.load(textures) ?? HeadFit.auto(head, room: room)
+            let chinY = neck.y + 0.7 * max(1e-4, headAt.y - neck.y)
+            let room = ownHeadTop > chinY ? (ownHeadTop - chinY) * scale : 0.22
+            let fit = HeadFit.load(textures) ?? HeadFit.auto(head, info: HeadInfo.load(textures), crown: room, chinAt: (chinY - cutY) * scale)
             headFit = fit
             let holder = SCNNode()
             holder.name = "fbx.scannedHead"

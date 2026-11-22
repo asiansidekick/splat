@@ -180,18 +180,23 @@ enum HeadMath {
     }
 
     /// Where the head is cut from its neck (the head piece's 0,0,0, as ScanRig.headPiece cuts a person's head): 3.5 cm
-    /// under the chin, across the middle of the neck. Its front is read from the neck's own profile where there is one.
+    /// under the chin, across the middle of the neck. Front to back it is set from the tip of the nose, 12 cm in front
+    /// of where the skull sits on the neck (about level with the ears): the face is always well scanned, the back of
+    /// the head and neck often aren't (Phil's 1408 test: a selfie head stood 8 cm too far forward on its body).
     static func neckCut(_ points: [SIMD3<Float>], chin: Float) -> SIMD3<Float> {
         let y = chin - 0.035
-        var front = -Float.greatestFiniteMagnitude
+        var nose = -Float.greatestFiniteMagnitude, front = -Float.greatestFiniteMagnitude
         var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude), high = -low
         for p in points {
+            if abs(p.x) < 0.03, p.y > chin + 0.03, p.y < chin + 0.1 { nose = max(nose, p.z) }
             if abs(p.y - y) < 0.012, abs(p.x) < 0.03 { front = max(front, p.z) }
             if p.y > y { low = simd_min(low, p); high = simd_max(high, p) }
         }
         let midX = low.x <= high.x ? (low.x + high.x) / 2 : 0
-        // A neck is about 11 cm front to back; its middle sits a little behind the middle of the skull.
-        let z = front > -1 ? front - 0.055 : (low.z <= high.z ? (low.z + high.z) / 2 - 0.025 : -0.02)
+        let z: Float
+        if nose > -1 { z = nose - 0.12 }
+        else if front > -1 { z = front - 0.055 }
+        else { z = low.z <= high.z ? (low.z + high.z) / 2 - 0.025 : -0.02 }
         return SIMD3(midX, y, z)
     }
 }

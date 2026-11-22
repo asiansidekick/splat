@@ -382,6 +382,7 @@ struct HeadCheckView: View {
     @State private var whole: BodyMesh?
     @State private var cut: Float = -0.145
     @State private var turn: Float = 0
+    @State private var chin: Float?
     @State private var start: (cut: Float, turn: Float)?
     @State private var vertical: Bool?
     @State private var saving = false
@@ -433,7 +434,7 @@ struct HeadCheckView: View {
             let loaded = await Task.detached(priority: .userInitiated) { () -> (BodyMesh?, HeadCutSettings?) in
                 (HeadPiece.loadWhole(target), HeadPiece.settings(target))
             }.value
-            if let settings = loaded.1 { cut = settings.cut; turn = settings.turn }
+            if let settings = loaded.1 { cut = settings.cut; turn = settings.turn; chin = settings.chin }
             whole = loaded.0
             if whole == nil { problem = "The head couldn't be opened." }
         }
@@ -462,7 +463,7 @@ struct HeadCheckView: View {
     private func save() {
         guard let whole else { return }
         saving = true
-        let target = folder, settings = HeadCutSettings(cut: cut, turn: turn)
+        let target = folder, settings = HeadCutSettings(cut: cut, turn: turn, chin: chin)
         Task {
             let result = await Task.detached(priority: .userInitiated) { () -> Error? in
                 do { try HeadPiece.save(target, whole: whole, settings: settings); return nil } catch { return error }

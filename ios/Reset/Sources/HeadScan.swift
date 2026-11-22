@@ -114,6 +114,19 @@ struct HeadCaptureRecord: Codable {
 struct HeadCutSettings: Codable {
     var cut: Float
     var turn: Float
+    /// The chin's height in head space (heads made before 2026-11-22 afternoon have none).
+    var chin: Float?
+}
+
+/// What a character needs to know of a scanned head beyond its shape: how far its chin is above its neck cut
+/// (metres), so the head is lined up and sized by its face (Phil's 1408 test: lined up by the neck it sat low and
+/// too big). Kept beside the head's files as "scanned-head-info.json" so it travels with them.
+struct HeadInfo: Codable {
+    var chin: Float
+    static let file = "scanned-head-info.json"
+    static func load(_ folder: URL) -> HeadInfo? {
+        (try? Data(contentsOf: folder.appendingPathComponent(file))).flatMap { try? JSONDecoder().decode(HeadInfo.self, from: $0) }
+    }
 }
 
 // MARK: Taking the pictures
@@ -600,7 +613,7 @@ enum HeadBuilder {
         try ScanRig.headData(head).write(to: folder.wholeFile, options: .atomic)
         let chin = HeadMath.chin(head.positions) ?? record.chin ?? -0.11
         Diagnostics.log(String(format: "Head scan: chin %.1f cm below the middle of the head (%@)", -chin * 100, HeadMath.chin(head.positions) == nil ? "guessed" : "from the face's profile"))
-        try HeadPiece.save(folder, whole: head, settings: HeadCutSettings(cut: chin - 0.035, turn: 0))
+        try HeadPiece.save(folder, whole: head, settings: HeadCutSettings(cut: chin - 0.025, turn: 0, chin: chin))
         try? FileManager.default.removeItem(at: folder.maskedFolder)
         progress(1)
         var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude), high = -low
@@ -634,10 +647,66 @@ enum HeadPiece {
     /// The head piece: turned, cut at the neck, its cut at 0,0,0 (ScanRig.headPiece's way).
     static func piece(_ whole: BodyMesh, settings: HeadCutSettings) -> BodyMesh {
         let head = turned(whole, settings.turn)
-        let cut = HeadMath.neckCut(head.positions, chin: settings.cut + 0.035)
-        var out = ScanRig.part(of: head) { corners in corners.allSatisfy { $0.y > settings.cut } }
+        var cut = HeadMath.neckCut(head.positions, chin: settings.chin ?? settings.cut + 0.035)
+        cut.y = settings.cut
+        // Phil's 1408 test: the neck's bottom was ragged. Triangles crossing the cut are cut along it, so it ends in a
+        // clean edge.
+        var out = clip(head, above: settings.cut)
         out = ScanRig.mainPiece(out).0
         out.positions = out.positions.map { $0 - cut }
+        return out
+    }
+
+    /// The part of a mesh above height `y`, triangles crossing it cut exactly along it (new corners in between, with
+    /// their normals and picture places in between too).
+    static func clip(_ mesh: BodyMesh, above y: Float) -> BodyMesh {
+        var out = BodyMesh(positions: [], normals: [], uvs: mesh.uvs == nil ? nil : [], triangles: [], parts: [])
+        var kept = [Int32](repeating: -1, count: mesh.positions.count)
+        func original(_ i: Int) -> UInt32 {
+            if kept[i] < 0 {
+                kept[i] = Int32(out.positions.count)
+                out.positions.append(mesh.positions[i])
+                out.normals.append(i < mesh.normals.count ? mesh.normals[i] : SIMD3(0, 1, 0))
+                if let uvs = mesh.uvs { out.uvs!.append(i < uvs.count ? uvs[i] : .zero) }
+            }
+            return UInt32(kept[i])
+        }
+        func between(_ a: Int, _ b: Int) -> UInt32 {
+            let pa = mesh.positions[a], pb = mesh.positions[b]
+            let t = (y - pa.y) / (pb.y - pa.y)
+            out.positions.append(pa + (pb - pa) * t)
+            let na = a < mesh.normals.count ? mesh.normals[a] : SIMD3(0, 1, 0), nb = b < mesh.normals.count ? mesh.normals[b] : SIMD3(0, 1, 0)
+            let n = na + (nb - na) * t
+            out.normals.append(simd_length(n) > 1e-6 ? simd_normalize(n) : SIMD3(0, 1, 0))
+            if let uvs = mesh.uvs {
+                let ua = a < uvs.count ? uvs[a] : .zero, ub = b < uvs.count ? uvs[b] : .zero
+                out.uvs!.append(ua + (ub - ua) * t)
+            }
+            return UInt32(out.positions.count - 1)
+        }
+        for part in mesh.parts {
+            let first = out.triangles.count / 3
+            for t in part.firstTriangle..<min(mesh.triangleCount, part.firstTriangle + part.triangleCount) {
+                let c = (0..<3).map { Int(mesh.triangles[t * 3 + $0]) }
+                let above = c.map { mesh.positions[$0].y > y }
+                let count = above.filter { $0 }.count
+                if count == 0 { continue }
+                if count == 3 {
+                    out.triangles += c.map(original)
+                    continue
+                }
+                // Round the triangle in order, keeping what is above and adding where each side crosses.
+                var ring: [UInt32] = []
+                for k in 0..<3 {
+                    let a = c[k], b = c[(k + 1) % 3]
+                    if above[k] { ring.append(original(a)) }
+                    if above[k] != above[(k + 1) % 3] { ring.append(between(a, b)) }
+                }
+                for k in 1..<(ring.count - 1) where ring.count >= 3 { out.triangles += [ring[0], ring[k], ring[k + 1]] }
+            }
+            let made = out.triangles.count / 3 - first
+            if made > 0 { out.parts.append(BodyMesh.Part(firstTriangle: first, triangleCount: made, texture: part.texture, color: part.color)) }
+        }
         return out
     }
 
@@ -648,6 +717,9 @@ enum HeadPiece {
         guard head.triangleCount > 100 else { throw HeadBuilder.Failure.nothingLeft }
         try ScanRig.headData(head).write(to: folder.headFile, options: .atomic)
         try? JSONEncoder().encode(settings).write(to: folder.settingsFile)
+        if let chin = settings.chin {
+            try? JSONEncoder().encode(HeadInfo(chin: chin - settings.cut)).write(to: folder.url.appendingPathComponent(HeadInfo.file), options: .atomic)
+        }
         let url = folder.url
         Task { @MainActor in
             if let picture = HeadPiece.thumbnail(head, pictures: url), let jpeg = picture.jpegData(compressionQuality: 0.85) {
@@ -767,11 +839,17 @@ struct HeadFit: Codable, Equatable {
     /// The height of a head piece above its neck cut.
     static func height(of head: BodyMesh) -> Float { head.positions.map(\.y).max() ?? 0.22 }
 
-    /// The size that makes the head as tall above its cut as the character's own head was (`room`, metres).
-    static func auto(_ head: BodyMesh, room: Float) -> HeadFit {
+    /// The fit that gives the head the character's own chin-to-crown height with its chin where the character's was.
+    /// `crown`: the character's chin to the top of its head; `chinAt`: its chin's height above where the head's neck
+    /// cut goes (metres). Without the head's chin (`info`), it is sized by its whole height above the cut.
+    static func auto(_ head: BodyMesh, info: HeadInfo?, crown: Float, chinAt: Float) -> HeadFit {
         let tall = height(of: head)
-        guard tall > 0.03, room > 0.05 else { return HeadFit() }
-        return HeadFit(scale: min(2.5, max(0.4, room / tall)))
+        guard tall > 0.05, crown > 0.05 else { return HeadFit() }
+        guard let chin = info?.chin, chin >= 0, chin < tall - 0.05 else {
+            return HeadFit(scale: min(2.5, max(0.4, (crown + chinAt) / tall)))
+        }
+        let scale = min(2.5, max(0.4, crown / (tall - chin)))
+        return HeadFit(scale: scale, lift: chinAt - chin * scale)
     }
 
     /// The head as a node inside a node that carries the fit (found by `nodeName` to adjust it live).

@@ -2412,7 +2412,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     /// (HeadFit beside the head), or else sized to the mannequin's own head.
     static func scannedHead(_ place: URL, on spec: MannequinSpec) -> SCNNode? {
         guard let data = try? Data(contentsOf: place.appendingPathComponent(ScanRig.headFile)), let mesh = ScanRig.head(from: data) else { return nil }
-        let fit = HeadFit.load(place) ?? HeadFit.auto(mesh, room: Mannequin.headRoom(spec.body, height: spec.height, proportion: spec.proportion))
+        let fit = HeadFit.load(place) ?? Mannequin.headFit(mesh, info: HeadInfo.load(place), body: spec.body, height: spec.height, proportion: spec.proportion)
         return HeadFit.wrap(mesh, pictures: place, fit: fit)
     }
 
