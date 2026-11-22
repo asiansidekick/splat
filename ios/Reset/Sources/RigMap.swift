@@ -563,9 +563,10 @@ struct RigPoser {
         var worlds = nodes.map(\.world)
         for i in order {
             let parent = nodes[i].parent
-            // A bone at the top of the tree (hips with no parent) turns in place: a body lying down turns about it.
+            // A bone at the top of the tree (hips with no parent) turns in place when the body lies down, turning the
+            // whole body about it. (Otherwise it stays as it was, as before lying was added.)
             let hasParent = parent >= 0 && parent < nodes.count
-            guard hasParent || byBone[i] != nil else { continue }
+            guard hasParent || (byBone[i] != nil && pose.detail.lie != nil) else { continue }
             var world = hasParent ? worlds[parent] * nodes[i].local : nodes[i].world
             if let turn = byBone[i] {
                 var rest = nodes[i].world
