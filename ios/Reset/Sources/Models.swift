@@ -587,7 +587,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         } else if let joint = poseHandle {
             heldPoseWord = Self.poseWord(joint)
         } else if let joint = poseSelected {
-            heldPoseWord = poseWheels.wheels.isEmpty ? Self.poseWord(joint) : Self.poseWord(joint) + " · or turn a ring"
+            heldPoseWord = poseWheels.wheels.isEmpty ? Self.poseWord(joint) : Self.poseWord(joint) + " · or turn an arrow"
         } else {
             heldPoseWord = nil
         }
@@ -3028,7 +3028,7 @@ private struct MoveHint: View {
         case .size: return ("arrow.up.and.down.circle", "pinch, or drag ↕, to scale · the figures follow")
         case .tilt: return ("rotate.3d", cutout ? "↕ tip  ↔ slant" : "push a lever's knob to swing it · or drag anywhere · twist: roll")
         case .lift: return ("arrow.up.and.down", "↑ higher")
-        case .pose: return ("hand.draw", "drag a dot · tap one for its turning rings · white arrows: turn round")
+        case .pose: return ("hand.draw", "drag a dot · tap one for its turning arrows · white arrows: turn round")
         case .light: return ("arrow.up.and.down.and.arrow.left.and.right", "drag: change what is picked at the top · Direction: ↔ round, ↕ height")
         }
     }

@@ -48,6 +48,12 @@ func runPoseAxesTests() {
         let target = wheel.turn(start, by: 50)
         let turned = wheel.turnToward(project(target)!, grabbed: start, near: 0, project: project)
         expect(abs(turned - 50) < 1, "pose wheels: the grabbed spot comes under the finger (\(turned))")
+        // The curved arrow is half the rim, centred on the side the moving point is on.
+        let arc = wheel.arc(31)
+        let onRim = arc.allSatisfy { abs(simd_distance($0, wheel.centre) - wheel.radius) < 1e-4 && abs(simd_dot($0 - wheel.centre, wheel.normal)) < 1e-4 }
+        let middle = simd_distance(arc[15], start), across = simd_distance(arc[0], arc[30])
+        expect(onRim && middle < 1e-3 && abs(across - 2 * wheel.radius) < 1e-3,
+               "pose wheels: the curved arrow is a half circle round the moving point (\(middle), \(across))")
     } else {
         expect(false, "pose wheels: a measured wheel lies round the turn")
     }

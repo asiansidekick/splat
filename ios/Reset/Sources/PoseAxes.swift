@@ -161,6 +161,21 @@ struct PoseWheel {
         }
     }
 
+    /// Points along a half of the rim (Phil, 2026-11-22: curved arrows, not full rings), centred on the side the
+    /// joint's moving point is on, from one end to the other.
+    func arc(_ count: Int, span: Float = 180) -> [SIMD3<Float>] {
+        var out = probe - centre
+        out -= simd_dot(out, normal) * normal
+        if simd_length(out) < 1e-6 {
+            out = simd_cross(normal, SIMD3(0, 1, 0))
+            if simd_length(out) < 0.1 { out = simd_cross(normal, SIMD3(1, 0, 0)) }
+        }
+        let start = centre + simd_normalize(out) * radius
+        return (0..<count).map { k in
+            turn(start, by: -span / 2 + span * Float(k) / Float(max(count - 1, 1)))
+        }
+    }
+
     /// How far (in the world, degrees) the grabbed spot of the rim must turn to come under the finger, near where it
     /// was last (`near`) so a wheel seen edge-on doesn't flip. `project` puts a world point on the screen.
     func turnToward(_ finger: SIMD2<Float>, grabbed: SIMD3<Float>, near: Float, project: (SIMD3<Float>) -> SIMD2<Float>?) -> Float {

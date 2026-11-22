@@ -1,7 +1,7 @@
 import SceneKit
 import UIKit
 
-/// The wheels shown round a selected pose handle, one for each way its joint turns (Phil, 2026-11-21), and dragging a
+/// The curved arrows (wheels) shown round a selected pose handle, one for each way its joint turns (Phil, 2026-11-21), and dragging a
 /// turning handle so its joint goes the way the finger goes. Shared by live view (imported characters) and the Pose
 /// screen (mannequins); the maths is in PoseAxes.swift.
 @MainActor
@@ -63,7 +63,8 @@ final class PoseWheelSet {
         handleStart = nil
     }
 
-    /// Thin hoops round the joint, drawn over everything so they can always be seen and grabbed.
+    /// Half-circle arrows round the joint, a head at each end, drawn over everything so they can always be seen and
+    /// grabbed (Phil, 2026-11-22: curved arrows, semicircles, not full rings).
     private func draw(_ parent: SCNNode?) {
         holder?.removeFromParentNode()
         guard let parent, !wheels.isEmpty else { return }
@@ -72,38 +73,85 @@ final class PoseWheelSet {
         parent.addChildNode(holder)
         holder.simdWorldTransform = matrix_identity_float4x4
         for (index, wheel) in wheels.enumerated() {
-            let hoop = SCNTorus(ringRadius: CGFloat(wheel.radius), pipeRadius: CGFloat(max(wheel.radius * 0.035, 0.002)))
-            hoop.ringSegmentCount = 64
-            hoop.pipeSegmentCount = 8
             let material = SCNMaterial()
             material.lightingModel = .constant
             material.diffuse.contents = (index < colours.count ? colours[index] : .white).withAlphaComponent(0.9)
             material.readsFromDepthBuffer = false
             material.writesToDepthBuffer = false
-            hoop.materials = [material]
-            let ring = SCNNode(geometry: hoop)
-            ring.name = "posering"
-            ring.renderingOrder = 2100
-            // A torus lies round its own Y.
-            ring.simdOrientation = simd_quatf(from: SIMD3(0, 1, 0), to: wheel.normal)
-            ring.simdPosition = wheel.centre
-            holder.addChildNode(ring)
+            material.isDoubleSided = true
+            let thick = max(wheel.radius * 0.04, 0.0025)
+            let arrow = SCNNode()
+            arrow.name = "posering"
+            arrow.renderingOrder = 2100
+            // The line stops short of each end, where the heads take over.
+            let headLength = max(wheel.radius * 0.3, thick * 5)
+            let headDegrees = min(headLength / wheel.radius * 180 / .pi, 40)
+            let line = wheel.arc(40, span: 180 - 2 * headDegrees * 0.8)
+            let tube = SCNNode(geometry: Self.tube(line, radius: thick, material: material))
+            tube.name = "posering"
+            tube.renderingOrder = 2100
+            arrow.addChildNode(tube)
+            let ends = wheel.arc(2, span: 180)
+            for (tip, from) in [(ends[1], line[line.count - 1]), (ends[0], line[0])] {
+                let cone = SCNCone(topRadius: 0, bottomRadius: CGFloat(thick * 3), height: CGFloat(simd_distance(tip, from) + thick))
+                cone.radialSegmentCount = 12
+                cone.materials = [material]
+                let head = SCNNode(geometry: cone)
+                head.name = "posering"
+                head.renderingOrder = 2100
+                let along = simd_normalize(tip - from)
+                head.simdOrientation = simd_quatf(from: SIMD3(0, 1, 0), to: along)
+                head.simdPosition = (tip + from) / 2
+                arrow.addChildNode(head)
+            }
+            holder.addChildNode(arrow)
         }
         self.holder = holder
     }
 
-    /// The wheel being turned stands out; the other one fades.
+    /// A round tube through the points.
+    private static func tube(_ points: [SIMD3<Float>], radius: Float, material: SCNMaterial) -> SCNGeometry {
+        let sides = 8
+        var vertices: [SCNVector3] = []
+        var indices: [Int32] = []
+        for (i, p) in points.enumerated() {
+            let ahead = points[min(i + 1, points.count - 1)] - points[max(i - 1, 0)]
+            let t = simd_length(ahead) > 1e-9 ? simd_normalize(ahead) : SIMD3<Float>(0, 1, 0)
+            var u = simd_cross(t, SIMD3(0, 1, 0))
+            if simd_length(u) < 0.1 { u = simd_cross(t, SIMD3(1, 0, 0)) }
+            u = simd_normalize(u)
+            let v = simd_cross(t, u)
+            for k in 0..<sides {
+                let a = Float(k) / Float(sides) * 2 * .pi
+                let q = p + (u * cos(a) + v * sin(a)) * radius
+                vertices.append(SCNVector3(q.x, q.y, q.z))
+            }
+        }
+        for i in 0..<(points.count - 1) {
+            for k in 0..<sides {
+                let a = Int32(i * sides + k), b = Int32(i * sides + (k + 1) % sides)
+                let c = a + Int32(sides), d = b + Int32(sides)
+                indices += [a, c, b, b, c, d]
+            }
+        }
+        let geometry = SCNGeometry(sources: [SCNGeometrySource(vertices: vertices)],
+                                   elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
+        geometry.materials = [material]
+        return geometry
+    }
+
+    /// The arrow being turned stands out; the other one fades.
     private func highlight() {
         guard let rings = holder?.childNodes else { return }
         for (index, ring) in rings.enumerated() { ring.opacity = grab == nil || grab?.index == index ? 1 : 0.3 }
     }
 
-    /// Grabs the wheel whose rim is under the finger (within about a thumb's width). True when one was grabbed.
+    /// Grabs the arrow under the finger (within about a thumb's width). True when one was grabbed.
     func pick(_ finger: SIMD2<Float>, pose: MannequinPose, project: (SIMD3<Float>) -> SIMD2<Float>?) -> Bool {
         grab = nil
         var best: (index: Int, spot: SIMD3<Float>, distance: Float)?
         for (index, wheel) in wheels.enumerated() {
-            for spot in wheel.rim(72) {
+            for spot in wheel.arc(48) {
                 guard let shown = project(spot) else { continue }
                 let distance = simd_length(shown - finger)
                 if distance < (best?.distance ?? 28) { best = (index, spot, distance) }
