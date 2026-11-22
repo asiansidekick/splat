@@ -2375,7 +2375,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         let url = folder.appendingPathComponent(model.file)
         let node = SCNNode()
         node.name = model.id.uuidString
-        if let spec = model.mannequin, let worn = spec.head, let head = Self.scannedHead(folder.appendingPathComponent(worn, isDirectory: true)) {
+        if let spec = model.mannequin, let worn = spec.head, let head = Self.scannedHead(folder.appendingPathComponent(worn, isDirectory: true), on: spec) {
             // Phil, 2026-11-22: a mannequin wearing a scanned head is made here, with the head, rather than read from
             // its file (which has the plain head): the head's photographs show unlit, like the scan.
             node.addChildNode(Mannequin.make(spec.body, pose: spec.pose, height: spec.height, proportion: spec.proportion, head: head))
@@ -2408,18 +2408,19 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
 
     /// A scanned head kept in a folder (HeadScan.swift), as a node. Nil when the folder or its head is missing (a
     /// reference synced from a phone that had the head, say): the mannequin then wears its plain head.
-    private static func scannedHead(_ place: URL) -> SCNNode? {
+    /// Phil, 2026-11-22: "it's too small, needs adjustment". Sized and placed as set on the Put on a body screen
+    /// (HeadFit beside the head), or else sized to the mannequin's own head.
+    static func scannedHead(_ place: URL, on spec: MannequinSpec) -> SCNNode? {
         guard let data = try? Data(contentsOf: place.appendingPathComponent(ScanRig.headFile)), let mesh = ScanRig.head(from: data) else { return nil }
-        let node = FBXImport.headNode(mesh, textures: place)
-        node.name = "mannequin.scannedHead"
-        return node
+        let fit = HeadFit.load(place) ?? HeadFit.auto(mesh, room: Mannequin.headRoom(spec.body, height: spec.height, proportion: spec.proportion))
+        return HeadFit.wrap(mesh, pictures: place, fit: fit)
     }
 
     /// Phil, 2026-11-22: "have that as an option to place on any character". A mannequin standing where the camera
     /// points (or at `base`), wearing a scanned head. The head's files are copied in beside the mannequin, so the
     /// reference keeps it. Returns false, with `modelError` set, if it could not.
     @discardableResult
-    func addMannequin(_ body: MannequinBody, head: HeadFolder, base: simd_float4x4?) -> Bool {
+    func addMannequin(_ body: MannequinBody, head: HeadFolder, fit: HeadFit? = nil, base: simd_float4x4?) -> Bool {
         let height = Mannequin.defaultHeight(body)
         let pose = MannequinPose.standing
         guard let url = Examples.file(for: Mannequin.make(body, pose: pose, height: height), name: "\(body.rawValue) with \(head.title)'s head") else {
@@ -2435,6 +2436,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         do {
             try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
             for file in head.headFiles { try FileManager.default.copyItem(at: file, to: target.appendingPathComponent(file.lastPathComponent)) }
+            try fit?.save(to: target)
         } catch {
             Diagnostics.log("Head scan: could not copy \(head.title) beside the mannequin: \(error)")
             modelError = "Could not put the head on."

@@ -603,7 +603,11 @@ enum HeadBuilder {
         try HeadPiece.save(folder, whole: head, settings: HeadCutSettings(cut: chin - 0.035, turn: 0))
         try? FileManager.default.removeItem(at: folder.maskedFolder)
         progress(1)
-        Diagnostics.log(String(format: "Head scan: head made, %d triangles, %.0f s", head.triangleCount, Date().timeIntervalSince(started)))
+        var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude), high = -low
+        for p in head.positions { low = simd_min(low, p); high = simd_max(high, p) }
+        Diagnostics.log(String(format: "Head scan: head made, %d triangles, %.0f x %.0f x %.0f cm, middle at %.0f, %.0f, %.0f cm, %.0f s", head.triangleCount,
+                               (high.x - low.x) * 100, (high.y - low.y) * 100, (high.z - low.z) * 100,
+                               (low.x + high.x) * 50, (low.y + high.y) * 50, (low.z + high.z) * 50, Date().timeIntervalSince(started)))
     }
 }
 
@@ -695,7 +699,7 @@ enum HeadPiece {
     /// "<character> with <head>'s head": a copy of an FBX character with this head kept beside it, for FBXImport to
     /// put on its head bone (as ScanCharacterMaker.putHead does with a head from a body scan). The character's own
     /// file is not changed.
-    static func put(_ folder: HeadFolder, on character: URL) throws -> URL {
+    static func put(_ folder: HeadFolder, on character: URL, fit: HeadFit? = nil) throws -> URL {
         let manager = FileManager.default
         let place = character.deletingLastPathComponent()
         let base = (character.deletingPathExtension().lastPathComponent + " with \(folder.title)'s head").replacingOccurrences(of: "/", with: "-")
@@ -718,6 +722,7 @@ enum HeadPiece {
         for file in folder.headFiles {
             try manager.copyItem(at: file, to: textures.appendingPathComponent(file.lastPathComponent))
         }
+        try fit?.save(to: textures)
         Diagnostics.log("Head scan: \(folder.title) put on \(character.lastPathComponent) as \(target.lastPathComponent)")
         return target
     }
@@ -727,5 +732,54 @@ enum ScanRigPieces {
     /// The triangles within `radius` of the middle of head space.
     static func near(_ mesh: BodyMesh, radius: Float) -> BodyMesh {
         ScanRig.part(of: mesh) { corners in corners.allSatisfy { simd_length($0) < radius } }
+    }
+}
+
+/// How a scanned head sits on a character (Phil, 2026-11-22: "it's too small, needs adjustment"): its size and how
+/// far it is raised and brought forward (metres), and its turn about up (radians), all about its neck cut. Kept as
+/// "scanned-head-fit.json" beside the head's own files on the character, so it travels with them.
+struct HeadFit: Codable, Equatable {
+    var scale: Float = 1
+    var lift: Float = 0
+    var forward: Float = 0
+    var turn: Float = 0
+
+    static let file = "scanned-head-fit.json"
+    static let nodeName = "scannedHeadFit"
+
+    static func load(_ folder: URL) -> HeadFit? {
+        (try? Data(contentsOf: folder.appendingPathComponent(file))).flatMap { try? JSONDecoder().decode(HeadFit.self, from: $0) }
+    }
+
+    func save(to folder: URL) throws {
+        try JSONEncoder().encode(self).write(to: folder.appendingPathComponent(Self.file), options: .atomic)
+    }
+
+    var transform: simd_float4x4 {
+        var m = simd_float4x4(simd_quatf(angle: turn, axis: SIMD3(0, 1, 0)))
+        m.columns.0 *= scale
+        m.columns.1 *= scale
+        m.columns.2 *= scale
+        m.columns.3 = SIMD4(0, lift, forward, 1)
+        return m
+    }
+
+    /// The height of a head piece above its neck cut.
+    static func height(of head: BodyMesh) -> Float { head.positions.map(\.y).max() ?? 0.22 }
+
+    /// The size that makes the head as tall above its cut as the character's own head was (`room`, metres).
+    static func auto(_ head: BodyMesh, room: Float) -> HeadFit {
+        let tall = height(of: head)
+        guard tall > 0.03, room > 0.05 else { return HeadFit() }
+        return HeadFit(scale: min(2.5, max(0.4, room / tall)))
+    }
+
+    /// The head as a node inside a node that carries the fit (found by `nodeName` to adjust it live).
+    static func wrap(_ head: BodyMesh, pictures: URL, fit: HeadFit) -> SCNNode {
+        let holder = SCNNode()
+        holder.name = nodeName
+        holder.simdTransform = fit.transform
+        holder.addChildNode(FBXImport.headNode(head, textures: pictures))
+        return holder
     }
 }

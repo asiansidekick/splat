@@ -8,7 +8,7 @@ import SwiftUI
 struct ObjectScanView: View {
     let onPlace: (URL) -> Void
     /// Phil, 2026-11-22: a mannequin wearing a head just scanned, to stand in the room.
-    var onMannequin: ((HeadFolder, MannequinBody) -> Void)? = nil
+    var onMannequin: ((HeadFolder, MannequinBody, HeadFit) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model = ScanModel()
     /// "Head" among the scanner's modes (HeadScanScreen.swift). Remembered, like Object and Person.
@@ -20,7 +20,7 @@ struct ObjectScanView: View {
         Group {
             if headMode {
                 HeadScanScreen(close: { dismiss() }, place: { url in onPlace(url); dismiss() },
-                               mannequin: { head, body in onMannequin?(head, body); dismiss() },
+                               mannequin: { head, body, fit in onMannequin?(head, body, fit); dismiss() },
                                switchMode: { person in
                                    headMode = false
                                    model.personMode = person

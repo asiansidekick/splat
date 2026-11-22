@@ -110,6 +110,13 @@ enum Mannequin {
         return (slabs, d.armRadius, d.armRadius * 0.82)
     }
 
+    /// How tall the mannequin's head stands above where a scanned head's neck cut goes (metres): what a scanned head is
+    /// sized to at first (HeadFit.auto).
+    static func headRoom(_ body: Body, height: Float?, proportion: MannequinProportion?) -> Float {
+        let (d, _) = sized(body, height: height, proportion: proportion)
+        return d.head + d.neck * 0.35
+    }
+
     /// `head`: a scanned head (cut at its neck, metres, facing +Z, HeadScan.swift) worn in place of the plain one.
     static func make(_ body: Body, pose: MannequinPose, height: Float? = nil, proportion: MannequinProportion? = nil, head: SCNNode? = nil) -> SCNNode {
         let (d, k) = sized(body, height: height, proportion: proportion)

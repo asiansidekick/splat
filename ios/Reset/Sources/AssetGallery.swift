@@ -120,8 +120,14 @@ struct AssetGallery: View {
     @State private var newName = ""
     /// Phil, 2026-11-20: a scanned head going on an imported character.
     @State private var puttingHead: String?
-    /// Phil, 2026-11-22: a scanned head (HeadScan.swift) being put on a character: which characters.
-    @State private var choosingFor: HeadFolder?
+    /// Phil, 2026-11-22: a scanned head (HeadScan.swift) being put on a body (HeadFitScreen), maybe a given character.
+    @State private var fitting: HeadFitting?
+
+    private struct HeadFitting: Identifiable {
+        let id = UUID()
+        let head: HeadFolder
+        var start: URL?
+    }
 
     private enum Asset: Identifiable {
         case scan(ScanFolder)
@@ -291,14 +297,12 @@ struct AssetGallery: View {
             }
         }
         .quickLookPreview($preview)
-        .confirmationDialog(choosingFor.map { "Put \($0.title) on" } ?? "", isPresented: Binding(get: { choosingFor != nil }, set: { if !$0 { choosingFor = nil } }),
-                            titleVisibility: .visible) {
-            if let head = choosingFor {
-                ForEach(Array(HeadTarget.all().enumerated()), id: \.offset) { pair in
-                    Button(pair.element.name) { putOn(head, pair.element.target) }
-                }
-            }
-            Button("Cancel", role: .cancel) { choosingFor = nil }
+        .fullScreenCover(item: $fitting) { request in
+            HeadFitScreen(head: request.head, start: request.start, done: { target, fit in
+                fitting = nil
+                // After the cover has gone, so the gallery can close behind it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { putOn(request.head, target, fit) }
+            }, cancel: { fitting = nil })
         }
         .alert("Rename", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
@@ -349,11 +353,7 @@ struct AssetGallery: View {
 
     @ViewBuilder private func assetOptions(_ asset: Asset) -> some View {
         if case .head(let folder) = asset {
-            Menu {
-                ForEach(Array(HeadTarget.all().enumerated()), id: \.offset) { pair in
-                    Button(pair.element.name) { putOn(folder, pair.element.target) }
-                }
-            } label: { Label("Put on", systemImage: "person.crop.circle.badge.plus") }
+            Button { fitting = HeadFitting(head: folder) } label: { Label("Put on a body", systemImage: "person.crop.circle.badge.plus") }
             Button { newName = asset.name; renaming = asset } label: { Label("Rename", systemImage: "pencil") }
             Button(role: .destructive) { delete(asset) } label: { Label("Delete head", systemImage: "trash") }
         } else if case .scan(let folder) = asset {
@@ -376,7 +376,7 @@ struct AssetGallery: View {
                     Menu {
                         // Phil, 2026-11-22: heads scanned on their own first, then heads from whole-body scans.
                         ForEach(heads) { head in
-                            Button(head.title) { putOn(head, .character(url)) }
+                            Button(head.title) { fitting = HeadFitting(head: head, start: url) }
                         }
                         ForEach(people) { scan in
                             Button(scan.title) { putHead(from: scan, on: url) }
@@ -421,8 +421,8 @@ struct AssetGallery: View {
         let before = placer.models.count
         switch asset {
         case .head(let folder):
-            // A head on its own goes on a character: which one is asked.
-            choosingFor = folder
+            // A head on its own goes on a body, chosen on the Put on a body screen.
+            fitting = HeadFitting(head: folder)
             return
         case .scan(let folder): placer.addFacingCamera(from: [folder.model], base: base)
         case .model(let url): placer.addFacingCamera(from: [url], base: base)
@@ -475,12 +475,11 @@ struct AssetGallery: View {
 
     /// Phil, 2026-11-22: a scanned head on any character. A mannequin wearing it stands in the room straight away; an
     /// FBX character is copied with the head on (kept in the gallery as "<character> with <head>'s head") and placed.
-    private func putOn(_ head: HeadFolder, _ target: HeadTarget) {
-        choosingFor = nil
+    private func putOn(_ head: HeadFolder, _ target: HeadTarget, _ fit: HeadFit) {
         placer.modelError = nil
         switch target {
         case .mannequin(let body):
-            if placer.addMannequin(body, head: head, base: base) {
+            if placer.addMannequin(body, head: head, fit: fit, base: base) {
                 Diagnostics.log("Gallery: \(head.title) on a \(body.rawValue.lowercased()) mannequin")
                 Haptics.success()
                 dismiss()
@@ -491,7 +490,7 @@ struct AssetGallery: View {
             }
         case .character(let url):
             do {
-                let made = try HeadPiece.put(head, on: url)
+                let made = try HeadPiece.put(head, on: url, fit: fit)
                 newest = made
                 refresh()
                 version += 1

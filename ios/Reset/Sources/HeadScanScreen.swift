@@ -23,6 +23,7 @@ final class HeadScanModel: ObservableObject {
         case starting, ready, capturing, finishing
         case building(Double)
         case check(HeadFolder)
+        case fitting(HeadFolder)
         case done(HeadFolder)
         case failed(String)
     }
@@ -117,11 +118,14 @@ final class HeadScanModel: ObservableObject {
         }
     }
 
+    /// Saved: straight on to putting it on a body.
     func saved(_ folder: HeadFolder) {
         last = folder
         self.folder = nil
-        phase = .done(folder)
+        phase = .fitting(folder)
     }
+
+    func fit(_ folder: HeadFolder) { phase = .fitting(folder) }
 
     /// Scan again: this head goes.
     func again(dropping folder: HeadFolder?) {
@@ -150,7 +154,7 @@ struct HeadScanScreen: View {
     /// A character file to stand in the room (an FBX made with the head).
     let place: (URL) -> Void
     /// A mannequin wearing the head, to stand in the room.
-    let mannequin: (HeadFolder, MannequinBody) -> Void
+    let mannequin: (HeadFolder, MannequinBody, HeadFit) -> Void
     /// Back to the object scanner: Object (false) or Person (true).
     let switchMode: (Bool) -> Void
     @StateObject private var model = HeadScanModel()
@@ -163,8 +167,10 @@ struct HeadScanScreen: View {
                 BuildingView(fraction: fraction, words: "Building the head on the phone")
             case .check(let folder):
                 HeadCheckView(folder: folder, saved: { model.saved(folder) }, again: { model.again(dropping: folder) })
+            case .fitting(let folder):
+                HeadFitScreen(head: folder, done: { putOn(folder, $0, $1) }, cancel: { model.show(folder) })
             case .done(let folder):
-                HeadDoneView(folder: folder, putOn: { putOn(folder, $0) }, again: { model.again(dropping: nil) }, close: close)
+                HeadDoneView(folder: folder, putOn: { model.fit(folder) }, again: { model.again(dropping: nil) }, close: close)
             case .failed(let text):
                 MessageView(text: text, close: close) { model.start(after: 0.3) }
             default:
@@ -181,13 +187,13 @@ struct HeadScanScreen: View {
         .onDisappear { model.close() }
     }
 
-    private func putOn(_ folder: HeadFolder, _ target: HeadTarget) {
+    private func putOn(_ folder: HeadFolder, _ target: HeadTarget, _ fit: HeadFit) {
         model.close()
         switch target {
         case .mannequin(let body):
-            mannequin(folder, body)
+            mannequin(folder, body, fit)
         case .character(let url):
-            do { place(try HeadPiece.put(folder, on: url)) } catch {
+            do { place(try HeadPiece.put(folder, on: url, fit: fit)) } catch {
                 Diagnostics.log("Head scan: could not put \(folder.title) on \(url.lastPathComponent): \(error)")
             }
         }
@@ -493,12 +499,18 @@ private struct HeadStage: UIViewRepresentable {
         scene.background.contents = UIColor(white: 0.12, alpha: 1)
         view.scene = scene
         view.antialiasingMode = .multisampling4X
-        view.rendersContinuously = false
+        view.backgroundColor = UIColor(white: 0.12, alpha: 1)
+        // Phil's 1406 test: drawn only on demand, the head never showed. It draws all the time here.
+        view.rendersContinuously = true
+        view.isPlaying = true
         context.coordinator.turner.addChildNode(HeadPiece.node(whole, pictures: pictures))
         scene.rootNode.addChildNode(context.coordinator.turner)
         // The neck line: a thin ring and a faint disc.
-        let ring = SCNTorus(ringRadius: 0.13, pipeRadius: 0.0025)
-        let disc = SCNCylinder(radius: 0.13, height: 0.0005)
+        var span: Float = 0.13
+        for p in whole.positions { span = max(span, abs(p.x) + 0.02) }
+        span = min(span, 0.4)
+        let ring = SCNTorus(ringRadius: CGFloat(span), pipeRadius: CGFloat(span * 0.02))
+        let disc = SCNCylinder(radius: CGFloat(span), height: 0.0005)
         for geometry in [ring, disc] as [SCNGeometry] {
             let material = SCNMaterial()
             material.lightingModel = .constant
@@ -511,11 +523,17 @@ private struct HeadStage: UIViewRepresentable {
             context.coordinator.line.addChildNode(node)
         }
         scene.rootNode.addChildNode(context.coordinator.line)
+        // Framed on the head as built, wherever it came out and whatever its size.
+        var low = SIMD3<Float>(repeating: .greatestFiniteMagnitude), high = -low
+        for p in whole.positions { low = simd_min(low, p); high = simd_max(high, p) }
+        if low.x > high.x { low = SIMD3(-0.12, -0.15, -0.12); high = SIMD3(0.12, 0.15, 0.12) }
+        let middle = (low + high) / 2, size = max(0.1, max(high.y - low.y, high.x - low.x))
         let camera = SCNNode()
         camera.camera = SCNCamera()
         camera.camera?.fieldOfView = 34
-        camera.simdPosition = SIMD3(0, 0.17, 0.78)
-        camera.simdLook(at: SIMD3(0, -0.03, 0))
+        camera.camera?.zNear = 0.01
+        camera.simdPosition = middle + SIMD3(0, size * 0.55, size * 2.6)
+        camera.simdLook(at: middle)
         scene.rootNode.addChildNode(camera)
         view.pointOfView = camera
         update(context.coordinator)
@@ -534,44 +552,34 @@ private struct HeadStage: UIViewRepresentable {
 
 // MARK: Done
 
-/// The head is in the Gallery: put it on a character straight away, or scan another.
+/// The head is in the Gallery: put it on a body, or scan another.
 struct HeadDoneView: View {
     let folder: HeadFolder
-    let putOn: (HeadTarget) -> Void
+    let putOn: () -> Void
     let again: () -> Void
     let close: () -> Void
-    @State private var targets: [(name: String, target: HeadTarget)] = []
 
     var body: some View {
         VStack(spacing: 14) {
-            HeadThumb(folder: folder).scaleEffect(1.6).padding(.top, 30).padding(.bottom, 14)
+            Spacer()
+            HeadThumb(folder: folder).scaleEffect(1.8).padding(.bottom, 24)
             Text("Head ready").font(.title2.weight(.semibold))
-            Text("Kept in the Gallery. Put it on:").font(.footnote).foregroundStyle(.secondary)
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(targets.indices, id: \.self) { i in
-                        Button { putOn(targets[i].target) } label: {
-                            Text(targets[i].name)
-                                .font(.body.weight(.semibold))
-                                .foregroundStyle(i < MannequinBody.allCases.count ? Theme.onAccent : .white)
-                                .multilineTextAlignment(.center)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 11)
-                                .background(i < MannequinBody.allCases.count ? Theme.accent : Color.white.opacity(0.15), in: Capsule())
-                        }
-                    }
-                }
-                .padding(.horizontal, 30)
+            Text("Kept in the Gallery.").font(.footnote).foregroundStyle(.secondary)
+            Button(action: putOn) {
+                Text("Put it on a body").font(.body.weight(.semibold)).foregroundStyle(Theme.onAccent)
+                    .padding(.horizontal, 24).padding(.vertical, 12)
+                    .background(Theme.accent, in: Capsule())
             }
+            .padding(.top, 6)
+            Spacer()
             HStack(spacing: 12) {
                 Button("New scan", action: again).buttonStyle(.bordered)
                 Button("Done", action: close).buttonStyle(.bordered)
             }
-            .padding(.bottom, 20)
+            .padding(.bottom, 24)
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea())
-        .onAppear { targets = HeadTarget.all() }
     }
 }
