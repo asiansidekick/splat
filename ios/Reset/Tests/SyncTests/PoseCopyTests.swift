@@ -135,3 +135,45 @@ func runPoseCopyTests() {
     half[.leftKnee] = nil
     expect(PoseFromBody.pose(half) == nil, "pose copy: a person cut off at the knees gives no pose")
 }
+
+// Phil, 2026-11-22: copying hands-free once the person holds still.
+func runStillWatchTests() {
+    var a = MannequinPose.standing
+    a.left.out = 60
+    var wobble = a
+    wobble.left.out = 64
+    wobble.spineForward = 3
+    expect(PoseFromBody.change(a, a) < 0.01 && PoseFromBody.change(a, wobble) < 6 && PoseFromBody.change(a, .sitting) > 60,
+           "pose copy: a wobble is a small change, sitting down a big one (\(PoseFromBody.change(a, wobble)), \(PoseFromBody.change(a, .sitting)))")
+
+    var watch = StillWatch()
+    var fired: [Double] = []
+    var t = 0.0
+    func feed(_ pose: MannequinPose?, for seconds: Double) {
+        let end = t + seconds
+        while t < end {
+            if watch.see(pose, at: t).fire { fired.append(t) }
+            t += 0.35
+        }
+    }
+    feed(a, for: 1.0)
+    expect(fired.isEmpty, "pose copy: nothing copied before the person has held still long enough")
+    feed(wobble, for: 1.0)
+    expect(fired.count == 1, "pose copy: held still (with a little wobble) for 1.5 s, it is copied once (\(fired))")
+    feed(a, for: 4)
+    expect(fired.count == 1, "pose copy: the same pose held on is not copied again")
+    feed(.sitting, for: 0.8)
+    feed(.sitting, for: 1.5)
+    expect(fired.count == 2, "pose copy: a new pose held still is copied too (\(fired))")
+    feed(nil, for: 2)
+    feed(.sitting, for: 2)
+    expect(fired.count == 3, "pose copy: stepping out and back in copies the pose again (\(fired))")
+    var moving = StillWatch()
+    var anyFired = false
+    for k in 0..<20 {
+        var p = MannequinPose.standing
+        p.left.out = Float(k % 2) * 40
+        if moving.see(p, at: Double(k) * 0.35).fire { anyFired = true }
+    }
+    expect(!anyFired, "pose copy: a person moving about is not copied")
+}

@@ -621,6 +621,7 @@ runRigTests()
 runPoseLimitTests()
 runPoseAxesTests()
 runPoseCopyTests()
+runStillWatchTests()
 
 try MainActor.assumeIsolated { try runSyncTests() }
 runFrameTests()
