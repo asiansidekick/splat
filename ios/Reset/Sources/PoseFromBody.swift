@@ -183,3 +183,61 @@ enum PoseFromBody {
         return p
     }
 }
+
+extension PoseFromBody {
+    /// How far apart two poses are: the most any arm or leg part, or the spine, points differently, in degrees.
+    static func change(_ a: MannequinPose, _ b: MannequinPose) -> Float {
+        let down = SIMD3<Float>(0, -1, 0)
+        func angle(_ u: SIMD3<Float>, _ v: SIMD3<Float>) -> Float {
+            // atan2, not acos: exact near 0°, where acos of a rounded dot product is a few hundredths of a degree off.
+            atan2(simd_length(simd_cross(u, v)), simd_dot(u, v)) * 180 / .pi
+        }
+        var worst = max(abs(a.spineForward - b.spineForward), abs(a.spineSide - b.spineSide))
+        let pairs: [(HumanLimits.Limb, HumanLimits.Limb, Bool)] = [
+            (.init(a.left), .init(b.left), true), (.init(a.right), .init(b.right), true),
+            (.init(a.leftLeg), .init(b.leftLeg), false), (.init(a.rightLeg), .init(b.rightLeg), false),
+        ]
+        for (p, q, isArm) in pairs {
+            let rp = HumanLimits.rotation(p), rq = HumanLimits.rotation(q)
+            worst = max(worst, angle(rp.act(down), rq.act(down)),
+                        angle(HumanLimits.lowerDirection(rp, bend: p.bend, isArm: isArm), HumanLimits.lowerDirection(rq, bend: q.bend, isArm: isArm)))
+        }
+        return worst
+    }
+}
+
+/// Copying hands-free (Phil, 2026-11-22: "automatic when still"): the pose is copied once the person has held it
+/// for a moment, and not again until they change pose (or step out and back in).
+struct StillWatch {
+    /// How long the pose must hold, in seconds.
+    var holdFor: Double = 1.5
+    /// Within this many degrees of where it started counts as still (the reading wobbles a little).
+    var still: Float = 12
+    /// A new pose must differ from the last one copied by this much to be copied too.
+    var moved: Float = 20
+    private var anchor: MannequinPose?
+    private var anchorAt: Double = 0
+    private var lastSeenAt: Double = -.infinity
+    private(set) var lastCopied: MannequinPose?
+
+    /// Takes the latest reading (nil: no person), at a time in seconds. Gives how far the hold has got (0 to 1)
+    /// and whether to copy now.
+    mutating func see(_ pose: MannequinPose?, at t: Double) -> (progress: Double, fire: Bool) {
+        guard let pose else {
+            if t - lastSeenAt > 1 { anchor = nil; lastCopied = nil }
+            return (0, false)
+        }
+        lastSeenAt = t
+        if let start = anchor, PoseFromBody.change(pose, start) <= still {
+        } else {
+            anchor = pose
+            anchorAt = t
+        }
+        if let last = lastCopied, PoseFromBody.change(pose, last) <= moved { return (0, false) }
+        let progress = min(1, (t - anchorAt) / holdFor)
+        guard progress >= 1 else { return (progress, false) }
+        lastCopied = pose
+        anchor = nil
+        return (1, true)
+    }
+}
