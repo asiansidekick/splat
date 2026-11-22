@@ -1962,6 +1962,8 @@ struct CaptureStage: View {
     @State private var scanningObject = false
     /// The model a scan made, to stand in the room once the camera is back.
     @State private var scannedModel: URL?
+    /// Phil, 2026-11-22: a head just scanned, to stand in the room on a mannequin.
+    @State private var scannedHead: (HeadFolder, MannequinBody, HeadFit)?
     @State private var choosingModel = false
     @State private var makingCutout = false
     @State private var choosingExample = false
@@ -2144,7 +2146,8 @@ struct CaptureStage: View {
                 }
                 VStack {
                     // Phil, 2026-11-12: on its side the instruction line goes to the bottom, out of the top row's way.
-                    if verticalSize != .compact { statusBanner }
+                    // Phil, 2026-11-21: the mapping line covered the top edge while working on a model; it waits until Done.
+                    if verticalSize != .compact, !editingModel { statusBanner }
                     Spacer()
                     TorchDial()
                     MeasureHint(measurer: recorder.measurer)
@@ -2162,7 +2165,7 @@ struct CaptureStage: View {
                 .clearOfControls()
                 .hiddenInScreenshots()
                 // Phil, 2026-11-20: the picked model's tools stand round the edges, the middle stays clear.
-                ModelEdgeTools(placer: recorder.placer, onAdd: { choosingModel = true })
+                ModelEdgeTools(placer: recorder.placer, measurer: recorder.measurer, onAdd: { choosingModel = true })
                     .padding(8)
                     .clearOfControls()
                     .hiddenInScreenshots()
@@ -2221,7 +2224,7 @@ struct CaptureStage: View {
         .overlay { MeasurePointer(measurer: recorder.measurer) }
         .overlay { MeasureEntry(measurer: recorder.measurer).hiddenInScreenshots() }
         .overlay { CleanViewControls(snap: shutterOnce) }
-        // Without the controls, a volume button takes a snapshot too.
+        // Phil, 2026-11-21: a volume button presses the shutter, with or without the controls, as in the iPhone Camera.
         .modifier(CaptureButtonAction(action: volumeShutter))
         // Phil, 2026-11-18: 3D models, the gallery and the scans list are one menu now: the gallery, with the ways to
         // add things along its top and an edit menu on each scan.
@@ -2245,7 +2248,7 @@ struct CaptureStage: View {
             ).themed()
         }
         .fullScreenCover(isPresented: $scanningObject, onDismiss: endObjectScan) {
-            ObjectScanView { scannedModel = $0 }
+            ObjectScanView(onPlace: { scannedModel = $0 }, onMannequin: { scannedHead = ($0, $1, $2) })
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: recorder.placer).themed() }
         .sheet(isPresented: $choosingExample) { ExamplesSheet(placer: recorder.placer).themed() }
@@ -2312,9 +2315,16 @@ struct CaptureStage: View {
         }
     }
 
-    /// The button and the window's tap watcher can both fire for one tap: the second within 0.6 s is ignored.
+    /// A volume button (or Camera Control) presses the shutter, as in the iPhone Camera (Phil, 2026-11-21: it used to
+    /// work only without the controls). Not while a menu, sheet or other screen is open over the camera.
     private func volumeShutter() {
-        if ScreenshotMode.shared.viewing { shutterOnce() }
+        let window = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).first { $0.isKeyWindow }
+        guard window?.rootViewController?.presentedViewController == nil else {
+            Diagnostics.log("Capture button ignored: a screen is open over the camera")
+            return
+        }
+        shutterOnce()
     }
 
     private func toggleGuide() {
@@ -2334,6 +2344,7 @@ struct CaptureStage: View {
     private func startObjectScan() {
         Diagnostics.log("Object scan opened")
         scannedModel = nil
+        scannedHead = nil
         recorder.measurer.active = false
         Task {
             // Another lens's own camera is closed first, then the room tracking waits.
@@ -2351,6 +2362,21 @@ struct CaptureStage: View {
     /// Back from the scanner: the camera starts again (models and marks kept) and the new model stands where it points.
     private func endObjectScan() {
         recorder.prepare(useLiDAR: useLiDAR, keepModels: true)
+        if let (head, body, fit) = scannedHead {
+            scannedHead = nil
+            Task {
+                for _ in 0..<20 where recorder.session.currentFrame == nil || !recorder.trackingNormal {
+                    try? await Task.sleep(for: .seconds(0.25))
+                }
+                if recorder.placer.addMannequin(body, head: head, fit: fit, base: nil) {
+                    showToast("Mannequin placed with the scanned head.")
+                } else if let error = recorder.placer.modelError {
+                    showToast(error)
+                    recorder.placer.modelError = nil
+                }
+            }
+            return
+        }
         guard let url = scannedModel else { return }
         scannedModel = nil
         Task {
@@ -3033,7 +3059,7 @@ struct ResetStage: View {
                 .hiddenInScreenshots()
                 if section == .edit || simpleTouch, !restorer.paused {
                     // Phil, 2026-11-20: the picked model's tools round the edges; the top keeps room for the banners.
-                    ModelEdgeTools(placer: restorer.placer, uprightTop: 120, sidewaysTop: 40)
+                    ModelEdgeTools(placer: restorer.placer, measurer: restorer.measurer, uprightTop: 120, sidewaysTop: 40)
                         .padding(8)
                         .clearOfControls()
                         .hiddenInScreenshots()

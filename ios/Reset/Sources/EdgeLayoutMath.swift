@@ -40,10 +40,21 @@ enum EdgeLayoutMath {
                 }
                 return placed
             }
-            // In the tools' own order: the bottom row, the top row, then any that run on along the bottom.
-            let along = row(bottom + over, y: height - cell / 2, spread: over.isEmpty)
+            // Still more: a second column just inside the first, between the bottom and top rows, from the bottom up.
+            let inner = min(over.count, max(0, onSide - 2))
+            let innerWidth = over.prefix(inner).max() ?? 0
+            let innerX = column + 6 + innerWidth / 2
+            var innerPoints: [CGPoint] = []
+            for i in 0..<inner {
+                let y = height - cell / 2 - CGFloat(i + 1) * (cell + gap)
+                innerPoints.append(CGPoint(x: leading ? innerX : width - innerX, y: y))
+            }
+            let last = Array(over.dropFirst(inner))
+            // In the tools' own order: the bottom row, the top row, the inner column, then any that run on along the bottom.
+            let along = row(bottom + last, y: height - cell / 2, spread: last.isEmpty)
             points += along.prefix(bottom.count)
             points += row(topRow, y: height - cell / 2 - CGFloat(onSide - 1) * (cell + gap), spread: true)
+            points += innerPoints
             points += along.dropFirst(bottom.count)
         }
         return points

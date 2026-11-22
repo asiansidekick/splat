@@ -619,6 +619,8 @@ func runRigTests() {
 }
 runRigTests()
 runPoseLimitTests()
+runPoseAxesTests()
+runPoseCopyTests()
 
 try MainActor.assumeIsolated { try runSyncTests() }
 runFrameTests()

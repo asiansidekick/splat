@@ -12,6 +12,8 @@ enum FBXImport {
         var low: SIMD3<Float>
         var high: SIMD3<Float>
         var rig: FBXRig?
+        /// How a scanned head kept beside it was sized and placed (HeadFit), when it has one.
+        var headFit: HeadFit? = nil
     }
 
     /// Where pictures picked along with the file are kept: "models/<id>.textures" for "models/<id>.fbx".
@@ -134,6 +136,20 @@ enum FBXImport {
             }
         }
         var headTrianglesLeftOut = 0
+        // Phil's 1408 test: bits of the character's own neck and hair stuck out round a scanned head. Everything of the
+        // skin above the character's chin, close round its neck, goes too. The chin is taken as 70% of the way from the
+        // neck joint to the head joint (Mixamo's skeletons put the head joint level with the jaw).
+        var chinCut: (y: Float, x: Float, z: Float, reach: Float)?
+        if let map = rigMap, let headIndex = map.head, !headBones.isEmpty {
+            let headAt = rigNodes[headIndex].position
+            var neck = headAt - SIMD3<Float>(0, 10, 0)
+            let below = rigNodes[headIndex].parent
+            if let neckIndex = map.neck { neck = rigNodes[neckIndex].position } else if below >= 0, below < rigNodes.count { neck = rigNodes[below].position }
+            let span = max(1e-4, headAt.y - neck.y)
+            chinCut = (neck.y + 0.7 * span, headAt.x, headAt.z, 1.6 * span)
+        }
+        /// The top of the character's own head (file units), to size a scanned head to it.
+        var ownHeadTop = -Float.greatestFiniteMagnitude
         // Points of the skin with the bone that pulls each most, to measure the torso (Phil, 2026-11-20: arms must not
         // go through the body).
         var skinSamples: [(point: SIMD3<Float>, bone: Int)] = []
@@ -161,6 +177,13 @@ enum FBXImport {
                         if b < isHead.count, isHead[b] { w += weights[v * 4 + k] }
                     }
                     return w > 0.5
+                }
+                if let onHead { for v in 0..<count where onHead[v] { ownHeadTop = max(ownHeadTop, positions[v * 3 + 1]) } }
+                if let chin = chinCut, let marked = onHead {
+                    onHead = (0..<count).map { v in
+                        let dx = positions[v * 3] - chin.x, dz = positions[v * 3 + 2] - chin.z
+                        return marked[v] || (positions[v * 3 + 1] > chin.y && dx * dx + dz * dz < chin.reach * chin.reach)
+                    }
                 }
             }
             var sources = [
@@ -297,16 +320,27 @@ enum FBXImport {
         sized.addChildNode(lift)
 
         var headWords = ""
+        var headFit: HeadFit?
         if let head = scannedHead, let map = rigMap, let headIndex = map.head {
             let below = rigNodes[headIndex].parent
             let headAt: SIMD3<Float> = rigNodes[headIndex].position
             var neck: SIMD3<Float> = headAt - SIMD3<Float>(0, 0.1 / scale, 0)
             if let neckIndex = map.neck { neck = rigNodes[neckIndex].position } else if below >= 0, below < rigNodes.count { neck = rigNodes[below].position }
             let placed = ScanRig.headPlacement(neck: neck, head: headAt, facing: map.facing, metresPerUnit: scale)
-            let holder = headNode(head, textures: textures)
+            // Phil, 2026-11-22: "it's too small, needs adjustment". As set on the Put on a body screen, or else as tall
+            // as the character's own head was.
+            let cutY = ScanRig.neckCut(neck: neck, head: headAt).y
+            let chinY = neck.y + 0.7 * max(1e-4, headAt.y - neck.y)
+            let room = ownHeadTop > chinY ? (ownHeadTop - chinY) * scale : 0.22
+            let fit = HeadFit.load(textures) ?? HeadFit.auto(head, info: HeadInfo.load(textures), crown: room, chinAt: (chinY - cutY) * scale)
+            headFit = fit
+            let holder = SCNNode()
+            holder.name = "fbx.scannedHead"
             holder.simdTransform = rigNodes[headIndex].world.inverse * placed
+            holder.addChildNode(HeadFit.wrap(head, pictures: textures, fit: fit))
             nodes[headIndex].addChildNode(holder)
-            headWords = ", scanned head on \(rigNodes[headIndex].name) (\(head.triangleCount) triangles, \(headTrianglesLeftOut) of its own left out)"
+            headWords = String(format: ", scanned head on %@ (%d triangles, %d of its own left out, size %.2f, own head %.0f cm)",
+                               rigNodes[headIndex].name, head.triangleCount, headTrianglesLeftOut, fit.scale, room * 100)
         }
 
         var rig: FBXRig?
@@ -324,11 +358,11 @@ enum FBXImport {
         Diagnostics.log(String(format: "FBX: %@, %d nodes, %d shapes (%d skinned, %d bones), %d corners, %.2f x %.2f x %.2f m, %@",
                                name, Int(file.node_count), Int(file.mesh_count), skinned, bones, vertices,
                                (high.x - low.x) * scale, (high.y - low.y) * scale, (high.z - low.z) * scale, found + headWords))
-        return Loaded(node: sized, low: low * scale, high: high * scale, rig: rig)
+        return Loaded(node: sized, low: low * scale, high: high * scale, rig: rig, headFit: headFit)
     }
 
     /// A scanned head, shown unlit with its photo like the scan itself.
-    private static func headNode(_ head: BodyMesh, textures: URL) -> SCNNode {
+    static func headNode(_ head: BodyMesh, textures: URL) -> SCNNode {
         let positions = head.positions, normals = head.normals
         var sources = [SCNGeometrySource(vertices: positions.map { SCNVector3($0.x, $0.y, $0.z) }),
                        SCNGeometrySource(normals: normals.map { SCNVector3($0.x, $0.y, $0.z) })]

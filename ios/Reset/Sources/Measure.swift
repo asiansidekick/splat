@@ -1913,9 +1913,10 @@ struct MeasureHint: View {
                 .background(Color.black.opacity(0.25), in: Capsule())
                 .foregroundStyle(.white.opacity(0.9))
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .frame(maxWidth: 300)
-                .fixedSize(horizontal: false, vertical: true)
+                // Phil, 2026-11-21: compact and at the edge, one short line over the bottom buttons.
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: 360)
                 .shadow(color: .black.opacity(0.5), radius: 2)
                 .allowsHitTesting(false)
         }

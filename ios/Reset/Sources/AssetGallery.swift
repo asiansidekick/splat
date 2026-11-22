@@ -120,14 +120,24 @@ struct AssetGallery: View {
     @State private var newName = ""
     /// Phil, 2026-11-20: a scanned head going on an imported character.
     @State private var puttingHead: String?
+    /// Phil, 2026-11-22: a scanned head (HeadScan.swift) being put on a body (HeadFitScreen), maybe a given character.
+    @State private var fitting: HeadFitting?
+
+    private struct HeadFitting: Identifiable {
+        let id = UUID()
+        let head: HeadFolder
+        var start: URL?
+    }
 
     private enum Asset: Identifiable {
         case scan(ScanFolder)
         case model(URL)
         case cutout(CutoutLibrary.Entry)
+        case head(HeadFolder)
 
         var id: String {
             switch self {
+            case .head(let folder): return "head " + folder.url.path
             case .scan(let folder): return "scan " + folder.url.path
             case .model(let url): return "model " + url.path
             case .cutout(let entry): return "cutout " + entry.id.uuidString
@@ -138,10 +148,12 @@ struct AssetGallery: View {
             case .scan(let folder): return folder.title
             case .model(let url): return url.deletingPathExtension().lastPathComponent
             case .cutout(let entry): return entry.package.name
+            case .head(let folder): return folder.title
             }
         }
         var kind: String {
             switch self {
+            case .head: return "Scanned head"
             case .scan: return "3D scan"
             case .model(let url): return url.pathExtension.lowercased() == "fbx" ? "Posable character" : "3D model"
             case .cutout: return "Cut-out"
@@ -151,7 +163,7 @@ struct AssetGallery: View {
             switch self {
             case .scan(let folder): return folder.model
             case .model(let url): return url
-            case .cutout: return nil
+            case .cutout, .head: return nil
             }
         }
     }
@@ -285,6 +297,13 @@ struct AssetGallery: View {
             }
         }
         .quickLookPreview($preview)
+        .fullScreenCover(item: $fitting) { request in
+            HeadFitScreen(head: request.head, start: request.start, done: { target, fit in
+                fitting = nil
+                // After the cover has gone, so the gallery can close behind it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { putOn(request.head, target, fit) }
+            }, cancel: { fitting = nil })
+        }
         .alert("Rename", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
             Button("Save") { commitRename() }
@@ -298,6 +317,7 @@ struct AssetGallery: View {
         case .scan(let folder): folder.rename(to: newName)
         case .model(let url): ModelLibrary.rename(url, to: newName)
         case .cutout(let entry): CutoutLibrary.rename(entry.id, to: newName)
+        case .head(let folder): folder.rename(to: newName)
         }
         renaming = nil
         refresh()
@@ -332,7 +352,11 @@ struct AssetGallery: View {
     }
 
     @ViewBuilder private func assetOptions(_ asset: Asset) -> some View {
-        if case .scan(let folder) = asset {
+        if case .head(let folder) = asset {
+            Button { fitting = HeadFitting(head: folder) } label: { Label("Put on a body", systemImage: "person.crop.circle.badge.plus") }
+            Button { newName = asset.name; renaming = asset } label: { Label("Rename", systemImage: "pencil") }
+            Button(role: .destructive) { delete(asset) } label: { Label("Delete head", systemImage: "trash") }
+        } else if case .scan(let folder) = asset {
             Button { place(asset) } label: { Label("Place", systemImage: "scope") }
             Button { newName = asset.name; renaming = asset } label: { Label("Rename", systemImage: "pencil") }
             Button { trimming = folder } label: { Label("Trim", systemImage: "scissors") }
@@ -347,8 +371,13 @@ struct AssetGallery: View {
             if case .model(let url) = asset, url.pathExtension.lowercased() == "fbx" {
                 // Phil, 2026-11-20: "And swap to any of my imported mixamo fbx". Makes a copy with the scan's head.
                 let people = ScanFolder.all().filter(\.hasModel)
-                if !people.isEmpty {
+                let heads = HeadFolder.all()
+                if !people.isEmpty || !heads.isEmpty {
                     Menu {
+                        // Phil, 2026-11-22: heads scanned on their own first, then heads from whole-body scans.
+                        ForEach(heads) { head in
+                            Button(head.title) { fitting = HeadFitting(head: head, start: url) }
+                        }
                         ForEach(people) { scan in
                             Button(scan.title) { putHead(from: scan, on: url) }
                         }
@@ -365,6 +394,7 @@ struct AssetGallery: View {
     }
 
     private static func picture(of asset: Asset) -> Data? {
+        if case .head(let folder) = asset { return (try? Data(contentsOf: folder.thumbnail)) ?? Data() }
         guard case .cutout(let entry) = asset else { return nil }
         return (entry.package.views.first { $0.angle == 0 } ?? entry.package.views.first)?.png
     }
@@ -378,7 +408,8 @@ struct AssetGallery: View {
     }
 
     private func refresh() {
-        var all = ScanFolder.all().filter(\.hasModel).map(Asset.scan) + ModelLibrary.all().map(Asset.model) + CutoutLibrary.all().map(Asset.cutout)
+        var all = ScanFolder.all().filter(\.hasModel).map(Asset.scan) + HeadFolder.all().map(Asset.head) + ModelLibrary.all().map(Asset.model)
+            + CutoutLibrary.all().map(Asset.cutout)
         if let newest, let index = all.firstIndex(where: { $0.file?.standardizedFileURL == newest.standardizedFileURL }) {
             all.insert(all.remove(at: index), at: 0)
         }
@@ -389,6 +420,10 @@ struct AssetGallery: View {
         placer.modelError = nil
         let before = placer.models.count
         switch asset {
+        case .head(let folder):
+            // A head on its own goes on a body, chosen on the Put on a body screen.
+            fitting = HeadFitting(head: folder)
+            return
         case .scan(let folder): placer.addFacingCamera(from: [folder.model], base: base)
         case .model(let url): placer.addFacingCamera(from: [url], base: base)
         case .cutout(let entry): _ = placer.addCutout(entry.package, at: base)
@@ -433,8 +468,38 @@ struct AssetGallery: View {
         case .model(let url): ModelLibrary.delete(url)
         case .cutout(let entry): CutoutLibrary.delete(entry.id)
         case .scan(let folder): try? FileManager.default.removeItem(at: folder.url)
+        case .head(let folder): try? FileManager.default.removeItem(at: folder.url)
         }
         refresh()
+    }
+
+    /// Phil, 2026-11-22: a scanned head on any character. A mannequin wearing it stands in the room straight away; an
+    /// FBX character is copied with the head on (kept in the gallery as "<character> with <head>'s head") and placed.
+    private func putOn(_ head: HeadFolder, _ target: HeadTarget, _ fit: HeadFit) {
+        placer.modelError = nil
+        switch target {
+        case .mannequin(let body):
+            if placer.addMannequin(body, head: head, fit: fit, base: base) {
+                Diagnostics.log("Gallery: \(head.title) on a \(body.rawValue.lowercased()) mannequin")
+                Haptics.success()
+                dismiss()
+            } else {
+                message = placer.modelError ?? "Could not put \(head.title) on the mannequin."
+                placer.modelError = nil
+                Haptics.warning()
+            }
+        case .character(let url):
+            do {
+                let made = try HeadPiece.put(head, on: url, fit: fit)
+                newest = made
+                refresh()
+                version += 1
+                place(.model(made))
+            } catch {
+                message = "Couldn't put the head on: \(error.localizedDescription)"
+                Diagnostics.log("Head scan: \(head.title) on \(url.lastPathComponent) failed: \(error)")
+            }
+        }
     }
 }
 

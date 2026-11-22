@@ -40,8 +40,8 @@ jobs:
       - name: Sync tests
         working-directory: ios/Reset
         run: |
-          if ! swiftc -O Sources/ReferenceModel.swift Sources/MannequinPose.swift Sources/RigMap.swift Sources/HumanLimits.swift Sources/PoseDrag.swift Sources/CallSheet.swift Sources/Cutout.swift Sources/FrameMath.swift Sources/ReferenceSync.swift Sources/Shared/PhotoPrivacy.swift \
-            Sources/Shared/SecurePack.swift Sources/Shared/SyncEngine.swift Tests/SyncTests/PoseLimitTests.swift Tests/SyncTests/main.swift -o sync-tests > sync-compile.log 2>&1; then
+          if ! swiftc -O Sources/ReferenceModel.swift Sources/MannequinPose.swift Sources/RigMap.swift Sources/HumanLimits.swift Sources/PoseDrag.swift Sources/PoseAxes.swift Sources/PoseFromBody.swift Sources/CallSheet.swift Sources/Cutout.swift Sources/FrameMath.swift Sources/ReferenceSync.swift Sources/Shared/PhotoPrivacy.swift \
+            Sources/Shared/SecurePack.swift Sources/Shared/SyncEngine.swift Tests/SyncTests/PoseLimitTests.swift Tests/SyncTests/PoseAxesTests.swift Tests/SyncTests/PoseCopyTests.swift Tests/SyncTests/main.swift -o sync-tests > sync-compile.log 2>&1; then
             grep -E ": error: " sync-compile.log | sort -u | head -10 \
               | sed -E 's#^.*/((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Reset/\1,line=\3,col=\4::\5#'
             grep -E "error:" sync-compile.log | sort -u | head -10 | sed -E 's#^#::error::#'
@@ -60,7 +60,7 @@ jobs:
         working-directory: ios/Reset
         run: |
           # Object scan: auto-crop maths (floor and object finding) on synthetic scans.
-          if ! swiftc -O Sources/CropMath.swift Sources/ScanAlign.swift Sources/TrimMath.swift Sources/PinMath.swift Sources/OccluderMath.swift Sources/EdgeLayoutMath.swift Sources/FilmFrameMath.swift Tests/CropTests/main.swift -o crop-tests > crop-compile.log 2>&1; then
+          if ! swiftc -O Sources/CropMath.swift Sources/ScanAlign.swift Sources/TrimMath.swift Sources/PinMath.swift Sources/OccluderMath.swift Sources/EdgeLayoutMath.swift Sources/HeadMath.swift Sources/FilmFrameMath.swift Tests/CropTests/main.swift -o crop-tests > crop-compile.log 2>&1; then
             grep -E ": error: " crop-compile.log | sort -u | head -10 \
               | sed -E 's#^(.*/)?((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Reset/\2,line=\4,col=\5::\6#'
             tail -40 crop-compile.log
