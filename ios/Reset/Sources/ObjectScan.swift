@@ -598,8 +598,19 @@ final class ScanModel: ObservableObject {
         if !cropped, folder.hasFull, folder.cameras != nil {
             // Reset's own pictures: no crop step yet (the builder's space is not upright), the model is made real
             // size and upright and that is it.
-            let fit = folder.fit
-            let ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
+            var fit = folder.fit
+            var ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
+            // Phil, 2026-11-22: a Selfie turn person came out upside down. Pictures taken by a phone standing still
+            // while the person turns lie in a flat ring round them, and a flat ring fits just as well either way up.
+            // Then the model's own shape decides: a standing person is wider at the shoulders than at the ankles.
+            if ok, var known = fit, let cameras = folder.cameras, ScanBake.flatRing(cameras), let upright = ScanBake.standsUpright(folder.model), !upright {
+                let q = simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0)) * known.quaternion
+                known.rotation = [q.imag.x, q.imag.y, q.imag.z, q.real]
+                if let data = try? JSONEncoder().encode(known) { try? data.write(to: folder.fitFile) }
+                fit = known
+                ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
+                ScanLog.add("Own camera model: pictures in a flat ring and the model stood on its head, turned the right way up")
+            }
             ScanLog.add("Own camera model: fit \(fit.map { String(format: "scale %.3f, error %.3f m", $0.scale, $0.error) } ?? "none"), written \(ok)")
             library = ScanFolder.all()
             guard ok else { phase = .failed("The model couldn't be saved."); return }
