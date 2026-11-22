@@ -426,8 +426,41 @@ enum ScanBake {
 /// Phil's 1411 tests: black smears down the arms, sides and neck of scanned people and heads. The builder colours each
 /// part from a picture that saw it, and a part just outside a picture's person outline came out black. Outside the
 /// outline, a band of about 32 pixels is now filled with the person's own nearest colours, and only beyond it black.
+/// Gaps between the legs, or between an arm and the body, stay black (Phil, 1414: filled in, they joined the limbs
+/// into the body and the people came out like starfish): anywhere with the person within `gap` pixels on both sides,
+/// across or along the picture.
 enum MaskFill {
-    static func fill(_ pixels: inout [UInt8], width w: Int, height h: Int, keep: [Bool], band: Int = 32) {
+    static func fill(_ pixels: inout [UInt8], width w: Int, height h: Int, keep: [Bool], band: Int = 32, gap: Int = 200) {
+        var between = [Bool](repeating: false, count: w * h)
+        // Across: the nearest person to the left and to the right of each pixel.
+        var lastLeft = [Int](repeating: -1_000_000, count: w)
+        for y in 0..<h {
+            var last = -1_000_000
+            for x in 0..<w {
+                if keep[y * w + x] { last = x } else { lastLeft[x] = last }
+            }
+            last = 1_000_000
+            for x in stride(from: w - 1, through: 0, by: -1) {
+                if keep[y * w + x] { last = x; continue }
+                if x - lastLeft[x] < gap && last - x < gap { between[y * w + x] = true }
+            }
+        }
+        // Along: the nearest person above and below.
+        var above = [Int](repeating: -1_000_000, count: w * h)
+        var lastUp = [Int](repeating: -1_000_000, count: w)
+        for y in 0..<h {
+            for x in 0..<w {
+                if keep[y * w + x] { lastUp[x] = y } else { above[y * w + x] = lastUp[x] }
+            }
+        }
+        var lastDown = [Int](repeating: 1_000_000, count: w)
+        for y in stride(from: h - 1, through: 0, by: -1) {
+            for x in 0..<w {
+                let i = y * w + x
+                if keep[i] { lastDown[x] = y; continue }
+                if y - above[i] < gap && lastDown[x] - y < gap { between[i] = true }
+            }
+        }
         let step = 4
         let cw = (w + step - 1) / step, ch = (h + step - 1) / step
         var colour = [SIMD3<Float>](repeating: .zero, count: cw * ch)
@@ -468,7 +501,7 @@ enum MaskFill {
         for y in 0..<h {
             for x in 0..<w where !keep[y * w + x] {
                 let c = (y / step) * cw + x / step, p = (y * w + x) * 4
-                let value = has[c] ? colour[c] : SIMD3<Float>(0, 0, 0)
+                let value = has[c] && !between[y * w + x] ? colour[c] : SIMD3<Float>(0, 0, 0)
                 pixels[p] = UInt8(min(255, max(0, value.x))); pixels[p + 1] = UInt8(min(255, max(0, value.y))); pixels[p + 2] = UInt8(min(255, max(0, value.z)))
             }
         }
