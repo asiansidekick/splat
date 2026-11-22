@@ -7,17 +7,38 @@ import SwiftUI
 /// waits meanwhile. "Place in the room" hands the model back.
 struct ObjectScanView: View {
     let onPlace: (URL) -> Void
+    /// Phil, 2026-11-22: a mannequin wearing a head just scanned, to stand in the room.
+    var onMannequin: ((HeadFolder, MannequinBody) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model = ScanModel()
+    /// "Head" among the scanner's modes (HeadScanScreen.swift). Remembered, like Object and Person.
+    @AppStorage("scanHeadMode") private var headMode = false
 
     static var supported: Bool { ScanModel.supported }
 
     var body: some View {
-        ScanScreen(close: { model.close(); dismiss() }, place: { url in model.close(); onPlace(url); dismiss() })
-            .environmentObject(model)
-            .preferredColorScheme(.dark)
-            .onAppear { model.start() }
-            .onDisappear { model.close() }
+        Group {
+            if headMode {
+                HeadScanScreen(close: { dismiss() }, place: { url in onPlace(url); dismiss() },
+                               mannequin: { head, body in onMannequin?(head, body); dismiss() },
+                               switchMode: { person in
+                                   headMode = false
+                                   model.personMode = person
+                                   // The head camera lets go first.
+                                   DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { model.start() }
+                               })
+            } else {
+                ScanScreen(close: { model.close(); dismiss() }, place: { url in model.close(); onPlace(url); dismiss() },
+                           chooseHead: {
+                               model.close()
+                               headMode = true
+                           })
+                    .environmentObject(model)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .onAppear { if !headMode { model.start() } }
+        .onDisappear { model.close() }
     }
 }
 
@@ -27,6 +48,8 @@ struct ScanScreen: View {
     @EnvironmentObject var model: ScanModel
     let close: () -> Void
     let place: (URL) -> Void
+    /// "Head" in the modes: the head scanner takes over.
+    let chooseHead: () -> Void
     @State private var showLibrary = false
     @State private var preview: URL?
     @State private var trimming: ScanFolder?
@@ -147,6 +170,13 @@ struct ScanScreen: View {
                 Button(person ? "Person" : "Object") { model.personMode = person }
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(model.personMode == person ? Color.yellow : Color.white)
+                    .fixedSize()
+            }
+            // Phil, 2026-11-22: a head on its own, selfie or walking round, to put on any character.
+            if PhotogrammetrySession.isSupported {
+                Button("Head", action: chooseHead)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.white)
                     .fixedSize()
             }
         }

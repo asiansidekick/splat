@@ -475,5 +475,82 @@ do {
     check(DepthStrips.make(width: 4, height: 1, depth: [0, 0, 0, 0]) { _, _ in true }.isEmpty, "depth strips: no depth at all gives nothing")
 }
 
+// MARK: Head scanning (HeadMath)
+
+do {
+    // Lines of sight from a circle of cameras round a head all meet at its middle.
+    let middle = SIMD3<Float>(1, 1.6, -2)
+    var places: [SIMD3<Float>] = [], looks: [SIMD3<Float>] = []
+    for i in 0..<24 {
+        let a = Float(i) / 24 * 2 * .pi
+        let p = middle + SIMD3(0.5 * cos(a), 0.15 + rng.range(-0.05, 0.05), 0.5 * sin(a))
+        var aim = middle + SIMD3(rng.range(-0.01, 0.01), rng.range(-0.01, 0.01), rng.range(-0.01, 0.01)) - p
+        aim = simd_normalize(aim)
+        places.append(p); looks.append(aim)
+    }
+    let met = HeadMath.raysMeet(places, looks)
+    check(met.map { simd_distance($0, middle) < 0.02 } ?? false, "Head: lines of sight meet at the middle of the head (\(met.map { simd_distance($0, middle) } ?? -1) m off)")
+    check(HeadMath.raysMeet([.zero, SIMD3(0.1, 0, 0)], [SIMD3(0, 0, -1), SIMD3(0, 0, -1)]) == nil, "Head: parallel lines of sight give no middle")
+
+    // Head space faces the camera that saw the face, up stays up, left is +X.
+    let frame = HeadMath.frame(centre: middle, towards: middle + SIMD3(0, 0.3, 0.5))
+    let z = SIMD3(frame.columns.2.x, frame.columns.2.y, frame.columns.2.z), x = SIMD3(frame.columns.0.x, frame.columns.0.y, frame.columns.0.z)
+    check(simd_distance(z, SIMD3(0, 0, 1)) < 1e-4 && simd_distance(x, SIMD3(1, 0, 0)) < 1e-4, "Head: head space faces the face's camera, level, left at +X")
+
+    // A camera half a metre in front of the face, looking at it: the middle of the head lands in the middle of the picture.
+    var camera = matrix_identity_float4x4
+    camera.columns.3 = SIMD4(0, 0, 0.5, 1)
+    let c = HeadMath.project(.zero, camera: camera, fx: 1000, fy: 1000, cx: 640, cy: 360)
+    let left = HeadMath.project(SIMD3(0.1, 0, 0), camera: camera, fx: 1000, fy: 1000, cx: 640, cy: 360)
+    let up = HeadMath.project(SIMD3(0, 0.1, 0), camera: camera, fx: 1000, fy: 1000, cx: 640, cy: 360)
+    check(c.map { simd_distance($0, SIMD2(640, 360)) < 0.01 } ?? false, "Head: the middle projects to the middle of the picture")
+    check((left?.x ?? 0) > 800 && (up?.y ?? 999) < 200, "Head: +X goes right and +Y goes up the picture (\(String(describing: left)), \(String(describing: up)))")
+    check(HeadMath.project(SIMD3(0, 0, 0.9), camera: camera, fx: 1000, fy: 1000, cx: 640, cy: 360) == nil, "Head: a point behind the camera isn't drawn")
+
+    // The outline of a square of points, and which rows of a picture it covers.
+    let square: [SIMD2<Float>] = [SIMD2(10, 10), SIMD2(30, 10), SIMD2(30, 30), SIMD2(10, 30), SIMD2(20, 20), SIMD2(15, 25)]
+    let hull = HeadMath.hull(square)
+    check(hull.count == 4, "Head: a square's outline has 4 corners (\(hull.count))")
+    check(HeadMath.inside(SIMD2(20, 20), hull) && !HeadMath.inside(SIMD2(40, 20), hull), "Head: inside and outside the outline")
+    let rows = HeadMath.rows(of: hull, width: 50, height: 50)
+    check(rows[20].0 == 10 && rows[20].1 == 30 && rows[5].0 > rows[5].1, "Head: rows inside the outline (\(rows[20]), row 5 \(rows[5]))")
+
+    // The space a head can take, seen from in front: an outline round the middle of the picture, wider than a face.
+    let shell = HeadMath.headShell(floor: -0.18)
+    let outline = HeadMath.hull(shell.compactMap { HeadMath.project($0, camera: camera, fx: 1000, fy: 1000, cx: 640, cy: 360) })
+    let across = (outline.map(\.x).max() ?? 0) - (outline.map(\.x).min() ?? 0)
+    check(HeadMath.inside(SIMD2(640, 360), outline) && across > 400 && across < 900, "Head: the head's outline sits round the middle, \(Int(across)) px across")
+    check(shell.allSatisfy { $0.y >= -0.18 }, "Head: the outline stops at the floor given")
+
+    // Selfie ring: turned to the side lights the side, looking up lights the top, square on lights nothing.
+    let slots = 24
+    check(HeadMath.selfieSlot(SIMD3(0.35, 0, 0.15), slots: slots) == 0, "Head: head turned to its right lights the ring's right")
+    check(HeadMath.selfieSlot(SIMD3(0, -0.2, 0.3), slots: slots) == slots / 4, "Head: head up lights the ring's top")
+    check(HeadMath.selfieSlot(SIMD3(0.02, 0.01, 0.4), slots: slots) == nil, "Head: square on lights nothing")
+    check(HeadMath.selfieSlot(SIMD3(0.2, 0, 0.35), slots: slots) == nil, "Head: a small turn to the side isn't enough")
+    check(HeadMath.roundSlot(camera: SIMD3(1.5, 1.6, -2), centre: middle, slots: slots) == 0, "Head: walking round, the slot follows the way round")
+
+    // A synthetic head: skull, face and jaw, nose, neck. The chin is found 11.5 cm below the middle.
+    var head: [SIMD3<Float>] = []
+    func blob(_ c: SIMD3<Float>, _ r: SIMD3<Float>, _ n: Int) {
+        for _ in 0..<n {
+            let u = rng.range(0, 2 * .pi), v = acos(rng.range(-1, 1))
+            head.append(c + r * SIMD3(sin(v) * cos(u), cos(v), sin(v) * sin(u)))
+        }
+    }
+    blob(SIMD3(0, 0.02, -0.005), SIMD3(0.095, 0.11, 0.1), 20000)
+    blob(SIMD3(0, -0.04, 0.04), SIMD3(0.06, 0.075, 0.055), 15000)
+    blob(SIMD3(0, -0.01, 0.095), SIMD3(0.015, 0.025, 0.02), 3000)
+    for _ in 0..<15000 {
+        let a = rng.range(0, 2 * .pi)
+        head.append(SIMD3(0.055 * cos(a), rng.range(-0.25, -0.06), -0.02 + 0.055 * sin(a)))
+    }
+    let chin = HeadMath.chin(head)
+    check(chin.map { abs($0 - -0.115) < 0.02 } ?? false, "Head: chin found from the face's profile (\(chin ?? 0), truly -0.115)")
+    let cut = HeadMath.neckCut(head, chin: chin ?? -0.115)
+    check(abs(cut.x) < 0.01 && abs(cut.z - -0.02) < 0.015 && abs(cut.y - ((chin ?? -0.115) - 0.035)) < 1e-4, "Head: neck cut across the middle of the neck (\(cut))")
+    check(HeadMath.chin(head.filter { $0.y > 0.05 }) == nil, "Head: no chin found without a face")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

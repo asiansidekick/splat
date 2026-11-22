@@ -179,6 +179,9 @@ struct MannequinSpec: Codable, Equatable {
     var pose: MannequinPose
     /// Phil, 2026-11-19 (Magic Poser): the build, kept apart so mannequins made earlier still open.
     var proportion: MannequinProportion?
+    /// Phil, 2026-11-22: a scanned head worn in place of the plain one. The folder (in the reference, beside the
+    /// model's file) holding ScanRig.headFile and its pictures; nil for the plain head.
+    var head: String?
 }
 
 /// How much longer or shorter each part is than the standard body, 1 being as it is. The height stays the same, so

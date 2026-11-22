@@ -328,7 +328,7 @@ enum FBXImport {
     }
 
     /// A scanned head, shown unlit with its photo like the scan itself.
-    private static func headNode(_ head: BodyMesh, textures: URL) -> SCNNode {
+    static func headNode(_ head: BodyMesh, textures: URL) -> SCNNode {
         let positions = head.positions, normals = head.normals
         var sources = [SCNGeometrySource(vertices: positions.map { SCNVector3($0.x, $0.y, $0.z) }),
                        SCNGeometrySource(normals: normals.map { SCNVector3($0.x, $0.y, $0.z) })]

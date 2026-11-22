@@ -1962,6 +1962,8 @@ struct CaptureStage: View {
     @State private var scanningObject = false
     /// The model a scan made, to stand in the room once the camera is back.
     @State private var scannedModel: URL?
+    /// Phil, 2026-11-22: a head just scanned, to stand in the room on a mannequin.
+    @State private var scannedHead: (HeadFolder, MannequinBody)?
     @State private var choosingModel = false
     @State private var makingCutout = false
     @State private var choosingExample = false
@@ -2235,7 +2237,7 @@ struct CaptureStage: View {
             ).themed()
         }
         .fullScreenCover(isPresented: $scanningObject, onDismiss: endObjectScan) {
-            ObjectScanView { scannedModel = $0 }
+            ObjectScanView(onPlace: { scannedModel = $0 }, onMannequin: { scannedHead = ($0, $1) })
         }
         .sheet(isPresented: $makingCutout) { CutoutMaker(placer: recorder.placer).themed() }
         .sheet(isPresented: $choosingExample) { ExamplesSheet(placer: recorder.placer).themed() }
@@ -2331,6 +2333,7 @@ struct CaptureStage: View {
     private func startObjectScan() {
         Diagnostics.log("Object scan opened")
         scannedModel = nil
+        scannedHead = nil
         recorder.measurer.active = false
         Task {
             // Another lens's own camera is closed first, then the room tracking waits.
@@ -2348,6 +2351,21 @@ struct CaptureStage: View {
     /// Back from the scanner: the camera starts again (models and marks kept) and the new model stands where it points.
     private func endObjectScan() {
         recorder.prepare(useLiDAR: useLiDAR, keepModels: true)
+        if let (head, body) = scannedHead {
+            scannedHead = nil
+            Task {
+                for _ in 0..<20 where recorder.session.currentFrame == nil || !recorder.trackingNormal {
+                    try? await Task.sleep(for: .seconds(0.25))
+                }
+                if recorder.placer.addMannequin(body, head: head, base: nil) {
+                    showToast("Mannequin placed with the scanned head.")
+                } else if let error = recorder.placer.modelError {
+                    showToast(error)
+                    recorder.placer.modelError = nil
+                }
+            }
+            return
+        }
         guard let url = scannedModel else { return }
         scannedModel = nil
         Task {

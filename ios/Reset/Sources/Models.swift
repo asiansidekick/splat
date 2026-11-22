@@ -438,6 +438,13 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
             if model.file.hasSuffix(".fbx"), FileManager.default.fileExists(atPath: pictures.path), !FileManager.default.fileExists(atPath: picturesTarget.path) {
                 try? FileManager.default.copyItem(at: pictures, to: picturesTarget)
             }
+            // A scanned head worn by a mannequin.
+            if let worn = model.mannequin?.head {
+                let from = folder.appendingPathComponent(worn, isDirectory: true), to = destination.appendingPathComponent(worn, isDirectory: true)
+                if FileManager.default.fileExists(atPath: from.path), !FileManager.default.fileExists(atPath: to.path) {
+                    try? FileManager.default.copyItem(at: from, to: to)
+                }
+            }
         }
     }
 
@@ -1162,6 +1169,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         cutoutPackages[id] = nil
         if cutouts.isEmpty { stopCutoutTimer() }
         try? FileManager.default.removeItem(at: folder.appendingPathComponent(models[index].file))
+        if let worn = models[index].mannequin?.head { try? FileManager.default.removeItem(at: folder.appendingPathComponent(worn, isDirectory: true)) }
         models.remove(at: index)
         selectedModel = nil
     }
@@ -2335,11 +2343,17 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         if model.file.hasSuffix("." + Cutout.fileExtension) { return loadCutoutNode(for: model) }
         if model.file.hasSuffix(".fbx") { return loadFBXNode(for: model) }
         let url = folder.appendingPathComponent(model.file)
-        guard let scene = try? SCNScene(url: url, options: nil) else { return nil }
         let node = SCNNode()
         node.name = model.id.uuidString
-        for child in scene.rootNode.childNodes {
-            node.addChildNode(child)
+        if let spec = model.mannequin, let worn = spec.head, let head = Self.scannedHead(folder.appendingPathComponent(worn, isDirectory: true)) {
+            // Phil, 2026-11-22: a mannequin wearing a scanned head is made here, with the head, rather than read from
+            // its file (which has the plain head): the head's photographs show unlit, like the scan.
+            node.addChildNode(Mannequin.make(spec.body, pose: spec.pose, height: spec.height, proportion: spec.proportion, head: head))
+        } else {
+            guard let scene = try? SCNScene(url: url, options: nil) else { return nil }
+            for child in scene.rootNode.childNodes {
+                node.addChildNode(child)
+            }
         }
         // A scan's colours are photographs, with the light of the day already in them: shown as they are, not lit a
         // second time (Phil's first scan, 2026-11-17: a white bin came out grey beside the real one).
@@ -2360,6 +2374,53 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         modelNodes[model.id] = node
         refreshDimensions(model.id)
         return node
+    }
+
+    /// A scanned head kept in a folder (HeadScan.swift), as a node. Nil when the folder or its head is missing (a
+    /// reference synced from a phone that had the head, say): the mannequin then wears its plain head.
+    private static func scannedHead(_ place: URL) -> SCNNode? {
+        guard let data = try? Data(contentsOf: place.appendingPathComponent(ScanRig.headFile)), let mesh = ScanRig.head(from: data) else { return nil }
+        let node = FBXImport.headNode(mesh, textures: place)
+        node.name = "mannequin.scannedHead"
+        return node
+    }
+
+    /// Phil, 2026-11-22: "have that as an option to place on any character". A mannequin standing where the camera
+    /// points (or at `base`), wearing a scanned head. The head's files are copied in beside the mannequin, so the
+    /// reference keeps it. Returns false, with `modelError` set, if it could not.
+    @discardableResult
+    func addMannequin(_ body: MannequinBody, head: HeadFolder, base: simd_float4x4?) -> Bool {
+        let height = Mannequin.defaultHeight(body)
+        let pose = MannequinPose.standing
+        guard let url = Examples.file(for: Mannequin.make(body, pose: pose, height: height), name: "\(body.rawValue) with \(head.title)'s head") else {
+            modelError = "Could not make the mannequin."
+            return false
+        }
+        let before = models.count
+        addFacingCamera(from: [url], base: base)
+        guard models.count > before, let index = models.indices.last else { return false }
+        let id = models[index].id
+        let worn = "models/\(id.uuidString).head"
+        let target = folder.appendingPathComponent(worn, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+            for file in head.headFiles { try FileManager.default.copyItem(at: file, to: target.appendingPathComponent(file.lastPathComponent)) }
+        } catch {
+            Diagnostics.log("Head scan: could not copy \(head.title) beside the mannequin: \(error)")
+            modelError = "Could not put the head on."
+            return false
+        }
+        var spec = MannequinSpec(body: body, height: height, pose: pose)
+        spec.head = worn
+        models[index].mannequin = spec
+        let transform = modelNodes[id]?.simdTransform
+        modelNodes[id]?.removeFromParentNode()
+        modelNodes[id] = nil
+        loadNode(for: models[index])
+        if let transform { modelNodes[id]?.simdTransform = transform }
+        selectedModel = id
+        Diagnostics.log("Head scan: \(head.title) worn by a \(body.rawValue.lowercased()) mannequin")
+        return true
     }
 
     /// An FBX file, read with its bones so a character can be posed (FBXImport.swift).

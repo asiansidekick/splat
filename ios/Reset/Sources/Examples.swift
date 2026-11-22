@@ -110,7 +110,8 @@ enum Mannequin {
         return (slabs, d.armRadius, d.armRadius * 0.82)
     }
 
-    static func make(_ body: Body, pose: MannequinPose, height: Float? = nil, proportion: MannequinProportion? = nil) -> SCNNode {
+    /// `head`: a scanned head (cut at its neck, metres, facing +Z, HeadScan.swift) worn in place of the plain one.
+    static func make(_ body: Body, pose: MannequinPose, height: Float? = nil, proportion: MannequinProportion? = nil, head: SCNNode? = nil) -> SCNNode {
         let (d, k) = sized(body, height: height, proportion: proportion)
         let figure = SCNNode()
         figure.name = "Mannequin"
@@ -155,7 +156,13 @@ enum Mannequin {
         s.addChildNode(shape(SCNCapsule(capRadius: CGFloat((body == .woman ? 0.036 : 0.045) * k), height: CGFloat(d.neck + 0.08 * k)), at: SIMD3(0, d.torso + d.neck * 0.4, 0)))
         let neck = joint("neck", at: SIMD3(0, d.torso + d.neck, 0), z: pose.detail.headTilt, x: pose.headDown, y: pose.headTurn)
         s.addChildNode(neck.outer)
-        neck.inner.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.head * 0.5, 0.01 * k), scale: SIMD3(0.085 * k, d.head * 0.5, 0.1 * k)))
+        if let head {
+            // The scanned head's neck cut sits a little down the mannequin's neck, so its neck covers the join.
+            head.simdPosition = SIMD3(0, -d.neck * 0.35, 0)
+            neck.inner.addChildNode(head)
+        } else {
+            neck.inner.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, d.head * 0.5, 0.01 * k), scale: SIMD3(0.085 * k, d.head * 0.5, 0.1 * k)))
+        }
         neck.inner.addChildNode(marker("end.head", at: SIMD3(0, d.head * 0.5, 0)))
         // Phil, 2026-11-19: the crown turns and nods the head, the ear tilts it.
         neck.inner.addChildNode(marker("tip.crown", at: SIMD3(0, d.head * 1.02, 0.01 * k)))
