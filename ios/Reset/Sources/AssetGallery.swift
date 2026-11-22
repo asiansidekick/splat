@@ -196,7 +196,18 @@ struct AssetGallery: View {
                 if base == nil {
                     // Phil, 2026-11-20: real things in front are picked by tapping them ("In front" on a model's tools). The
                     // whole room from LiDAR hiding models is a choice, off unless turned on (LiveOcclusion.swift).
-                    Toggle(isOn: $wholeRoom) { Label("Whole room hides models (LiDAR)", systemImage: "square.2.layers.3d") }
+                    // Phil, 2026-11-22: "Disambiguate". Says what it does, and how it differs from picking with In front.
+                    Toggle(isOn: $wholeRoom) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Hide models behind anything nearer")
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Text("Automatic, uses LiDAR. Off: only what you pick with In front hides them.")
+                                    .font(Theme.footnote).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        } icon: { Image(systemName: "square.2.layers.3d") }
+                    }
                         .font(Theme.footnote.weight(.semibold))
                         .tint(Theme.accent)
                         .padding(.horizontal, 16).padding(.top, 6)
