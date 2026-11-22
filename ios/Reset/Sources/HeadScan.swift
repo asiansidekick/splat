@@ -332,6 +332,17 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
         if hint != text { hint = text }
     }
 
+    /// Selfie, shutter tapped before the ring filled: on to the back of the head now. False when it is already on (or
+    /// too few pictures of the face yet), so the tap stops the scan instead.
+    func startBackOfHead() -> Bool {
+        guard selfie, recording, !backOfHead, !complete, shots >= 12 else { return false }
+        backOfHead = true
+        awayFrames = 0
+        Haptics.success()
+        Diagnostics.log("Head scan: face done early (\(shots) pictures, \(lit.count) of the ring), now the back of the head")
+        return true
+    }
+
     /// A placed picture: its view kept, and the ring lit.
     private func remember(place: simd_float4x4, direction: SIMD3<Float>) {
         keptDirections.append(direction)
@@ -457,6 +468,28 @@ enum HeadVision {
         return out
     }
 
+    /// An outline grown by `by` of its own pixels each way (the brightest nearby value).
+    static func widen(_ mask: (width: Int, height: Int, bytes: [UInt8]), by r: Int) -> (width: Int, height: Int, bytes: [UInt8]) {
+        let w = mask.width, h = mask.height
+        var across = [UInt8](repeating: 0, count: w * h)
+        for y in 0..<h {
+            for x in 0..<w {
+                var m: UInt8 = 0
+                for dx in max(0, x - r)...min(w - 1, x + r) { m = max(m, mask.bytes[y * w + dx]) }
+                across[y * w + x] = m
+            }
+        }
+        var out = [UInt8](repeating: 0, count: w * h)
+        for y in 0..<h {
+            for x in 0..<w {
+                var m: UInt8 = 0
+                for dy in max(0, y - r)...min(h - 1, y + r) { m = max(m, across[dy * w + x]) }
+                out[y * w + x] = m
+            }
+        }
+        return (w, h, out)
+    }
+
     /// A saved person outline: width, height and its bytes.
     static func loadMask(_ url: URL) -> (width: Int, height: Int, bytes: [UInt8])? {
         guard let data = try? Data(contentsOf: url), data.count > 8 else { return nil }
@@ -512,78 +545,109 @@ enum HeadBuilder {
     }
 
     /// Phil, 2026-11-22: both eyes must look the same way. They are coloured again from the one picture that saw the
-    /// face most square on (see HeadEyes). `builder` gives where the model builder put a picture's camera in head space
-    /// (place, turn): it agrees with the head's shape better than the phone's own record, so it is used when its way
-    /// round matches the phone's.
+    /// face most square on (see HeadEyes), where Vision finds both eyes in the picture itself. `builder` gives where
+    /// the model builder put a picture's camera in head space (place, turn): it agrees with the head's shape better
+    /// than the phone's own record, so it is used when its way round matches the phone's.
     static func matchEyes(_ head: BodyMesh, pictures: inout [String: UIImage], folder: HeadFolder, record: HeadCaptureRecord,
                           cameras: [simd_float4x4], flip: Int, builder: (String) -> (SIMD3<Float>, simd_quatf)?) {
         guard head.uvs != nil, cameras.count == record.shots.count else { return }
-        var best = -1
-        var bestFacing: Float = -1
+        // The pictures most square on to the face, best first.
+        var candidates: [(index: Int, facing: Float)] = []
         for (i, c) in cameras.enumerated() where record.shots[i].isPosed {
             let p = c.columns.3.xyz
             guard simd_length(p) > 0.05 else { continue }
             let facing = simd_normalize(p).z
-            if facing > bestFacing { bestFacing = facing; best = i }
+            if facing > 0.6 { candidates.append((i, facing)) }
         }
-        guard best >= 0, bestFacing > 0.85 else {
+        candidates.sort { $0.facing > $1.facing }
+        guard !candidates.isEmpty else {
             Diagnostics.log("Head scan: no picture square on to the face, eyes left as built")
             return
         }
-        let shot = record.shots[best]
-        guard let photo = UIImage(contentsOfFile: folder.shotsFolder.appendingPathComponent(shot.file).path)?.cgImage else { return }
 
-        // Where the eyes are on this head.
+        // Where the eyes are on this head, roughly: only to check Vision's eyes are the ones the camera sees there.
         let chin = HeadMath.chin(head.positions) ?? record.chin ?? -0.11
-        let tip = HeadEyes.noseTip(head.positions, chin: chin)
-        var eyes: [SIMD3<Float>] = []
-        var from = "guessed from the nose"
+        var rough: [SIMD3<Float>] = []
         if let seen = record.eyes, seen.count == 2, seen.allSatisfy({ $0.count == 3 }) {
-            eyes = seen.map { SIMD3($0[0], $0[1], $0[2]) }
-            from = "from the face tracking"
-            // Moved by however far the built head's nose is from the tracked one (the builder's fit can be a few cm out).
-            if let tip, let n = record.nose, n.count == 3 {
+            rough = seen.map { SIMD3($0[0], $0[1], $0[2]) }
+            if let tip = HeadEyes.noseTip(head.positions, chin: chin), let n = record.nose, n.count == 3 {
                 let shift = tip - SIMD3(n[0], n[1], n[2])
-                if simd_length(shift) < 0.03 {
-                    eyes = eyes.map { $0 + shift }
-                    from += String(format: ", moved %.1f cm to the built nose", simd_length(shift) * 100)
-                }
+                if simd_length(shift) < 0.04 { rough = rough.map { $0 + shift } }
             }
         } else if let guessed = HeadEyes.guess(head.positions, chin: chin) {
-            eyes = guessed
-        }
-        guard eyes.count == 2 else {
-            Diagnostics.log("Head scan: eyes not found, left as built")
-            return
+            rough = guessed
         }
 
-        // The camera as the builder placed it, when it turns the same way as the phone's (within 25 degrees).
-        var camera = cameras[best]
-        var useFlip = flip
-        var which = "phone's place"
-        if let (place, q) = builder(shot.file) {
-            let r = simd_float3x3(q)
-            let known = simd_float3x3(simd_normalize(camera.columns.0.xyz), simd_normalize(camera.columns.1.xyz), simd_normalize(camera.columns.2.xyz))
-            func apart(_ a: simd_float3x3) -> Float {
-                let trace = simd_dot(a.columns.0, known.columns.0) + simd_dot(a.columns.1, known.columns.1) + simd_dot(a.columns.2, known.columns.2)
-                return acos(min(1, max(-1, (trace - 1) / 2)))
+        var tried: [String] = []
+        for candidate in candidates.prefix(6) {
+            let best = candidate.index
+            let shot = record.shots[best]
+            guard let photo = UIImage(contentsOfFile: folder.shotsFolder.appendingPathComponent(shot.file).path)?.cgImage else {
+                tried.append("\(best): no picture")
+                continue
             }
-            // Some builders look down +Z with Y down; ARKit looks down -Z with Y up.
-            let plain = r, upturned = simd_float3x3(r.columns.0, -r.columns.1, -r.columns.2)
-            let a = apart(plain), b = apart(upturned)
-            let pick = a <= b ? plain : upturned
-            if min(a, b) < 25 * .pi / 180 {
-                camera = simd_float4x4(SIMD4(pick.columns.0, 0), SIMD4(pick.columns.1, 0), SIMD4(pick.columns.2, 0), SIMD4(place, 1))
-                useFlip = 0
-                which = String(format: "builder's place, %.0f degrees and %.1f cm from the phone's", min(a, b) * 180 / .pi,
-                               simd_distance(place, cameras[best].columns.3.xyz) * 100)
-            } else {
-                which = String(format: "phone's place (builder's turned %.0f degrees away)", min(a, b) * 180 / .pi)
+            guard let found = HeadEyes.find(in: photo) else {
+                tried.append("\(best): eyes not found")
+                continue
             }
+            // The camera as the builder placed it, when it turns the same way as the phone's (within 25 degrees).
+            var camera = cameras[best]
+            var useFlip = flip
+            var which = "phone's place"
+            if let (place, q) = builder(shot.file) {
+                let r = simd_float3x3(q)
+                let known = simd_float3x3(simd_normalize(camera.columns.0.xyz), simd_normalize(camera.columns.1.xyz), simd_normalize(camera.columns.2.xyz))
+                func apart(_ a: simd_float3x3) -> Float {
+                    let trace = simd_dot(a.columns.0, known.columns.0) + simd_dot(a.columns.1, known.columns.1) + simd_dot(a.columns.2, known.columns.2)
+                    return acos(min(1, max(-1, (trace - 1) / 2)))
+                }
+                // Some builders look down +Z with Y down; ARKit looks down -Z with Y up.
+                let plain = r, upturned = simd_float3x3(r.columns.0, -r.columns.1, -r.columns.2)
+                let a = apart(plain), b = apart(upturned)
+                let pick = a <= b ? plain : upturned
+                if min(a, b) < 25 * .pi / 180 {
+                    camera = simd_float4x4(SIMD4(pick.columns.0, 0), SIMD4(pick.columns.1, 0), SIMD4(pick.columns.2, 0), SIMD4(place, 1))
+                    useFlip = 0
+                    which = String(format: "builder's place, %.0f degrees and %.1f cm from the phone's", min(a, b) * 180 / .pi,
+                                   simd_distance(place, cameras[best].columns.3.xyz) * 100)
+                } else {
+                    which = String(format: "phone's place (builder's turned %.0f degrees away)", min(a, b) * 180 / .pi)
+                }
+            }
+            // Vision's eyes, turned whichever of the four ways round puts them where this camera sees the head's eyes.
+            let pw = Float(photo.width), ph = Float(photo.height)
+            let sx = pw / Float(max(1, shot.width)), sy = ph / Float(max(1, shot.height))
+            let projected: [SIMD2<Float>] = rough.compactMap { p in
+                guard var q = HeadMath.project(p, camera: camera, fx: shot.fx, fy: shot.fy, cx: shot.cx, cy: shot.cy) else { return nil }
+                if useFlip & 1 != 0 { q.x = Float(shot.width) - q.x }
+                if useFlip & 2 != 0 { q.y = Float(shot.height) - q.y }
+                return SIMD2(q.x * sx, q.y * sy)
+            }
+            let spacing = simd_distance(found.eyes[0], found.eyes[1])
+            var eyes = found.eyes
+            var off: Float = -1
+            if projected.count == 2 {
+                var bestOff = Float.greatestFiniteMagnitude
+                for way in 0..<4 {
+                    let turned = found.eyes.map { e in SIMD2(way & 1 != 0 ? pw - e.x : e.x, way & 2 != 0 ? ph - e.y : e.y) }
+                    let straight = simd_distance(turned[0], projected[0]) + simd_distance(turned[1], projected[1])
+                    let crossed = simd_distance(turned[0], projected[1]) + simd_distance(turned[1], projected[0])
+                    let mean = min(straight, crossed) / 2
+                    if mean < bestOff { bestOff = mean; eyes = turned }
+                }
+                off = bestOff
+                guard bestOff < spacing * 0.75 else {
+                    tried.append(String(format: "%d: Vision's eyes %.0f px from where the head's eyes land (%@)", best, bestOff, which))
+                    continue
+                }
+            }
+            let changed = HeadEyes.match(head, pictures: &pictures, eyes: eyes, eyeWidth: found.width, photo: photo, camera: camera, shot: shot, flip: useFlip)
+            Diagnostics.log(String(format: "Head scan: eyes coloured from picture %d (%.0f degrees off square on, %@), Vision's eyes %.0f px apart, %.0f px from the head's, %d picture pixels changed%@",
+                                   best, acos(min(1, candidate.facing)) * 180 / .pi, which, spacing, off, changed,
+                                   tried.isEmpty ? "" : "; passed over " + tried.joined(separator: "; ")))
+            return
         }
-        let changed = HeadEyes.match(head, pictures: &pictures, eyes: eyes, photo: photo, camera: camera, shot: shot, flip: useFlip)
-        Diagnostics.log(String(format: "Head scan: eyes (%@) coloured from picture %d, %.0f degrees off square on, %@; %d picture pixels changed",
-                               from, best, acos(min(1, bestFacing)) * 180 / .pi, which, changed))
+        Diagnostics.log("Head scan: eyes left as built; " + tried.joined(separator: "; "))
     }
 
     /// Selfie pictures from ARKit's front camera: which way round its picture is against ARKit's own sums is checked
@@ -628,7 +692,9 @@ enum HeadBuilder {
                 let hull = HeadMath.hull(outline)
                 guard hull.count >= 3 else { return }
                 let rows = HeadMath.rows(of: hull, width: w, height: h)
-                let person = shot.mask.flatMap { HeadVision.loadMask(folder.shotsFolder.appendingPathComponent($0)) }
+                // Widened a little: the builder colours the head from these pictures, and black just outside a tight outline
+                // came through as dark teeth round the neck and the side of the face (Phil's 1411 test).
+                let person = shot.mask.flatMap { HeadVision.loadMask(folder.shotsFolder.appendingPathComponent($0)) }.map { HeadVision.widen($0, by: 3) }
                 // The picture drawn into memory, then every pixel outside the head made black.
                 let bytesPerRow = w * 4
                 var pixels = [UInt8](repeating: 0, count: bytesPerRow * h)
@@ -640,6 +706,7 @@ enum HeadBuilder {
                 }
                 guard drawn else { return }
                 var kept = 0
+                var keeps = [Bool](repeating: false, count: w * h)
                 for y in 0..<h {
                     let (from, to) = rows[y]
                     for x in 0..<w {
@@ -656,13 +723,11 @@ enum HeadBuilder {
                             }
                             keep = person.bytes[my * person.width + mx] > 60
                         }
-                        if keep { kept += 1 } else {
-                            let p = y * bytesPerRow + x * 4
-                            pixels[p] = 0; pixels[p + 1] = 0; pixels[p + 2] = 0
-                        }
+                        if keep { kept += 1; keeps[y * w + x] = true }
                     }
                 }
                 guard kept > w * h / 200 else { return }
+                MaskFill.fill(&pixels, width: w, height: h, keep: keeps)
                 let data = Data(pixels)
                 guard let provider = CGDataProvider(data: data as CFData),
                       let cut = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: bytesPerRow,

@@ -116,8 +116,24 @@ final class ScanModel: ObservableObject {
     @Published var personTurn = UserDefaults.standard.bool(forKey: "scanPersonTurn") && OwnCapture.turningSupported {
         didSet {
             UserDefaults.standard.set(personTurn, forKey: "scanPersonTurn")
-            if personTurn != oldValue, ownCamera, phase == .ready, let folder {
-                ScanLog.add("Person: \(personTurn ? "turn on the spot" : "walk round")")
+        }
+    }
+    /// Turning on the spot in front of the selfie camera, to watch yourself on the screen (Phil, 2026-11-22).
+    @Published var personSelfie = UserDefaults.standard.bool(forKey: "scanPersonSelfie") && OwnCapture.selfieTurnSupported {
+        didSet {
+            UserDefaults.standard.set(personSelfie, forKey: "scanPersonSelfie")
+        }
+    }
+    /// The Person ways: 0 walk round, 1 turn on the spot (back camera), 2 selfie turn.
+    var personWay: Int {
+        get { !personTurn ? 0 : personSelfie ? 2 : 1 }
+        set {
+            ScanLog.add("Person: \(["walk round", "turn on the spot", "selfie turn"][max(0, min(2, newValue))])")
+            // Both changed, then the camera restarts once.
+            let before = personWay
+            personTurn = newValue != 0
+            personSelfie = newValue == 2
+            if personWay != before, ownCamera, phase == .ready, let folder {
                 own.session.pause()
                 startOwn(folder, recording: false)
             }
@@ -199,7 +215,7 @@ final class ScanModel: ObservableObject {
         maxShots = OwnCapture.maxShots
         passes = 1
         hint = ""
-        own.begin(folder, turning: personMode && personTurn)
+        own.begin(folder, turning: personMode && personTurn, selfie: personSelfie)
         own.recording = recording
         phase = recording ? .capturing : .ready
         ScanLog.add("Own camera start: \(folder.name), recording \(recording)")
@@ -212,7 +228,7 @@ final class ScanModel: ObservableObject {
     /// Person mode needs Reset's own camera: Apple's capture, not yet recording, is swapped for it.
     private func switchedMode() {
         ScanLog.add("Mode: \(personMode ? "person" : "object")")
-        if ownCamera, phase == .ready, let folder, own.turning != (personMode && personTurn) {
+        if ownCamera, phase == .ready, let folder, own.turning != (personMode && personTurn) || own.selfieTurn != (personMode && personTurn && personSelfie) {
             own.session.pause()
             startOwn(folder, recording: false)
             return
@@ -660,7 +676,14 @@ final class ScanModel: ObservableObject {
             from.append(pose.translation)
             to.append(SIMD3(place[0], place[1], place[2]))
         }
-        guard let fit = ScanAlign.fit(from: from, to: to) else {
+        // Vision's places from a selfie picture can come out mirror-wise; the size and which way is up are the same
+        // either way, so the mirrored places are tried too and the better fit kept.
+        var fitted = ScanAlign.fit(from: from, to: to)
+        if let mirrored = ScanAlign.fit(from: from, to: to.map { SIMD3(-$0.x, $0.y, $0.z) }), mirrored.error < (fitted?.error ?? .greatestFiniteMagnitude) {
+            ScanLog.add(String(format: "Poses: fit better mirrored (error %.3f against %.3f m)", mirrored.error, fitted?.error ?? -1))
+            fitted = mirrored
+        }
+        guard let fit = fitted else {
             ScanLog.add("Poses: \(poses.posesBySample.count) from the builder, \(from.count) matched, no fit")
             return
         }
