@@ -19,6 +19,11 @@ struct MannequinPose: Codable, Equatable {
     struct Foot: Codable, Equatable { var point: Float = 0; var turn: Float = 0 }
     /// Shoulders (Phil, 2026-11-19): up (shrug, degrees) and forward (roll, degrees, negative back).
     struct Shoulder: Codable, Equatable { var shrug: Float = 0; var roll: Float = 0 }
+    /// How the whole body is laid down, in degrees, turning about the hips: first tipped over sideways (`over`: 90 lies
+    /// along the floor with the head to the body's right, -90 to its left, still facing the camera), then rolled about
+    /// the camera's side-to-side line (`roll`: -90 turns the front up, on its back; 90 face down). Roll alone tips
+    /// the body back (reclining) or forward.
+    struct Lie: Codable, Equatable { var over: Float = 0; var roll: Float = 0 }
     struct Detail: Codable, Equatable {
         var hipTilt: Float = 0
         var hipTurn: Float = 0
@@ -30,12 +35,14 @@ struct MannequinPose: Codable, Equatable {
         var leftFingers: [Float]?
         var rightFingers: [Float]?
         var leftShoulder = Shoulder(), rightShoulder = Shoulder()
+        /// The whole body laid down (Phil, 2026-11-22: lying in bed, slumped on the ground). Nil stands upright.
+        var lie: Lie?
 
         init() {}
 
         // Every key is optional, so poses saved by earlier builds (before each of these was added) still open.
         private enum Keys: String, CodingKey {
-            case hipTilt, hipTurn, headTilt, leftHand, rightHand, leftFoot, rightFoot, leftFingers, rightFingers, leftShoulder, rightShoulder
+            case hipTilt, hipTurn, headTilt, leftHand, rightHand, leftFoot, rightFoot, leftFingers, rightFingers, leftShoulder, rightShoulder, lie
         }
 
         init(from decoder: Decoder) throws {
@@ -51,6 +58,7 @@ struct MannequinPose: Codable, Equatable {
             rightFingers = try c.decodeIfPresent([Float].self, forKey: .rightFingers)
             leftShoulder = try c.decodeIfPresent(Shoulder.self, forKey: .leftShoulder) ?? Shoulder()
             rightShoulder = try c.decodeIfPresent(Shoulder.self, forKey: .rightShoulder) ?? Shoulder()
+            lie = try c.decodeIfPresent(Lie.self, forKey: .lie)
         }
 
         func encode(to encoder: Encoder) throws {
@@ -66,6 +74,7 @@ struct MannequinPose: Codable, Equatable {
             try c.encodeIfPresent(rightFingers, forKey: .rightFingers)
             try c.encode(leftShoulder, forKey: .leftShoulder)
             try c.encode(rightShoulder, forKey: .rightShoulder)
+            try c.encodeIfPresent(lie, forKey: .lie)
         }
     }
     var detail = Detail()
@@ -110,10 +119,6 @@ struct MannequinPose: Codable, Equatable {
         return p
     }()
 
-    static let all: [(name: String, pose: MannequinPose)] = [
-        ("Standing", standing), ("Sitting", sitting), ("Arms crossed", armsCrossed),
-        ("Hands on hips", handsOnHips), ("Walking", walking), ("Weight on one leg", weightOnOneLeg),
-    ]
 }
 
 extension MannequinPose {
@@ -168,6 +173,7 @@ extension MannequinPose {
         p.detail.leftShoulder = detail.rightShoulder
         p.detail.rightShoulder = detail.leftShoulder
         p.detail.rightFingers = detail.leftFingers
+        p.detail.lie = detail.lie.map { Lie(over: -$0.over, roll: $0.roll) }
         return p
     }
 }
@@ -243,6 +249,7 @@ extension MannequinPose {
         p.detail.leftShoulder = shoulder(detail.leftShoulder)
         p.detail.rightShoulder = shoulder(detail.rightShoulder)
         p.detail.hipTurn = clamp(detail.hipTurn, -35, 35)
+        p.detail.lie = detail.lie.map { Lie(over: clamp($0.over, -90, 90), roll: clamp($0.roll, -90, 90)) }
         p.detail.leftHand = hand(detail.leftHand)
         p.detail.rightHand = hand(detail.rightHand)
         p.detail.leftFoot = foot(detail.leftFoot)

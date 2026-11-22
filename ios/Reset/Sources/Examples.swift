@@ -127,7 +127,18 @@ enum Mannequin {
         root.simdPosition = SIMD3(0, d.foot + d.shin + d.thigh + 0.04 * k, 0)
         // Hips (Phil, 2026-11-19): the pelvis tilts to the side and turns, taking the spine and both legs with it.
         root.eulerAngles = SCNVector3(0, pose.detail.hipTurn * .pi / 180, pose.detail.hipTilt * .pi / 180)
-        figure.addChildNode(root)
+        if pose.detail.lie != nil {
+            // Lying down (Phil, 2026-11-22): the whole body turns about the hips; it is set on the floor below.
+            let lying = SCNNode()
+            lying.name = "lie"
+            lying.simdPosition = root.simdPosition
+            lying.simdOrientation = pose.lieTurn
+            root.simdPosition = .zero
+            lying.addChildNode(root)
+            figure.addChildNode(lying)
+        } else {
+            figure.addChildNode(root)
+        }
         // Pelvis: the woman's is rounder and fuller than her waist.
         if body == .woman {
             root.addChildNode(shape(SCNSphere(radius: 1), at: SIMD3(0, -0.03 * k, -0.005 * k), scale: SIMD3(d.hips * 0.56, 0.13 * k, 0.105 * k)))
@@ -393,13 +404,18 @@ struct ExamplesSheet: View {
                             Text(DeviceSupport.apology("copying a pose")).font(Theme.footnote).foregroundStyle(.orange)
                         }
                     }
-                    ForEach(MannequinPose.all, id: \.name) { item in
-                        Button {
-                            add(Mannequin.make(person, pose: item.pose, height: height), name: "\(person.rawValue), \(item.name.lowercased())",
-                                spec: MannequinSpec(body: person, height: height, pose: item.pose))
-                        } label: {
-                            Label(item.name, systemImage: symbol(item.name))
-                        }
+                    Button {
+                        addMannequin("Standing", .standing)
+                    } label: {
+                        Label("Standing", systemImage: "figure.stand")
+                    }
+                    // Phil, 2026-11-22: many more poses, in groups, so this list stays short.
+                    NavigationLink {
+                        PoseGroupList { name, pose in addMannequin(name, pose) }
+                            .navigationTitle("Pick a pose")
+                            .navigationBarTitleDisplayMode(.inline)
+                    } label: {
+                        Label("In a pose", systemImage: "figure.dance")
                     }
                 } header: {
                     Text("A stand-in person")
@@ -419,14 +435,9 @@ struct ExamplesSheet: View {
         .preferredColorScheme(.dark)
     }
 
-    private func symbol(_ pose: String) -> String {
-        switch pose {
-        case "Sitting": return "figure.seated.side"
-        case "Walking": return "figure.walk"
-        case "Arms crossed": return "figure.stand.line.dotted.figure.stand"
-        case "Hands on hips": return "figure.arms.open"
-        default: return "figure.stand"
-        }
+    private func addMannequin(_ name: String, _ pose: MannequinPose) {
+        add(Mannequin.make(person, pose: pose, height: height), name: "\(person.rawValue), \(name.lowercased())",
+            spec: MannequinSpec(body: person, height: height, pose: pose))
     }
 
     private func symbol(_ piece: SetPiece) -> String {
