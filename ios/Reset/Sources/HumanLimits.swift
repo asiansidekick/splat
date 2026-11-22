@@ -507,3 +507,11 @@ extension HumanLimits.Limb {
     var arm: MannequinPose.Arm { MannequinPose.Arm(out: out, forward: forward, inward: inward, elbow: bend) }
     var leg: MannequinPose.Leg { MannequinPose.Leg(out: out, forward: forward, inward: inward, knee: bend) }
 }
+
+extension MannequinPose {
+    /// The whole body's turn about the hips when it is laid down (Detail.lie); none when it stands.
+    var lieTurn: simd_quatf {
+        guard let lie = detail.lie else { return simd_quatf(angle: 0, axis: SIMD3(0, 1, 0)) }
+        return simd_quatf(angle: lie.roll * .pi / 180, axis: SIMD3(1, 0, 0)) * simd_quatf(angle: lie.over * .pi / 180, axis: SIMD3(0, 0, 1))
+    }
+}

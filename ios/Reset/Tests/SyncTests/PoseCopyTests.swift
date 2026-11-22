@@ -79,7 +79,11 @@ func runPoseCopyTests() {
     overhead.spineSide = 12
     overhead.left = MannequinPose.Arm(out: 150, forward: 10, inward: 0, elbow: 20)
     overhead.rightLeg = MannequinPose.Leg(out: 0, forward: 60, inward: 0, knee: 100)
-    let poses: [(name: String, pose: MannequinPose)] = MannequinPose.all + [(name: "Reaching", pose: reaching), (name: "Arm up, knee up", pose: overhead)]
+    // The everyday standing and sitting poses (lying, riding and fighting poses are past what a copy reads back).
+    let everyday = ["Standing", "Sitting", "Arms crossed", "Hands on hips", "Walking", "Weight on one leg"]
+    let poses: [(name: String, pose: MannequinPose)] = MannequinPose.all.filter { everyday.contains($0.name) }
+        + [(name: "Reaching", pose: reaching), (name: "Arm up, knee up", pose: overhead)]
+    expect(poses.count == everyday.count + 2, "pose copy: the everyday ready-made poses are all there")
     for (name, pose) in poses {
         guard let back = PoseFromBody.pose(seen(pose)) else {
             expect(false, "pose copy: \(name) is read")
@@ -128,6 +132,32 @@ func runPoseCopyTests() {
         expect(over < 1, "pose copy: an arm seen past a shoulder's range is held within it (\(over)°)")
     } else {
         expect(false, "pose copy: an arm seen past a shoulder's range is read")
+    }
+
+    // Phil, 2026-11-22: ready-made poses in groups short enough not to scroll, and lying poses laid on the floor.
+    expect(MannequinPose.groups.count <= 9 && MannequinPose.groups.allSatisfy { $0.poses.count <= 8 && Set($0.poses.map(\.name)).count == $0.poses.count },
+           "pose presets: at most 9 groups of at most 8, no name twice in a group")
+    expect(Set(MannequinPose.all.map(\.name)).count == MannequinPose.all.count, "pose presets: every name is different")
+    let named = Dictionary(MannequinPose.all.map { ($0.name, $0.pose) }, uniquingKeysWith: { a, _ in a })
+    if let onBack = named["On back"], let standing = named["Standing"], let curled = named["Curled up"] {
+        let lying = poser.worlds(for: onBack), upright = poser.worlds(for: standing)
+        let hips = lying.worlds[map.hips].columns.3.y + lying.lift
+        let head = lying.worlds[map.head!].columns.3.y + lying.lift
+        let toe = lying.worlds[index["mixamorig:LeftToeBase"]!].columns.3.y + lying.lift
+        expect(abs(upright.lift) < 0.005, "pose presets: standing stays where it stood (lift \(upright.lift))")
+        expect(hips > 0.04 && hips < 0.2 && head > 0.02 && head < 0.25 && toe < 0.35,
+               "pose presets: on its back the body rests on the floor (hips \(hips), head \(head), toe \(toe) m up)")
+        let spineTop = lying.worlds[map.spine.last!].columns.3.xyz - lying.worlds[map.hips].columns.3.xyz
+        expect(abs(spineTop.y) < 0.05, "pose presets: lying on its back the spine is level (\(spineTop))")
+        // Saved and opened again, and mirrored, it still lies down.
+        let data = try? JSONEncoder().encode(curled)
+        let back = data.flatMap { try? JSONDecoder().decode(MannequinPose.self, from: $0) }
+        expect(back == curled && curled.detail.lie != nil && curled.mirrored.mirrored == curled && curled.mirrored.detail.lie?.over == -(curled.detail.lie?.over ?? 0),
+               "pose presets: a lying pose is saved, opened and mirrored")
+        let old = try? JSONDecoder().decode(MannequinPose.Detail.self, from: Data("{\"hipTilt\": 3}".utf8))
+        expect(old != nil && old?.lie == nil, "pose presets: poses saved before lying open standing")
+    } else {
+        expect(false, "pose presets: On back, Standing and Curled up are there")
     }
 
     // Nothing to read without the legs.

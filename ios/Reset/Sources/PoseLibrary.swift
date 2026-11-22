@@ -41,32 +41,76 @@ final class PoseLibrary: ObservableObject {
 /// The ready-made poses and the saved ones; tap one to use it.
 struct PoseLibrarySheet: View {
     let onPick: (MannequinPose) -> Void
-    @ObservedObject private var library = PoseLibrary.shared
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            List {
-                if !library.items.isEmpty {
-                    Section("Saved") {
-                        ForEach(library.items) { item in
-                            Button(item.name) { onPick(item.pose); dismiss() }
-                                .swipeActions { Button("Delete", role: .destructive) { library.delete(item) } }
-                        }
-                    }
-                }
-                Section("Ready-made") {
-                    ForEach(MannequinPose.all, id: \.name) { item in
-                        Button(item.name) { onPick(item.pose); dismiss() }
-                    }
+            PoseGroupList { _, pose in onPick(pose); dismiss() }
+                .navigationTitle("Poses")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.large])
+        .preferredColorScheme(.dark)
+    }
+}
+
+/// Phil, 2026-11-22: many more ready-made poses, so they come in groups (menus must not scroll): tap a group, then a
+/// pose. Saved poses are a group of their own at the top. Push it inside a NavigationStack.
+struct PoseGroupList: View {
+    let onPick: (String, MannequinPose) -> Void
+    @ObservedObject private var library = PoseLibrary.shared
+
+    var body: some View {
+        List {
+            if !library.items.isEmpty {
+                NavigationLink {
+                    SavedPosesPage(onPick: onPick)
+                } label: {
+                    LabeledContent { Text("\(library.items.count)") } label: { Label("Saved", systemImage: "bookmark") }
                 }
             }
-            .navigationTitle("Poses")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            ForEach(MannequinPose.groups, id: \.name) { group in
+                NavigationLink {
+                    PoseGroupPage(group: group, onPick: onPick)
+                } label: {
+                    Label(group.name, systemImage: group.symbol)
+                }
+            }
         }
-        .presentationDetents([.medium, .large])
-        .preferredColorScheme(.dark)
+    }
+}
+
+/// One group's poses.
+struct PoseGroupPage: View {
+    let group: PoseGroup
+    let onPick: (String, MannequinPose) -> Void
+
+    var body: some View {
+        List {
+            ForEach(group.poses, id: \.name) { item in
+                Button(item.name) { onPick(item.name, item.pose) }
+            }
+        }
+        .navigationTitle(group.name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// The poses kept by name; swipe one to delete it.
+private struct SavedPosesPage: View {
+    let onPick: (String, MannequinPose) -> Void
+    @ObservedObject private var library = PoseLibrary.shared
+
+    var body: some View {
+        List {
+            ForEach(library.items) { item in
+                Button(item.name) { onPick(item.name, item.pose) }
+                    .swipeActions { Button("Delete", role: .destructive) { library.delete(item) } }
+            }
+        }
+        .navigationTitle("Saved")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

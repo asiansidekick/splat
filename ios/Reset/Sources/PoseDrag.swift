@@ -18,7 +18,7 @@ enum PoseDrag {
                    leg: { Frames.legs($0) })
         }
         private static func legs(_ pose: MannequinPose) -> simd_quatf {
-            turn(pose.detail.hipTilt, SIMD3(0, 0, 1)) * turn(pose.detail.hipTurn, SIMD3(0, 1, 0))
+            pose.lieTurn * turn(pose.detail.hipTilt, SIMD3(0, 0, 1)) * turn(pose.detail.hipTurn, SIMD3(0, 1, 0))
         }
         private static func turn(_ degrees: Float, _ axis: SIMD3<Float>) -> simd_quatf { simd_quatf(angle: degrees * .pi / 180, axis: axis) }
     }
@@ -70,7 +70,8 @@ enum PoseDrag {
             }
         case .head:
             // Phil, 2026-11-20: bends forward a long way, from the hips; arms hanging loose keep hanging.
-            let lean = MannequinPose.lean(toward: target - hips)
+            // A body lying down leans as it would standing, in its own frame (Phil, 2026-11-22).
+            let lean = MannequinPose.lean(toward: pose.lieTurn.inverse.act(target - hips))
             var bent = pose
             bent.spineForward = lean.forward
             bent.spineSide = lean.side

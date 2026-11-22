@@ -17,6 +17,8 @@ struct MannequinPoseEditor: View {
     @ObservedObject private var library = PoseLibrary.shared
     @State private var saving = false
     @State private var poseName = ""
+    /// The group of ready-made poses shown along the bottom; nil shows the groups (Phil, 2026-11-22).
+    @State private var chipGroup: String?
 
     init(spec: MannequinSpec, onDone: @escaping (MannequinSpec) -> Void) {
         self.spec = spec
@@ -99,13 +101,30 @@ struct MannequinPoseEditor: View {
                             .foregroundStyle(pose == item.pose ? Theme.accent : Color.white)
                             .contextMenu { Button("Delete", role: .destructive) { library.delete(item) } }
                     }
-                    ForEach(MannequinPose.all, id: \.name) { item in
-                        Button(item.name) { undo.append(pose); redo = []; pose = item.pose }
+                    if let name = chipGroup, let group = MannequinPose.groups.first(where: { $0.name == name }) {
+                        Button { chipGroup = nil } label: { Label("Groups", systemImage: "chevron.left") }
                             .font(Theme.footnote.weight(.semibold))
                             .padding(.horizontal, 12)
                             .frame(minHeight: 36)
-                            .background(Color.white.opacity(0.12), in: Capsule())
-                            .foregroundStyle(pose == item.pose ? Theme.accent : Color.white)
+                            .background(Theme.accent.opacity(0.25), in: Capsule())
+                            .foregroundStyle(Color.white)
+                        ForEach(group.poses, id: \.name) { item in
+                            Button(item.name) { undo.append(pose); redo = []; pose = item.pose }
+                                .font(Theme.footnote.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 36)
+                                .background(Color.white.opacity(0.12), in: Capsule())
+                                .foregroundStyle(pose == item.pose ? Theme.accent : Color.white)
+                        }
+                    } else {
+                        ForEach(MannequinPose.groups, id: \.name) { group in
+                            Button { chipGroup = group.name } label: { Label(group.name, systemImage: group.symbol) }
+                                .font(Theme.footnote.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 36)
+                                .background(Color.white.opacity(0.12), in: Capsule())
+                                .foregroundStyle(group.poses.contains { $0.pose == pose } ? Theme.accent : Color.white)
+                        }
                     }
                 }
                 .padding(.horizontal, 12)

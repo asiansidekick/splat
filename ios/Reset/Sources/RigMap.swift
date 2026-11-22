@@ -432,9 +432,10 @@ struct RigPoser {
         return legFrame(pose) * Self.turn(split.pelvis, Self.x)
     }
 
-    /// What the legs hang from: the pelvis tilted and turned, not tipped (the legs stay put when the body bends).
+    /// What the legs hang from: the pelvis tilted and turned, not tipped (the legs stay put when the body bends), and
+    /// the whole body laid down when it lies.
     func legFrame(_ pose: MannequinPose) -> simd_quatf {
-        Self.turn(pose.detail.hipTilt, Self.z) * Self.turn(pose.detail.hipTurn, Self.y)
+        pose.lieTurn * Self.turn(pose.detail.hipTilt, Self.z) * Self.turn(pose.detail.hipTurn, Self.y)
     }
 
     /// The top of the spine, as it leans.
@@ -459,7 +460,7 @@ struct RigPoser {
         let hips = legFrame(pose)
         let pelvis = pelvisFrame(pose)
         let tipped = map.spine.isEmpty ? pose.spineForward != 0 : Self.bend(pose.spineForward).pelvis != 0
-        if pose.detail.hipTilt != 0 || pose.detail.hipTurn != 0 || tipped { out[map.hips] = pelvis }
+        if pose.detail.hipTilt != 0 || pose.detail.hipTurn != 0 || tipped || pose.detail.lie != nil { out[map.hips] = pelvis }
         let spine = chestFrame(pose)
         let lean = pelvis.inverse * spine
         for (k, bone) in map.spine.enumerated() {
@@ -530,6 +531,30 @@ struct RigPoser {
         return out
     }
 
+    /// Roughly how far the body's surface lies from each bone, as shares of the figure's height (torso thickest,
+    /// fingers and toes thinnest). Only used to stand or lay the figure on the floor.
+    var fleshDepths: [Float] {
+        var low = Float.greatestFiniteMagnitude, high = -Float.greatestFiniteMagnitude
+        for node in nodes where node.isBone {
+            low = min(low, node.world.columns.3.y)
+            high = max(high, node.world.columns.3.y)
+        }
+        let tall = high > low ? high - low : 1
+        var share = [Float](repeating: 0.015, count: nodes.count)
+        func set(_ bone: Int?, _ s: Float) { if let bone, bone >= 0, bone < share.count { share[bone] = s } }
+        set(map.hips, 0.065)
+        for bone in map.spine { set(bone, 0.065) }
+        set(map.neck, 0.03)
+        set(map.head, 0.06)
+        for arm in [map.armL, map.armR] {
+            for (k, bone) in arm.enumerated() { set(bone, k < 2 ? 0.025 : 0.02) }
+        }
+        for leg in [map.legL, map.legR] {
+            for (k, bone) in leg.enumerated() { set(bone, [0.045, 0.03, 0.02, 0.015][min(k, 3)]) }
+        }
+        return share.map { $0 * tall }
+    }
+
     /// Every node's place in the model for a pose (nil: as the file rests), and how far to lift the whole
     /// figure so its lowest bone is as low as it was at rest (feet stay on the floor when it sits or kneels).
     func worlds(for pose: MannequinPose?) -> (worlds: [simd_float4x4], lift: Float) {
@@ -549,10 +574,13 @@ struct RigPoser {
             }
             worlds[i] = world
         }
+        // Bones run down the middle of the body, so the floor is found from each bone less roughly how far the body's
+        // surface is below it: a figure lying on its back rests on its back, not on its spine (Phil, 2026-11-22).
+        let flesh = fleshDepths
         var restLow = Float.greatestFiniteMagnitude, low = Float.greatestFiniteMagnitude
         for i in 0..<nodes.count where nodes[i].isBone {
-            restLow = min(restLow, nodes[i].world.columns.3.y)
-            low = min(low, worlds[i].columns.3.y)
+            restLow = min(restLow, nodes[i].world.columns.3.y - flesh[i])
+            low = min(low, worlds[i].columns.3.y - flesh[i])
         }
         return (worlds, restLow < .greatestFiniteMagnitude ? restLow - low : 0)
     }
