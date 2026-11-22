@@ -101,6 +101,10 @@ struct HeadShot: Codable {
     var faceCentre: [Float]?
     var faceYaw: Float?
     var faceSize: Float?
+    /// False for a selfie picture of the back of the head, taken with the face out of sight: its camera is only where
+    /// the phone last saw the face (good enough to cut the head out, not to place the picture). Nil means placed.
+    var posed: Bool?
+    var isPosed: Bool { posed ?? true }
 }
 
 struct HeadCaptureRecord: Codable {
@@ -108,6 +112,10 @@ struct HeadCaptureRecord: Codable {
     var shots: [HeadShot]
     /// Selfie: the chin's height in head space, from ARKit's face shape.
     var chin: Float?
+    /// Selfie: both eyes (left, then right) and the tip of the nose in head space, from ARKit's face shape. Both eyes'
+    /// colour is taken from one picture so they look the same way (Phil, 2026-11-22).
+    var eyes: [[Float]]?
+    var nose: [Float]?
 }
 
 /// What the check screen changed: the neck cut's height and the head's turn (radians about up).
@@ -143,8 +151,17 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
     @Published var recording = false
     /// The ring is full: the shutter's next step is to build.
     @Published private(set) var complete = false
+    /// Selfie, once the face ring is full: the phone stands still while the person turns slowly all the way round, so
+    /// the back of the head is seen too (Phil, 2026-11-22). Pictures keep coming while the face is out of sight, and the
+    /// scan is complete when the face comes back square on.
+    @Published private(set) var backOfHead = false
     private(set) var selfie = true
-    var maxShots: Int { selfie ? 70 : 90 }
+    static let frontShots = 70, backShots = 36
+    var maxShots: Int { selfie ? Self.frontShots + Self.backShots : 90 }
+    private var lastFacePlace: simd_float4x4?
+    private var lastBackTime: TimeInterval = 0
+    private var awayFrames = 0
+    private var backKept = 0
 
     private var folder: HeadFolder?
     private var record = HeadCaptureRecord(selfie: true, shots: [])
@@ -153,6 +170,8 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
     private var keptForwards: [SIMD3<Float>] = []
     private var lastLook: (direction: SIMD3<Float>, position: SIMD3<Float>, time: TimeInterval)?
     private var chins: [Float] = []
+    private var eyesSeen: [[SIMD3<Float>]] = []
+    private var noses: [SIMD3<Float>] = []
     private var frameCount = 0
     private var writing = 0
     private let queue = DispatchQueue(label: "head-pictures", qos: .userInitiated)
@@ -167,6 +186,13 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
         keptForwards = []
         lastLook = nil
         chins = []
+        eyesSeen = []
+        noses = []
+        backOfHead = false
+        lastFacePlace = nil
+        lastBackTime = 0
+        awayFrames = 0
+        backKept = 0
         shots = 0
         lit = []
         complete = false
@@ -203,6 +229,13 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
         }
         let sorted = chins.sorted()
         if !sorted.isEmpty { record.chin = sorted[sorted.count / 2] }
+        func middle(_ points: [SIMD3<Float>]) -> [Float] {
+            (0..<3).map { k in let v = points.map { $0[k] }.sorted(); return v[v.count / 2] }
+        }
+        if !eyesSeen.isEmpty {
+            record.eyes = [middle(eyesSeen.map { $0[0] }), middle(eyesSeen.map { $0[1] })]
+        }
+        if !noses.isEmpty { record.nose = middle(noses) }
         if let folder, let data = try? JSONEncoder().encode(record) { try? data.write(to: folder.captureFile) }
         return record.shots.count
     }
@@ -224,13 +257,36 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
         let direction: SIMD3<Float>
         if selfie {
             guard let face = frame.anchors.compactMap({ $0 as? ARFaceAnchor }).first, face.isTracked else {
-                setHint("Face the camera")
                 lastLook = nil
+                // Only once the face was last seen turning away (not while the phone is being stood up).
+                guard backOfHead, recording, let folder, let last = lastFacePlace, simd_normalize(last.columns.3.xyz).z < 0.8 else {
+                    setHint("Face the camera")
+                    return
+                }
+                // The back of the head: a picture every 0.4 s while the face is out of sight.
+                setHint("")
+                awayFrames += 1
+                if frame.timestamp - lastBackTime >= 0.4, writing < 3, backKept < Self.backShots {
+                    lastBackTime = frame.timestamp
+                    backKept += 1
+                    keep(frame, place: last, direction: simd_normalize(last.columns.3.xyz), folder: folder, posed: false)
+                }
                 return
             }
             place = face.transform.inverse * camera
             direction = simd_normalize(place.columns.3.xyz)
+            lastFacePlace = place
+            // Back round to face the phone after turning away for a while: done.
+            if backOfHead, recording, !complete, awayFrames > 45, backKept >= 6, direction.z > 0.9 {
+                complete = true
+                Haptics.success()
+                Diagnostics.log("Head scan: turned all the way round, \(backKept) pictures of the back of the head")
+            }
             if frameCount % 6 == 0, let low = face.geometry.vertices.map(\.y).min() { chins.append(low) }
+            if frameCount % 6 == 3 {
+                eyesSeen.append([face.leftEyeTransform.columns.3.xyz, face.rightEyeTransform.columns.3.xyz])
+                if let tip = face.geometry.vertices.filter({ abs($0.x) < 0.02 }).max(by: { $0.z < $1.z }) { noses.append(tip) }
+            }
         } else {
             guard case .normal = frame.camera.trackingState else {
                 setHint("Move slowly")
@@ -259,7 +315,7 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
         setHint(fast ? "Slower" : "")
-        guard !fast, writing < 3, record.shots.count < maxShots else { return }
+        guard !fast, writing < 3, record.shots.count - backKept < (selfie ? Self.frontShots : maxShots) else { return }
         // A new picture once the view has changed enough: 5° round a selfie, 7° or 6 cm walking round.
         let key = selfie ? direction : place.columns.3.xyz
         if selfie {
@@ -269,24 +325,18 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
             let moved = keptPlaces.map { simd_distance($0, key) }.min() ?? .greatestFiniteMagnitude
             guard turned >= 7 * .pi / 180 || moved >= 0.06 else { return }
         }
-        keep(frame, place: place, direction: direction, folder: folder)
+        keep(frame, place: place, direction: direction, folder: folder, posed: true)
     }
 
     private func setHint(_ text: String) {
         if hint != text { hint = text }
     }
 
-    private func keep(_ frame: ARFrame, place: simd_float4x4, direction: SIMD3<Float>, folder: HeadFolder) {
-        let number = record.shots.count + 1
-        let name = String(format: "HEAD_%03d.jpg", number)
-        let size = frame.camera.imageResolution
-        let k = frame.camera.intrinsics
-        record.shots.append(HeadShot(file: name, camera: flatten(place), fx: k[0][0], fy: k[1][1], cx: k[2][0], cy: k[2][1],
-                                     width: Int(size.width), height: Int(size.height)))
+    /// A placed picture: its view kept, and the ring lit.
+    private func remember(place: simd_float4x4, direction: SIMD3<Float>) {
         keptDirections.append(direction)
         keptPlaces.append(place.columns.3.xyz)
         keptForwards.append(direction)
-        shots = record.shots.count
         // The ring: a selfie by which way the head has turned, walking round by where round the head the phone is.
         var slot: Int?
         if selfie {
@@ -302,9 +352,30 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
             lit.insert(slot)
             Haptics.tap()
         }
-        if lit.count >= Self.slots, !complete, shots >= (selfie ? 15 : 30) {
+        guard lit.count >= Self.slots, !complete, !backOfHead, shots >= (selfie ? 15 : 30) else { return }
+        Haptics.success()
+        if selfie {
+            // The face is done; now the back of the head.
+            backOfHead = true
+            awayFrames = 0
+            Diagnostics.log("Head scan: face ring full (\(shots) pictures), now the back of the head")
+        } else {
             complete = true
-            Haptics.success()
+        }
+    }
+
+    private func keep(_ frame: ARFrame, place: simd_float4x4, direction: SIMD3<Float>, folder: HeadFolder, posed: Bool) {
+        let number = record.shots.count + 1
+        let name = String(format: "HEAD_%03d.jpg", number)
+        let size = frame.camera.imageResolution
+        let k = frame.camera.intrinsics
+        record.shots.append(HeadShot(file: name, camera: flatten(place), fx: k[0][0], fy: k[1][1], cx: k[2][0], cy: k[2][1],
+                                     width: Int(size.width), height: Int(size.height), posed: posed ? nil : false))
+        shots = record.shots.count
+        if posed {
+            remember(place: place, direction: direction)
+        } else if backKept % 4 == 0 {
+            Haptics.tap()
         }
         let image = CIImage(cvPixelBuffer: frame.capturedImage).copyRendered()
         let url = folder.shotsFolder.appendingPathComponent(name)
@@ -440,13 +511,88 @@ enum HeadBuilder {
         return cameras.map { back * $0 }
     }
 
+    /// Phil, 2026-11-22: both eyes must look the same way. They are coloured again from the one picture that saw the
+    /// face most square on (see HeadEyes). `builder` gives where the model builder put a picture's camera in head space
+    /// (place, turn): it agrees with the head's shape better than the phone's own record, so it is used when its way
+    /// round matches the phone's.
+    static func matchEyes(_ head: BodyMesh, pictures: inout [String: UIImage], folder: HeadFolder, record: HeadCaptureRecord,
+                          cameras: [simd_float4x4], flip: Int, builder: (String) -> (SIMD3<Float>, simd_quatf)?) {
+        guard head.uvs != nil, cameras.count == record.shots.count else { return }
+        var best = -1
+        var bestFacing: Float = -1
+        for (i, c) in cameras.enumerated() where record.shots[i].isPosed {
+            let p = c.columns.3.xyz
+            guard simd_length(p) > 0.05 else { continue }
+            let facing = simd_normalize(p).z
+            if facing > bestFacing { bestFacing = facing; best = i }
+        }
+        guard best >= 0, bestFacing > 0.85 else {
+            Diagnostics.log("Head scan: no picture square on to the face, eyes left as built")
+            return
+        }
+        let shot = record.shots[best]
+        guard let photo = UIImage(contentsOfFile: folder.shotsFolder.appendingPathComponent(shot.file).path)?.cgImage else { return }
+
+        // Where the eyes are on this head.
+        let chin = HeadMath.chin(head.positions) ?? record.chin ?? -0.11
+        let tip = HeadEyes.noseTip(head.positions, chin: chin)
+        var eyes: [SIMD3<Float>] = []
+        var from = "guessed from the nose"
+        if let seen = record.eyes, seen.count == 2, seen.allSatisfy({ $0.count == 3 }) {
+            eyes = seen.map { SIMD3($0[0], $0[1], $0[2]) }
+            from = "from the face tracking"
+            // Moved by however far the built head's nose is from the tracked one (the builder's fit can be a few cm out).
+            if let tip, let n = record.nose, n.count == 3 {
+                let shift = tip - SIMD3(n[0], n[1], n[2])
+                if simd_length(shift) < 0.03 {
+                    eyes = eyes.map { $0 + shift }
+                    from += String(format: ", moved %.1f cm to the built nose", simd_length(shift) * 100)
+                }
+            }
+        } else if let guessed = HeadEyes.guess(head.positions, chin: chin) {
+            eyes = guessed
+        }
+        guard eyes.count == 2 else {
+            Diagnostics.log("Head scan: eyes not found, left as built")
+            return
+        }
+
+        // The camera as the builder placed it, when it turns the same way as the phone's (within 25 degrees).
+        var camera = cameras[best]
+        var useFlip = flip
+        var which = "phone's place"
+        if let (place, q) = builder(shot.file) {
+            let r = simd_float3x3(q)
+            let known = simd_float3x3(simd_normalize(camera.columns.0.xyz), simd_normalize(camera.columns.1.xyz), simd_normalize(camera.columns.2.xyz))
+            func apart(_ a: simd_float3x3) -> Float {
+                let trace = simd_dot(a.columns.0, known.columns.0) + simd_dot(a.columns.1, known.columns.1) + simd_dot(a.columns.2, known.columns.2)
+                return acos(min(1, max(-1, (trace - 1) / 2)))
+            }
+            // Some builders look down +Z with Y down; ARKit looks down -Z with Y up.
+            let plain = r, upturned = simd_float3x3(r.columns.0, -r.columns.1, -r.columns.2)
+            let a = apart(plain), b = apart(upturned)
+            let pick = a <= b ? plain : upturned
+            if min(a, b) < 25 * .pi / 180 {
+                camera = simd_float4x4(SIMD4(pick.columns.0, 0), SIMD4(pick.columns.1, 0), SIMD4(pick.columns.2, 0), SIMD4(place, 1))
+                useFlip = 0
+                which = String(format: "builder's place, %.0f degrees and %.1f cm from the phone's", min(a, b) * 180 / .pi,
+                               simd_distance(place, cameras[best].columns.3.xyz) * 100)
+            } else {
+                which = String(format: "phone's place (builder's turned %.0f degrees away)", min(a, b) * 180 / .pi)
+            }
+        }
+        let changed = HeadEyes.match(head, pictures: &pictures, eyes: eyes, photo: photo, camera: camera, shot: shot, flip: useFlip)
+        Diagnostics.log(String(format: "Head scan: eyes (%@) coloured from picture %d, %.0f degrees off square on, %@; %d picture pixels changed",
+                               from, best, acos(min(1, bestFacing)) * 180 / .pi, which, changed))
+    }
+
     /// Selfie pictures from ARKit's front camera: which way round its picture is against ARKit's own sums is checked
     /// against where Vision saw the face (0 as is, 1 across, 2 up and down, 3 both).
     static func flip(_ record: HeadCaptureRecord, _ cameras: [simd_float4x4]) -> Int {
         var error = [Float](repeating: 0, count: 4)
         var counted = 0
         for (i, shot) in record.shots.enumerated() {
-            guard let face = shot.faceCentre, face.count == 2,
+            guard shot.isPosed, let face = shot.faceCentre, face.count == 2,
                   let nose = HeadMath.project(SIMD3(0, 0.0, 0.06), camera: cameras[i], fx: shot.fx, fy: shot.fy, cx: shot.cx, cy: shot.cy) else { continue }
             let f = SIMD2(face[0], face[1]), w = Float(shot.width), h = Float(shot.height)
             let options = [nose, SIMD2(w - nose.x, nose.y), SIMD2(nose.x, h - nose.y), SIMD2(w - nose.x, h - nose.y)]
@@ -538,7 +684,7 @@ enum HeadBuilder {
         guard let cameras = headSpace(record) else { throw Failure.lost }
         let flip = record.selfie ? Self.flip(record, cameras) : 0
         let made = await Task.detached(priority: .userInitiated) { HeadBuilder.cutOut(folder, record, cameras: cameras, flip: flip) }.value
-        Diagnostics.log("Head scan: \(made) of \(record.shots.count) pictures cut down to the head (\(record.selfie ? "selfie" : "walking round"), \(record.shots.filter { $0.mask != nil }.count) with a person outline)")
+        Diagnostics.log("Head scan: \(made) of \(record.shots.count) pictures cut down to the head (\(record.selfie ? "selfie" : "walking round"), \(record.shots.filter { $0.mask != nil }.count) with a person outline, \(record.shots.filter { !$0.isPosed }.count) of the back of the head)")
         guard made >= 12 else { throw Failure.tooFew(made) }
         progress(0.02)
 
@@ -551,6 +697,7 @@ enum HeadBuilder {
         let raw = folder.url.appendingPathComponent("raw.usdz")
         try? FileManager.default.removeItem(at: raw)
         var builderPlaces: [String: SIMD3<Float>] = [:]
+        var builderTurns: [String: simd_quatf] = [:]
         try await withTaskCancellationHandler {
             try session.process(requests: [.modelFile(url: raw), .poses])
             outputs: for try await output in session.outputs {
@@ -559,7 +706,10 @@ enum HeadBuilder {
                 case .requestComplete(_, let result):
                     if case .poses(let poses) = result {
                         for (sample, pose) in poses.posesBySample {
-                            if let name = poses.urlsBySample[sample]?.lastPathComponent { builderPlaces[name] = pose.translation }
+                            if let name = poses.urlsBySample[sample]?.lastPathComponent {
+                                builderPlaces[name] = pose.translation
+                                builderTurns[name] = pose.rotation
+                            }
                         }
                     }
                 case .requestError(_, let error): throw error
@@ -577,7 +727,7 @@ enum HeadBuilder {
         // The builder's camera places against the known ones in head space.
         var from: [SIMD3<Float>] = [], to: [SIMD3<Float>] = []
         for (i, shot) in record.shots.enumerated() {
-            guard let p = builderPlaces[shot.file] else { continue }
+            guard shot.isPosed, let p = builderPlaces[shot.file] else { continue }
             from.append(p)
             to.append(cameras[i].columns.3.xyz)
         }
@@ -586,6 +736,10 @@ enum HeadBuilder {
             throw Failure.noFit
         }
         Diagnostics.log(String(format: "Head scan: %d of %d pictures placed by the builder, scale %.3f, error %.1f cm", from.count, record.shots.count, fit.scale, fit.error * 100))
+        let backs = record.shots.filter { !$0.isPosed }
+        if !backs.isEmpty {
+            Diagnostics.log("Head scan: \(backs.filter { builderPlaces[$0.file] != nil }.count) of \(backs.count) back-of-head pictures placed by the builder")
+        }
 
         guard let (mesh, pictures) = ScanCharacterMaker.read(raw) else { throw Failure.noModel }
         try? FileManager.default.removeItem(at: raw)
@@ -598,12 +752,22 @@ enum HeadBuilder {
         head = ScanRig.mainPiece(head).0
         guard head.triangleCount > 200 else { throw Failure.nothingLeft }
 
+        // The pictures by name, then both eyes coloured again from the one picture that saw the face most square on.
+        var named: [String: UIImage] = [:]
+        for (i, part) in mesh.parts.enumerated() {
+            if let texture = part.texture, i < pictures.count, let picture = pictures[i], named[texture] == nil { named[texture] = picture }
+        }
+        matchEyes(head, pictures: &named, folder: folder, record: record, cameras: cameras, flip: flip,
+                  builder: { name in
+                      guard let place = builderPlaces[name], let turn0 = builderTurns[name] else { return nil }
+                      return (fit.scale * turn.act(place) + shift, turn * turn0)
+                  })
+
         // The pictures, under the names a character keeps them by.
         for (index, part) in head.parts.enumerated() {
             guard let texture = part.texture else { continue }
-            let original = mesh.parts.firstIndex { $0.texture == texture } ?? index
             let saved = "scanned-head-" + texture
-            if original < pictures.count, let picture = pictures[original], let jpeg = HeadPiece.jpeg(picture) {
+            if let picture = named[texture], let jpeg = HeadPiece.jpeg(picture) {
                 try jpeg.write(to: folder.url.appendingPathComponent(saved), options: .atomic)
                 head.parts[index].texture = saved
             } else {
