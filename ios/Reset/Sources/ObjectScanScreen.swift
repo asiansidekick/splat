@@ -208,11 +208,11 @@ struct ScanScreen: View {
         case .starting: return "Starting camera…"
         case .ready where model.personMode && model.turningOnSpot:
             return model.own.selfieTurn
-                ? "Stand the phone up, screen towards you, whole body in view. Tap, then turn slowly on the spot, arms a little out"
-                : "Stand the phone up, whole body in view. Tap, then turn slowly on the spot, arms a little out"
-        case .capturing where model.personMode && model.turningOnSpot: return "Small steps, all the way round. It stops by itself"
+                ? "Stand the phone up, screen towards you, whole body in view. Tap, then turn slowly on the spot. Arms well away from your sides, feet apart"
+                : "Stand the phone up, whole body in view. Tap, then turn slowly on the spot. Arms well away from your sides, feet apart"
+        case .capturing where model.personMode && model.turningOnSpot: return "Small steps, arms out, feet apart, all the way round. It stops by itself"
         case .ready where model.personMode: return "Tap to record, then walk slowly round the person, high and low"
-        case .capturing where model.personMode: return "Arms a little out, standing still. Tap to stop"
+        case .capturing where model.personMode: return "Arms well away from the body, feet apart, standing still. Tap to stop"
         case .ready where model.ownCamera: return "Tap to record, then walk slowly round the object"
         case .capturing where model.ownCamera: return "Walk slowly round it, high and low. Tap to stop"
         case .ready: return ScanModel.usesBox ? "Aim at the object, then tap" : "Tap to record, then walk slowly round the object"

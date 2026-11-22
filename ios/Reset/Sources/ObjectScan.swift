@@ -703,8 +703,12 @@ final class ScanModel: ObservableObject {
         // A phone standing still while the person turns is a metre or two away and placed from the body's turn, which
         // ARKit or Vision read a few degrees out (Phil's 1414 log: 20 to 27 cm left at about 2 m), so there the fit
         // may be out by a sixth of the distance. Without a fit the model stood on its head.
-        let middle = to.reduce(SIMD3<Float>(0, 0, 0), +) / Float(max(1, to.count))
-        let reach = to.map { simd_distance($0, middle) }.reduce(0, +) / Float(max(1, to.count))
+        var middle = SIMD3<Float>(0, 0, 0)
+        for p in to { middle += p }
+        middle /= Float(max(1, to.count))
+        var reach: Float = 0
+        for p in to { reach += simd_distance(p, middle) }
+        reach /= Float(max(1, to.count))
         let allowed = max(0.15, 0.18 * reach)
         guard fit.error < allowed, let data = try? JSONEncoder().encode(fit) else {
             ScanLog.add(String(format: "Poses: fit not used (error %.3f m, %.3f allowed)", fit.error, allowed))
