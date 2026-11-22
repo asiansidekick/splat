@@ -1,5 +1,6 @@
 import CoreGraphics
 import UIKit
+import Vision
 import simd
 
 /// Phil, 2026-11-22: "one [eye] can be different from the other, enforce sampling both eyes simultaneously in the scan
@@ -23,12 +24,42 @@ enum HeadEyes {
         return [SIMD3(0.033, tip.y + 0.035, tip.z - 0.025), SIMD3(-0.033, tip.y + 0.035, tip.z - 0.025)]
     }
 
+    /// Both eyes as Vision sees them in a picture written on its side (as the camera wrote it): each eye's middle in
+    /// the picture's own pixels, and how wide the eye is. Nil unless both eyes are found.
+    static func find(in photo: CGImage) -> (eyes: [SIMD2<Float>], width: Float)? {
+        let request = VNDetectFaceLandmarksRequest()
+        let handler = VNImageRequestHandler(cgImage: photo, orientation: .right, options: [:])
+        guard (try? handler.perform([request])) != nil,
+              let face = (request.results ?? []).max(by: { $0.boundingBox.width * $0.boundingBox.height < $1.boundingBox.width * $1.boundingBox.height }),
+              let marks = face.landmarks else { return nil }
+        let w = Float(photo.width), h = Float(photo.height), box = face.boundingBox
+        // Upright (x across, y up from the bottom, 0 to 1) back into the picture on its side, as HeadVision does.
+        func back(_ p: CGPoint) -> SIMD2<Float> {
+            let ux = Float(box.minX + p.x * box.width), uy = Float(box.minY + p.y * box.height)
+            return SIMD2((1 - uy) * w, (1 - ux) * h)
+        }
+        var eyes: [SIMD2<Float>] = []
+        var widths: [Float] = []
+        for region in [marks.leftEye, marks.rightEye] {
+            guard let region, region.pointCount >= 3 else { return nil }
+            let points = region.normalizedPoints.map(back)
+            eyes.append(points.reduce(SIMD2<Float>(0, 0), +) / Float(points.count))
+            var far: Float = 0
+            for a in points { for b in points { far = max(far, simd_distance(a, b)) } }
+            widths.append(far)
+        }
+        guard simd_distance(eyes[0], eyes[1]) > 10 else { return nil }
+        return (eyes, max(widths[0], widths[1], simd_distance(eyes[0], eyes[1]) * 0.4))
+    }
+
     /// Recolours the eyes of `head` (head space, with picture places) in its pictures (by file name) from `photo`, taken
-    /// by `camera` (head space) with the shot's focal lengths. Returns how many picture pixels changed.
-    static func match(_ head: BodyMesh, pictures: inout [String: UIImage], eyes: [SIMD3<Float>], photo: CGImage,
+    /// by `camera` (head space) with the shot's focal lengths. `eyes` are the eyes' middles in the photo's pixels and
+    /// `eyeWidth` how wide one is: every bit of the face facing the camera that lands within an eye's width of an eye's
+    /// middle takes the photo's colour, fading out to one and a half widths. Returns how many picture pixels changed.
+    static func match(_ head: BodyMesh, pictures: inout [String: UIImage], eyes: [SIMD2<Float>], eyeWidth: Float, photo: CGImage,
                       camera: simd_float4x4, shot: HeadShot, flip: Int) -> Int {
-        guard let uvs = head.uvs, !eyes.isEmpty else { return 0 }
-        let inner: Float = 0.017, outer: Float = 0.025
+        guard let uvs = head.uvs, !eyes.isEmpty, eyeWidth > 1 else { return 0 }
+        let inner = eyeWidth * 0.95, outer = eyeWidth * 1.5
         // The photo's pixels.
         let pw = photo.width, ph = photo.height
         var photoPixels = [UInt8](repeating: 0, count: pw * ph * 4)
@@ -41,20 +72,36 @@ enum HeadEyes {
         guard drawn else { return 0 }
         let sx = Float(pw) / Float(max(1, shot.width)), sy = Float(ph) / Float(max(1, shot.height))
         let eye = camera.columns.3.xyz
-        func sample(_ p: SIMD3<Float>) -> SIMD3<Float>? {
+        /// Where a point of the head lands in the photo, in its pixels.
+        func pixel(_ p: SIMD3<Float>) -> SIMD2<Float>? {
             guard var q = HeadMath.project(p, camera: camera, fx: shot.fx, fy: shot.fy, cx: shot.cx, cy: shot.cy) else { return nil }
             if flip & 1 != 0 { q.x = Float(shot.width) - q.x }
             if flip & 2 != 0 { q.y = Float(shot.height) - q.y }
-            let x = Int(q.x * sx), y = Int(q.y * sy)
+            return SIMD2(q.x * sx, q.y * sy)
+        }
+        func sample(_ q: SIMD2<Float>) -> SIMD3<Float>? {
+            let x = Int(q.x), y = Int(q.y)
             guard x >= 0, y >= 0, x < pw, y < ph else { return nil }
             let i = (y * pw + x) * 4
             return SIMD3(Float(photoPixels[i]), Float(photoPixels[i + 1]), Float(photoPixels[i + 2]))
         }
-        func nearest(_ p: SIMD3<Float>) -> Float {
+        func nearest(_ q: SIMD2<Float>) -> Float {
             var best = Float.greatestFiniteMagnitude
-            for e in eyes { best = min(best, simd_distance(e, p)) }
+            for e in eyes { best = min(best, simd_distance(e, q)) }
             return best
         }
+        func nearestPoint(_ p: SIMD3<Float>) -> Float { pixel(p).map { nearest($0) } ?? .greatestFiniteMagnitude }
+        // Only the front of the face: what lies further from the camera than the eyes' depth plus 6 cm is the back.
+        var eyeDepth: Float = .greatestFiniteMagnitude
+        for t in 0..<head.triangleCount {
+            let c = (0..<3).map { head.positions[Int(head.triangles[t * 3 + $0])] }
+            let normal = simd_cross(c[1] - c[0], c[2] - c[0])
+            let middle = (c[0] + c[1] + c[2]) / 3
+            guard simd_length(normal) > 1e-12, simd_dot(simd_normalize(normal), simd_normalize(eye - middle)) > 0.15,
+                  let q = pixel(middle), nearest(q) < outer else { continue }
+            eyeDepth = min(eyeDepth, simd_distance(middle, eye))
+        }
+        guard eyeDepth < 2 else { return 0 }
 
         var changed = 0
         for part in head.parts {
@@ -64,7 +111,7 @@ enum HeadEyes {
             // Only triangles near an eye, facing the camera.
             let near = range.filter { t in
                 let c = (0..<3).map { head.positions[Int(head.triangles[t * 3 + $0])] }
-                return c.contains { nearest($0) < outer + 0.004 }
+                return c.contains { nearestPoint($0) < outer * 1.6 }
             }
             guard !near.isEmpty else { continue }
             var pixels = [UInt8](repeating: 0, count: w * h * 4)
@@ -82,7 +129,8 @@ enum HeadEyes {
                 let p = ids.map { head.positions[$0] }
                 let normal = simd_cross(p[1] - p[0], p[2] - p[0])
                 let middle = (p[0] + p[1] + p[2]) / 3
-                guard simd_length(normal) > 1e-12, simd_dot(simd_normalize(normal), simd_normalize(eye - middle)) > 0.15 else { continue }
+                guard simd_length(normal) > 1e-12, simd_dot(simd_normalize(normal), simd_normalize(eye - middle)) > 0.15,
+                      simd_distance(middle, eye) < eyeDepth + 0.06 else { continue }
                 let u = ids.map { SIMD2(uvs[$0].x * Float(w), uvs[$0].y * Float(h)) }
                 let lo = simd_max(simd_min(simd_min(u[0], u[1]), u[2]).rounded(.down), SIMD2(0, 0))
                 let hi = simd_min(simd_max(simd_max(u[0], u[1]), u[2]).rounded(.up), SIMD2(Float(w - 1), Float(h - 1)))
@@ -97,10 +145,11 @@ enum HeadEyes {
                         let c = 1 - a - b
                         guard a >= -0.01, b >= -0.01, c >= -0.01 else { continue }
                         let place = p[0] * a + p[1] * b + p[2] * c
-                        let distance = nearest(place)
-                        guard distance < outer + 0.004, let colour = sample(place) else { continue }
+                        guard let q = pixel(place) else { continue }
+                        let distance = nearest(q)
+                        guard distance < outer * 1.15, let colour = sample(q) else { continue }
                         let weight = distance <= inner ? 1 : max(0, 1 - (distance - inner) / (outer - inner))
-                        spots.append((y * w + x, weight, colour, distance > outer - 0.003))
+                        spots.append((y * w + x, weight, colour, distance > outer))
                     }
                 }
             }
