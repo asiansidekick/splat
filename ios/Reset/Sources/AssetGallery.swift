@@ -151,11 +151,30 @@ struct AssetGallery: View {
             case .head(let folder): return folder.title
             }
         }
+        /// A posable person Reset made from a scan ("… person.fbx", "… person 2.fbx").
+        static func madeFromScan(_ url: URL) -> Bool {
+            let name = url.deletingPathExtension().lastPathComponent
+            return name.hasSuffix(" person") || name.range(of: #" person \d+$"#, options: .regularExpression) != nil
+        }
+
+        /// Phil, 2026-11-23: a posable character made from a scan must look different from the scan itself. A word on
+        /// the picture's corner says which: Scan, or Posable (in the accent colour).
+        var badge: (word: String, accent: Bool)? {
+            switch self {
+            case .scan: return ("Scan", false)
+            case .model(let url): return url.pathExtension.lowercased() == "fbx" ? ("Posable", true) : nil
+            case .head: return ("Head", false)
+            case .cutout: return nil
+            }
+        }
+
         var kind: String {
             switch self {
             case .head: return "Scanned head"
             case .scan: return "3D scan"
-            case .model(let url): return url.pathExtension.lowercased() == "fbx" ? "Posable character" : "3D model"
+            case .model(let url):
+                guard url.pathExtension.lowercased() == "fbx" else { return "3D model" }
+                return Self.madeFromScan(url) ? "Posable, made from a scan" : "Posable character"
             case .cutout: return "Cut-out"
             }
         }
@@ -217,6 +236,16 @@ struct AssetGallery: View {
                                     .frame(maxWidth: .infinity)
                                     .aspectRatio(1, contentMode: .fit)
                                     .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                                    .overlay(alignment: .bottomLeading) {
+                                        if let badge = asset.badge, columns <= 4 {
+                                            Text(badge.word)
+                                                .font(Theme.caption2.weight(.bold))
+                                                .foregroundStyle(badge.accent ? Theme.onAccent : Color.white)
+                                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                                .background(badge.accent ? Theme.accent : Color.black.opacity(0.55), in: Capsule())
+                                                .padding(5)
+                                        }
+                                    }
                                 Text(asset.name).font(columns >= 4 ? Theme.caption2.weight(.semibold) : Theme.caption.weight(.semibold)).lineLimit(3).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                                 Text(asset.kind).font(Theme.caption2).foregroundStyle(.secondary)
                             }
