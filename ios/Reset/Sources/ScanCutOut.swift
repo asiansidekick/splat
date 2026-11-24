@@ -108,9 +108,9 @@ enum ScanCutOut {
             guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { return nil }
             let row = CVPixelBufferGetBytesPerRow(buffer)
             var columns = [Int](repeating: 0, count: width)
-            for x in 0..<width { columns[x] = min(mask.width - 1, x * mask.width / width) }
+            for x in 0..<width { columns[x] = Swift.min(mask.width - 1, x * mask.width / width) }
             for y in 0..<height {
-                let my = min(mask.height - 1, y * mask.height / height) * mask.width
+                let my = Swift.min(mask.height - 1, y * mask.height / height) * mask.width
                 let line = base + y * row
                 for x in 0..<width { line[x] = mask.keep[my + columns[x]] ? 255 : 0 }
             }
