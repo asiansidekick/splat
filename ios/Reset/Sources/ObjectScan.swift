@@ -555,7 +555,31 @@ final class ScanModel: ObservableObject {
                 }
                 var config = PhotogrammetrySession.Configuration()
                 config.checkpointDirectory = folder.checkpoint
-                let session = try PhotogrammetrySession(input: folder.images, configuration: config)
+                // An object from Reset's own pictures: each picture says which part is the object (2026-11-24).
+                var names: [Int: String] = [:]
+                var cutOuts: ScanCutOut.Prepared?
+                if crop == nil, folder.cameras != nil, folder.kind == .object {
+                    self?.buildingWords = "Finding the object in each picture"
+                    let owner = self
+                    let report: @Sendable (Double) -> Void = { fraction in
+                        Task { @MainActor in owner?.phase = .building(fraction) }
+                    }
+                    cutOuts = await Task.detached(priority: .userInitiated) { ScanCutOut.prepare(folder, progress: report) }.value
+                    self?.buildingWords = "Building the 3D model on the phone"
+                    if cutOuts == nil { ScanLog.add("Cut-outs: not used, building from the whole pictures") }
+                }
+                let session: PhotogrammetrySession
+                if let cutOuts {
+                    names = cutOuts.names
+                    let cutCheckpoint = folder.url.appendingPathComponent("Checkpoint cut-outs", isDirectory: true)
+                    try? FileManager.default.removeItem(at: cutCheckpoint)
+                    try? FileManager.default.createDirectory(at: cutCheckpoint, withIntermediateDirectories: true)
+                    config.checkpointDirectory = cutCheckpoint
+                    config.isObjectMaskingEnabled = true
+                    session = try PhotogrammetrySession(input: cutOuts.samples, configuration: config)
+                } else {
+                    session = try PhotogrammetrySession(input: folder.images, configuration: config)
+                }
                 if let crop {
                     let geometry = PhotogrammetrySession.Request.Geometry(bounds: BoundingBox(min: crop.min, max: crop.max))
                     try session.process(requests: [.modelFile(url: out, detail: .reduced, geometry: geometry)])
@@ -575,7 +599,7 @@ final class ScanModel: ObservableObject {
                             ScanLog.add("Session bounds: \(b.min) to \(b.max)")
                             folder.saveSessionBounds(CropBox(min: b.min, max: b.max))
                         } else if case .poses(let poses) = result {
-                            Self.saveFit(poses, folder: folder)
+                            Self.saveFit(poses, folder: folder, names: names)
                         } else {
                             ScanLog.add("Model saved: \(out.lastPathComponent)")
                         }
@@ -709,12 +733,13 @@ final class ScanModel: ObservableObject {
 
     /// Where the builder thinks each picture was taken, against where ARKit knows it was: the model's real size and
     /// which way is up come from fitting one to the other.
-    private static func saveFit(_ poses: PhotogrammetrySession.Poses, folder: ScanFolder) {
+    /// `names`: sample number to picture file name, for builds fed picture by picture (no file names come back).
+    private static func saveFit(_ poses: PhotogrammetrySession.Poses, folder: ScanFolder, names: [Int: String] = [:]) {
         guard let cameras = folder.cameras else { return }
         var from: [SIMD3<Float>] = []
         var to: [SIMD3<Float>] = []
         for (sample, pose) in poses.posesBySample {
-            guard let name = poses.urlsBySample[sample]?.lastPathComponent, let place = cameras[name], place.count == 3 else { continue }
+            guard let name = names[sample] ?? poses.urlsBySample[sample]?.lastPathComponent, let place = cameras[name], place.count == 3 else { continue }
             from.append(pose.translation)
             to.append(SIMD3(place[0], place[1], place[2]))
         }
