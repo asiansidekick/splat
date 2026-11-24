@@ -377,6 +377,17 @@ struct DoneView: View {
             Text("Real size. Kept in Files, Reset, Scans.")
                 .font(.footnote).multilineTextAlignment(.center).foregroundStyle(.secondary)
                 .padding(.horizontal, 30)
+            // Person was chosen but no one is in the pictures: kept as an object, with the person's steps one tap away.
+            if let note = model.doneNote {
+                Text(note)
+                    .font(.footnote).multilineTextAlignment(.center).foregroundStyle(.yellow)
+                    .padding(.horizontal, 30)
+                Button("Make a posable person anyway") {
+                    model.doneNote = nil
+                    model.phase = .person(folder)
+                }
+                .buttonStyle(.bordered)
+            }
             Button("Place in the room") { place(folder.model) }
                 .buttonStyle(.borderedProminent).tint(Theme.accent).foregroundStyle(.black)
             HStack(spacing: 12) {

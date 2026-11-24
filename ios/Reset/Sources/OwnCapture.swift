@@ -1,5 +1,6 @@
 import ARKit
 import CoreImage
+import ImageIO
 import SceneKit
 import Vision
 import simd
@@ -360,6 +361,56 @@ extension ScanFolder {
     }
     var fit: ScanAlign.Fit? {
         (try? Data(contentsOf: fitFile)).flatMap { try? JSONDecoder().decode(ScanAlign.Fit.self, from: $0) }
+    }
+
+    /// How the pictures were taken, chosen above the shutter.
+    enum Kind: String {
+        case object   // walking round an object
+        case person   // walking round a person
+        case turn     // phone still, person turning (back camera, body tracking)
+        case selfie   // phone still, person turning in front of the selfie camera (places from Vision)
+    }
+    private var kindFile: URL { url.appendingPathComponent("scan-kind.txt") }
+    /// nil for scans made before the kind was written down (before 2026-11-24).
+    var kind: Kind? {
+        (try? String(contentsOf: kindFile, encoding: .utf8)).flatMap { Kind(rawValue: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+    func setKind(_ kind: Kind) {
+        try? kind.rawValue.write(to: kindFile, atomically: true, encoding: .utf8)
+    }
+}
+
+/// Whether a Person scan really has a person in it (Phil, 2026-11-24: an object scanned with Person still chosen
+/// was offered a skeleton). Vision looks for a person in up to 8 pictures spread through the scan.
+enum ScanPersonCheck {
+    static func picturesShowPerson(_ folder: ScanFolder) -> Bool {
+        let files = ((try? FileManager.default.contentsOfDirectory(at: folder.images, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension.lowercased() == "jpg" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        guard !files.isEmpty else { return false }
+        let count = min(8, files.count)
+        var seen = 0
+        for i in 0..<count where showsPerson(files[i * files.count / count]) { seen += 1 }
+        Diagnostics.log("Scan: person check, a person in \(seen) of \(count) pictures")
+        // Walking round, high and low, some pictures show only part of the person: a third is enough.
+        return seen * 3 >= count
+    }
+
+    /// A person taking up a good part of the picture. The camera writes pictures on their side (.right); a phone
+    /// held sideways writes them upright, so that is tried too.
+    static func showsPerson(_ url: URL) -> Bool {
+        let options = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 1024] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return false }
+        for orientation in [CGImagePropertyOrientation.right, .up] {
+            let request = VNDetectHumanRectanglesRequest()
+            request.upperBodyOnly = false
+            let handler = VNImageRequestHandler(cgImage: image, orientation: orientation, options: [:])
+            try? handler.perform([request])
+            let found = (request.results ?? []).contains { $0.confidence > 0.5 && max($0.boundingBox.width, $0.boundingBox.height) > 0.25 }
+            if found { return true }
+        }
+        return false
     }
 }
 
