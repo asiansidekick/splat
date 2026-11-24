@@ -143,6 +143,8 @@ final class ScanModel: ObservableObject {
     static let personWords = "Building just the person in more detail"
     /// Words under the progress ring while building.
     @Published var buildingWords = "Building the 3D model on the phone"
+    /// A line on the done screen: a Person scan with no person in the pictures was kept as an object.
+    @Published var doneNote: String?
 
     @Published private(set) var session: ObjectCaptureSession?
     /// Reset's own camera is taking the pictures (Apple's capture took none on this phone).
@@ -168,6 +170,7 @@ final class ScanModel: ObservableObject {
 
     func start(retry: Bool = false) {
         if !retry { retried = false }
+        doneNote = nil
         startedAt = Date()
         lastPolled = ""
         guard ObjectCaptureSession.isSupported else {
@@ -216,6 +219,10 @@ final class ScanModel: ObservableObject {
         passes = 1
         hint = ""
         own.begin(folder, turning: personMode && personTurn, selfie: personSelfie)
+        // Phil, 2026-11-24: an object scan came out upside down and then offered a skeleton. How the pictures are
+        // taken is written down with them, so the finished model is handled for what it really is.
+        let kind: ScanFolder.Kind = own.selfieTurn ? .selfie : own.turning ? .turn : personMode ? .person : .object
+        folder.setKind(kind)
         own.recording = recording
         phase = recording ? .capturing : .ready
         ScanLog.add("Own camera start: \(folder.name), recording \(recording)")
@@ -595,29 +602,26 @@ final class ScanModel: ObservableObject {
 
     private func built(_ folder: ScanFolder, cropped: Bool) {
         library = ScanFolder.all()
+        doneNote = nil
         if !cropped, folder.hasFull, folder.cameras != nil {
             // Reset's own pictures: no crop step yet (the builder's space is not upright), the model is made real
-            // size and upright and that is it.
-            var fit = folder.fit
-            var ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
-            // Phil, 2026-11-22: a Selfie turn person came out upside down. Pictures taken by a phone standing still
-            // while the person turns lie in a flat ring round them, and a flat ring fits just as well either way up.
-            // Then the model's own shape decides: a standing person is wider at the shoulders than at the ankles.
-            if ok, var known = fit, let cameras = folder.cameras, ScanBake.flatRing(cameras), let upright = ScanBake.standsUpright(folder.model), !upright {
-                let q = simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0)) * known.quaternion
-                known.rotation = [q.imag.x, q.imag.y, q.imag.z, q.real]
-                if let data = try? JSONEncoder().encode(known) { try? data.write(to: folder.fitFile) }
-                fit = known
-                ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
-                ScanLog.add("Own camera model: pictures in a flat ring and the model stood on its head, turned the right way up")
+            // size and upright and that is it. A Person scan first checks there is a person in the pictures: Phil
+            // (2026-11-24) scanned an object with Person still chosen from before and was offered a skeleton.
+            let kind: ScanFolder.Kind = folder.kind ?? (personMode ? ScanFolder.Kind.person : ScanFolder.Kind.object)
+            guard kind == .person else {
+                finishOwn(folder, person: kind != .object)
+                return
             }
-            ScanLog.add("Own camera model: fit \(fit.map { String(format: "scale %.3f, error %.3f m", $0.scale, $0.error) } ?? "none"), written \(ok)")
-            library = ScanFolder.all()
-            guard ok else { phase = .failed("The model couldn't be saved."); return }
-            if personMode, ScanPersonDetail.canRebuild(folder) {
-                buildPerson(folder)
-            } else {
-                phase = .done(folder)
+            buildingWords = "Looking for the person"
+            phase = .building(1)
+            buildTask = Task { [weak self] in
+                let seen = await Task.detached(priority: .userInitiated) { ScanPersonCheck.picturesShowPerson(folder) }.value
+                guard !Task.isCancelled else { return }
+                if !seen {
+                    ScanLog.add("Person mode, but no person in the pictures: kept as an object scan")
+                    self?.doneNote = "No person in the pictures, so it's kept as an object."
+                }
+                self?.finishOwn(folder, person: seen)
             }
             return
         }
@@ -627,6 +631,33 @@ final class ScanModel: ObservableObject {
             phase = .cropping(folder)
         } else {
             phase = .failed("The model file wasn't written. The pictures are kept; try Build again from the library.")
+        }
+    }
+
+    /// Own-camera scan built: written real size and upright, then the person's steps for a person, else done.
+    private func finishOwn(_ folder: ScanFolder, person: Bool) {
+        buildingWords = "Building the 3D model on the phone"
+        var fit = folder.fit
+        var ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
+        // Phil, 2026-11-22: a Selfie turn person came out upside down. Pictures taken by a phone standing still
+        // while the person turns lie in a flat ring round them, and a flat ring fits just as well either way up.
+        // Then the model's own shape decides: a standing person is wider at the shoulders than at the ankles.
+        // Only for people: an object can be wider at the bottom (a lamp, a vase) and was turned over (2026-11-24).
+        if person, ok, var known = fit, let cameras = folder.cameras, ScanBake.flatRing(cameras), let upright = ScanBake.standsUpright(folder.model), !upright {
+            let q = simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0)) * known.quaternion
+            known.rotation = [q.imag.x, q.imag.y, q.imag.z, q.real]
+            if let data = try? JSONEncoder().encode(known) { try? data.write(to: folder.fitFile) }
+            fit = known
+            ok = ScanBake.bake(folder.full, to: folder.model, fit: fit)
+            ScanLog.add("Own camera model: pictures in a flat ring and the model stood on its head, turned the right way up")
+        }
+        ScanLog.add("Own camera model: fit \(fit.map { String(format: "scale %.3f, error %.3f m", $0.scale, $0.error) } ?? "none"), written \(ok), \(person ? "person" : "object")")
+        library = ScanFolder.all()
+        guard ok else { phase = .failed("The model couldn't be saved."); return }
+        if person, ScanPersonDetail.canRebuild(folder) {
+            buildPerson(folder)
+        } else {
+            phase = .done(folder)
         }
     }
 
@@ -689,8 +720,12 @@ final class ScanModel: ObservableObject {
         }
         // Vision's places from a selfie picture can come out mirror-wise; the size and which way is up are the same
         // either way, so the mirrored places are tried too and the better fit kept.
+        // Only selfie places can be mirrored. Elsewhere the mirrored try did harm: for pictures taken going round
+        // at one height (a flat ring) the mirrored fit is as good as the true one turned upside down, so an object
+        // scan could come out on its head (Phil, 2026-11-24). Scans from before the kind was written keep the try.
         var fitted = ScanAlign.fit(from: from, to: to)
-        if let mirrored = ScanAlign.fit(from: from, to: to.map { SIMD3(-$0.x, $0.y, $0.z) }), mirrored.error < (fitted?.error ?? .greatestFiniteMagnitude) {
+        let mayBeMirrored = folder.kind == nil || folder.kind == .selfie
+        if mayBeMirrored, let mirrored = ScanAlign.fit(from: from, to: to.map { SIMD3(-$0.x, $0.y, $0.z) }), mirrored.error < (fitted?.error ?? .greatestFiniteMagnitude) {
             ScanLog.add(String(format: "Poses: fit better mirrored (error %.3f against %.3f m)", mirrored.error, fitted?.error ?? -1))
             fitted = mirrored
         }
