@@ -1,4 +1,5 @@
 import ARKit
+import AVFoundation
 import CoreImage
 import ImageIO
 import SceneKit
@@ -13,8 +14,11 @@ final class OwnCapture: NSObject, ARSessionDelegate {
     static let maxShots = 120
 
     let session = ARSession()
-    /// Pictures are kept only while this is on.
-    var recording = false
+    /// Pictures are kept only while this is on. While on, the camera's exposure and white balance stay as they
+    /// were when it started, so every picture has the same colours and the model's skin has no light and dark seams.
+    var recording = false {
+        didSet { if recording != oldValue { lockCamera(recording) } }
+    }
     private(set) var shots = 0
     private(set) var tooFast = false
     private(set) var tracking = true
@@ -26,6 +30,17 @@ final class OwnCapture: NSObject, ARSessionDelegate {
     private var writing = 0
     private let queue = DispatchQueue(label: "scan-pictures")
     private let context = CIContext()
+    /// Phil, 2026-11-24 ("How can we improve our scans"): walking round, each picture is a full-resolution photo
+    /// (ARKit's high-resolution frame, about 12 MP on an iPhone 14 Pro) rather than a video frame (1920 x 1440).
+    private var useHighRes = false
+    private var highResFailures = 0
+    /// A picture is being taken or judged: no other is asked for until it is kept or refused.
+    private var busy = false
+    /// How sharp the kept pictures were; a picture well below them is blurred and is taken again.
+    private var keptSharpness: [Float] = []
+    private var refusedInARow = 0
+    private(set) var blurRefused = 0
+    private var nextNumber = 0
 
     /// Phil, 2026-11-22: "Could a USDZ be generated of a person standing and spinning themselves with the back facing
     /// camera?" The phone stands still and the person turns slowly on the spot. ARKit's body tracking says which way
@@ -60,6 +75,13 @@ final class OwnCapture: NSObject, ARSessionDelegate {
         lastYaw = nil
         self.folder = folder
         shots = 0
+        nextNumber = 0
+        busy = false
+        keptSharpness = []
+        refusedInARow = 0
+        blurRefused = 0
+        highResFailures = 0
+        useHighRes = false
         cameras = [:]
         lastShot = nil
         lastPose = nil
@@ -81,8 +103,44 @@ final class OwnCapture: NSObject, ARSessionDelegate {
             session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
             ScanLog.add("Turn on the spot: body tracking")
         } else {
-            session.run(ARWorldTrackingConfiguration(), options: [.resetTracking, .removeExistingAnchors])
+            let configuration = ARWorldTrackingConfiguration()
+            // The video format that lets ARKit take full-resolution photos while it tracks.
+            if let high = ARWorldTrackingConfiguration.recommendedVideoFormatForHighResolutionFrameCapturing {
+                configuration.videoFormat = high
+                useHighRes = true
+            }
+            session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+            ScanLog.add(useHighRes ? "Own camera: full-resolution pictures" : "Own camera: full-resolution pictures not offered, video frames")
         }
+    }
+
+    /// Exposure and white balance held while recording, and given back to the camera afterwards.
+    private func lockCamera(_ lock: Bool) {
+        let device: AVCaptureDevice?
+        if selfieTurn {
+            device = ARFaceTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera
+        } else if turning {
+            device = ARBodyTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera
+        } else {
+            device = ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera
+        }
+        let held = Self.hold(device, lock)
+        if lock { ScanLog.add(held ?? "Own camera: couldn't hold the exposure") }
+    }
+
+    /// Holds (or gives back) a camera's exposure and white balance. Returns a log line when held.
+    @discardableResult
+    static func hold(_ device: AVCaptureDevice?, _ lock: Bool) -> String? {
+        guard let device, (try? device.lockForConfiguration()) != nil else { return nil }
+        defer { device.unlockForConfiguration() }
+        if lock {
+            if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
+            if device.isWhiteBalanceModeSupported(.locked) { device.whiteBalanceMode = .locked }
+            return String(format: "Own camera: exposure and white balance held (%.4f s, ISO %.0f)", device.exposureDuration.seconds, device.iso)
+        }
+        if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+        if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) { device.whiteBalanceMode = .continuousAutoWhiteBalance }
+        return nil
     }
 
     /// Stops the camera and writes down where the pictures were taken. Returns once every picture is on disk.
@@ -91,10 +149,14 @@ final class OwnCapture: NSObject, ARSessionDelegate {
         session.pause()
         await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
         var waited = 0
-        while writing > 0, waited < 150 {
+        while writing > 0 || busy, waited < 150 {
             try? await Task.sleep(nanoseconds: 20_000_000)
             waited += 1
         }
+        if blurRefused > 0 || useHighRes {
+            ScanLog.add("Own camera: \(shots) pictures kept\(useHighRes ? " at full resolution" : ""), \(blurRefused) blurred ones taken again")
+        }
+        busy = false
         if selfieTurn { cameras = Self.upright(visionPlaces) }
         if selfieTurn, !heights.isEmpty {
             let sorted = heights.sorted()
@@ -138,7 +200,7 @@ final class OwnCapture: NSObject, ARSessionDelegate {
         let exposure = Float(min(max(frame.camera.exposureDuration, 1.0 / 120), 1.0 / 15))
         let turnLimit = min(0.5, 0.012 / exposure)
         tooFast = turning > turnLimit * 2.2 || moving > 0.8
-        guard recording, normal, shots < Self.maxShots, writing < 3, let folder else { return }
+        guard recording, normal, !busy, shots < Self.maxShots, writing < 3, folder != nil else { return }
         if let last = lastShot {
             let moved = simd_distance(position, last.position)
             let turned = acos(min(1, max(-1, simd_dot(forward, last.forward))))
@@ -147,23 +209,104 @@ final class OwnCapture: NSObject, ARSessionDelegate {
             let steady = turning < turnLimit && moving < 0.35
             if !steady && moved < 0.16 && turned < 0.28 { return }
         }
+        let previous = lastShot
         lastShot = (position, forward)
-        shots += 1
-        let name = String(format: "IMG_%04d.jpg", shots)
-        cameras[name] = [position.x, position.y, position.z]
-        let image = CIImage(cvPixelBuffer: frame.capturedImage).copyRendered()
-        let url = folder.images.appendingPathComponent(name)
+        busy = true
+        guard useHighRes else {
+            judge(CIImage(cvPixelBuffer: frame.capturedImage).copyRendered(), transform: frame.camera.transform, previous: previous)
+            return
+        }
+        session.captureHighResolutionFrame { [weak self] high, error in
+            let box = FrameBox(frame: high)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    guard let high = box.frame else {
+                        self.busy = false
+                        self.lastShot = previous
+                        self.highResFailures += 1
+                        ScanLog.add("Own camera: full-resolution picture failed (\(error?.localizedDescription ?? "no picture"))")
+                        if self.highResFailures >= 3 {
+                            // Video frames from now on; their sharpness is not comparable with the photos'.
+                            self.useHighRes = false
+                            self.keptSharpness = []
+                            ScanLog.add("Own camera: video frames from now on")
+                        }
+                        return
+                    }
+                    self.judge(CIImage(cvPixelBuffer: high.capturedImage), transform: high.camera.transform, previous: previous)
+                }
+            }
+        }
+    }
+
+    private struct FrameBox: @unchecked Sendable { let frame: ARFrame? }
+    private struct ImageBox: @unchecked Sendable { let image: CIImage }
+
+    /// Keeps a picture unless it is blurred next to the ones kept so far; a blurred one is taken again from about
+    /// the same place (the spot is freed), up to twice, so a scan never stalls on it.
+    private func judge(_ image: CIImage, transform: simd_float4x4, previous: (position: SIMD3<Float>, forward: SIMD3<Float>)?) {
+        guard recording, shots < Self.maxShots, folder != nil else {
+            busy = false
+            return
+        }
+        let kept = keptSharpness, refused = refusedInARow, context = context
+        let box = ImageBox(image: image)
+        queue.async {
+            let score = OwnCapture.sharpness(box.image, context: context)
+            let blurred = ScanPictureMath.tooBlurred(score, kept: kept, refusedInARow: refused)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.busy = false
+                    guard self.recording, self.shots < Self.maxShots, let folder = self.folder else { return }
+                    if blurred {
+                        self.refusedInARow += 1
+                        self.blurRefused += 1
+                        self.lastShot = previous
+                        return
+                    }
+                    self.refusedInARow = 0
+                    self.keptSharpness.append(score)
+                    if self.keptSharpness.count > 30 { self.keptSharpness.removeFirst() }
+                    self.nextNumber += 1
+                    self.shots += 1
+                    let name = String(format: "IMG_%04d.jpg", self.nextNumber)
+                    let position = transform.columns.3.xyz
+                    self.cameras[name] = [position.x, position.y, position.z]
+                    self.write(box.image, to: folder.images.appendingPathComponent(name))
+                }
+            }
+        }
+    }
+
+    private func write(_ image: CIImage, to url: URL) {
         let context = context
+        let box = ImageBox(image: image)
         writing += 1
         queue.async {
             if let jpeg = context.jpegRepresentation(
-                of: image, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+                of: box.image, colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
                 options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.92])
             {
                 try? jpeg.write(to: url)
             }
             Task { @MainActor in self.writing -= 1 }
         }
+    }
+
+    /// How sharp the middle of a picture is (ScanPictureMath.sharpness on a grey square of up to 512 pixels).
+    nonisolated static func sharpness(_ image: CIImage, context: CIContext) -> Float {
+        let extent = image.extent
+        let side = CGFloat(Int(min(512, min(extent.width, extent.height))))
+        guard side > 8 else { return 0 }
+        let rect = CGRect(x: (extent.midX - side / 2).rounded(.down), y: (extent.midY - side / 2).rounded(.down), width: side, height: side)
+        let w = Int(side), h = Int(side)
+        var grey = [UInt8](repeating: 0, count: w * h)
+        grey.withUnsafeMutableBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            context.render(image, toBitmap: base, rowBytes: w, bounds: rect, format: .L8, colorSpace: nil)
+        }
+        return ScanPictureMath.sharpness(grey, width: w, height: h)
     }
 
     /// Turn on the spot: the camera stands still, so its place is read in the body's own space.

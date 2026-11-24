@@ -609,5 +609,50 @@ do {
     check(RegionGrow.grow(colour: grey, depth: nil, width: 40, height: 30, seedX: 99, seedY: 0).isEmpty, "wall pick: a touch off the picture picks nothing")
 }
 
+// MARK: Scan pictures (ScanPictureMath)
+do {
+    // A sharp chequer against the same chequer blurred with a 5 x 5 box.
+    let w = 64, h = 64
+    var sharp = [UInt8](repeating: 0, count: w * h)
+    for y in 0..<h { for x in 0..<w { sharp[y * w + x] = ((x / 4 + y / 4) % 2 == 0) ? 220 : 30 } }
+    var blurred = sharp
+    for y in 2..<(h - 2) {
+        for x in 2..<(w - 2) {
+            var s = 0
+            for dy in -2...2 { for dx in -2...2 { s += Int(sharp[(y + dy) * w + x + dx]) } }
+            blurred[y * w + x] = UInt8(s / 25)
+        }
+    }
+    let a = ScanPictureMath.sharpness(sharp, width: w, height: h)
+    let b = ScanPictureMath.sharpness(blurred, width: w, height: h)
+    check(a > b * 3, "scan pictures: a blurred picture scores well below a sharp one (\(a) against \(b))")
+    check(ScanPictureMath.sharpness([UInt8](repeating: 128, count: w * h), width: w, height: h) == 0, "scan pictures: a flat picture scores 0")
+    let kept: [Float] = [100, 110, 95, 105, 98, 102]
+    check(ScanPictureMath.tooBlurred(40, kept: kept, refusedInARow: 0), "scan pictures: a picture at 40% of the usual sharpness is refused")
+    check(!ScanPictureMath.tooBlurred(80, kept: kept, refusedInARow: 0), "scan pictures: 80% of the usual sharpness is kept")
+    check(!ScanPictureMath.tooBlurred(40, kept: kept, refusedInARow: 2), "scan pictures: after two refusals at one spot the picture is kept")
+    check(!ScanPictureMath.tooBlurred(1, kept: [100, 100], refusedInARow: 0), "scan pictures: nothing is refused before five are kept")
+
+    // Labels: object 2 in the middle, object 1 at the edge.
+    let lw = 50, lh = 40
+    var labels = [UInt8](repeating: 0, count: lw * lh)
+    for y in 12..<30 { for x in 15..<36 { labels[y * lw + x] = 2 } }
+    for y in 0..<10 { for x in 0..<10 { labels[y * lw + x] = 1 } }
+    check(ScanPictureMath.middleLabel(labels, width: lw, height: lh) == 2, "scan pictures: the object in the middle is picked")
+    var edgeOnly = [UInt8](repeating: 0, count: lw * lh)
+    for y in 0..<10 { for x in 0..<10 { edgeOnly[y * lw + x] = 1 } }
+    check(ScanPictureMath.middleLabel(edgeOnly, width: lw, height: lh) == nil, "scan pictures: nothing in the middle picks nothing")
+
+    var dot = [Bool](repeating: false, count: 20 * 20)
+    dot[10 * 20 + 10] = true
+    let grown = ScanPictureMath.grow(dot, width: 20, height: 20, radius: 3)
+    check(grown.filter { $0 }.count == 49, "scan pictures: one cell grown by 3 makes a 7 x 7 square (\(grown.filter { $0 }.count))")
+    check(grown[7 * 20 + 7] && grown[13 * 20 + 13] && !grown[6 * 20 + 10] && !grown[10 * 20 + 14], "scan pictures: the grown square sits round the cell")
+    var corner = [Bool](repeating: false, count: 20 * 20)
+    corner[0] = true
+    check(ScanPictureMath.grow(corner, width: 20, height: 20, radius: 2).filter { $0 }.count == 9, "scan pictures: growing stops at the picture's edge")
+    check(ScanPictureMath.useCutOuts(found: 90, of: 100) && !ScanPictureMath.useCutOuts(found: 60, of: 100), "scan pictures: cut-outs only when most pictures found the object")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)
