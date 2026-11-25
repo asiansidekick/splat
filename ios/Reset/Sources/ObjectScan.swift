@@ -563,6 +563,7 @@ final class ScanModel: ObservableObject {
                 guard PhotogrammetrySession.isSupported else {
                     throw NSError(domain: "Scan", code: 1, userInfo: [NSLocalizedDescriptionKey: DeviceSupport.apology("building 3D models")])
                 }
+                defer { try? FileManager.default.removeItem(at: ScanCutOut.marker(folder)) }
                 var config = PhotogrammetrySession.Configuration()
                 config.checkpointDirectory = folder.checkpoint
                 // An object from Reset's own pictures: each picture says which part is the object (2026-11-24).
@@ -574,7 +575,10 @@ final class ScanModel: ObservableObject {
                     let report: @Sendable (Double) -> Void = { fraction in
                         Task { @MainActor in owner?.phase = .building(fraction) }
                     }
-                    cutOuts = await Task.detached(priority: .userInitiated) { ScanCutOut.prepare(folder, progress: report) }.value
+                    cutOuts = await Task.detached(priority: .userInitiated) { () -> ScanCutOut.Prepared? in
+                        ScanCutOut.noteStops()
+                        return ScanCutOut.prepare(folder, progress: report)
+                    }.value
                     self?.buildingWords = "Building the 3D model on the phone"
                     if cutOuts == nil { ScanLog.add("Cut-outs: not used, building from the whole pictures") }
                 }
@@ -586,6 +590,8 @@ final class ScanModel: ObservableObject {
                     try? FileManager.default.createDirectory(at: cutCheckpoint, withIntermediateDirectories: true)
                     config.checkpointDirectory = cutCheckpoint
                     config.isObjectMaskingEnabled = true
+                    // Left behind only if the app stops while building (ScanCutOut.noteStops counts it next time).
+                    try? Data().write(to: ScanCutOut.marker(folder))
                     session = try PhotogrammetrySession(input: cutOuts.samples, configuration: config)
                 } else {
                     session = try PhotogrammetrySession(input: folder.images, configuration: config)

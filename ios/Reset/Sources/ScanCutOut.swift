@@ -3,6 +3,7 @@ import CoreVideo
 import ImageIO
 import RealityKit
 import Vision
+import os
 
 /// Phil, 2026-11-24 ("How can we improve our scans"): an object scan built from Reset's own pictures used to build
 /// the floor and the room round the object too, which left a ragged base to trim. Now each picture tells the model
@@ -24,8 +25,29 @@ enum ScanCutOut {
         let found: Int
     }
 
+    /// Phil, 2026-11-25 (1423): Reset stopped 13 s into the first build fed picture by picture. The likely cause is
+    /// memory (62 4K pictures are about 2 GB as the builder holds them), so the pictures are made smaller when they
+    /// would not fit in 40% of the memory left, memory is logged as they go in, and a build that stops the app leaves
+    /// a marker: after two such stops cut-outs are no longer used.
+    private static let stopsKey = "scanCutOutStops"
+    static func marker(_ folder: ScanFolder) -> URL { folder.url.appendingPathComponent("cut-outs-running") }
+
+    /// Counts builds with cut-outs that stopped the app (their marker is still there).
+    static func noteStops() {
+        for folder in ScanFolder.all() where FileManager.default.fileExists(atPath: marker(folder).path) {
+            try? FileManager.default.removeItem(at: marker(folder))
+            let stops = UserDefaults.standard.integer(forKey: stopsKey) + 1
+            UserDefaults.standard.set(stops, forKey: stopsKey)
+            ScanLog.add("Cut-outs: the app stopped while building \(folder.name) with cut-outs (\(stops) so far)")
+        }
+    }
+
     /// The scan's pictures with their cut-outs, or nil when the cut-outs aren't to be trusted.
     static func prepare(_ folder: ScanFolder, progress: @escaping @Sendable (Double) -> Void) -> Prepared? {
+        if UserDefaults.standard.integer(forKey: stopsKey) >= 2 {
+            ScanLog.add("Cut-outs: off, the app stopped twice building with them")
+            return nil
+        }
         let files = ((try? FileManager.default.contentsOfDirectory(at: folder.images, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension.lowercased() == "jpg" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
@@ -40,7 +62,17 @@ enum ScanCutOut {
         guard ScanPictureMath.useCutOuts(found: found, of: files.count) else { return nil }
         var names: [Int: String] = [:]
         for (i, file) in files.enumerated() { names[i] = file.lastPathComponent }
-        return Prepared(samples: Samples(files: files, masks: masks), names: names, found: found)
+        // How big the pictures may be: all of them, with cut-outs, in 40% of the memory left.
+        var scale = 1.0
+        if let source = CGImageSourceCreateWithURL(files[0] as CFURL, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let w = properties[kCGImagePropertyPixelWidth] as? Int, let h = properties[kCGImagePropertyPixelHeight] as? Int {
+            let needed = Double(files.count) * Double(w * h) * 5
+            let free = Double(os_proc_available_memory())
+            scale = min(1, (0.4 * free / needed).squareRoot())
+            ScanLog.add(String(format: "Cut-outs: %.0f MB free, %d pictures %d x %d, fed in at %.0f%%", free / 1_000_000, files.count, w, h, scale * 100))
+        }
+        return Prepared(samples: Samples(files: files, masks: masks, scale: scale), names: names, found: found)
     }
 
     /// Vision's foreground for one picture: the thing in the middle, grown by a fortieth of the picture's width.
@@ -67,6 +99,8 @@ enum ScanCutOut {
     struct Samples: Sequence, @unchecked Sendable {
         let files: [URL]
         let masks: [Mask?]
+        /// The pictures are made this much smaller (1 keeps them as taken).
+        let scale: Double
 
         func makeIterator() -> AnyIterator<PhotogrammetrySample> {
             var index = 0
@@ -75,7 +109,10 @@ enum ScanCutOut {
                 while index < files.count {
                     let i = index
                     index += 1
-                    if let sample = autoreleasepool(invoking: { Self.sample(i, file: files[i], mask: masks[i], context: context) }) {
+                    if i % 10 == 0 {
+                        ScanLog.add(String(format: "Cut-outs: picture %d going in, %.0f MB free", i, Double(os_proc_available_memory()) / 1_000_000))
+                    }
+                    if let sample = autoreleasepool(invoking: { Self.sample(i, file: files[i], mask: masks[i], scale: scale, context: context) }) {
                         return sample
                     }
                     ScanLog.add("Cut-outs: picture \(files[i].lastPathComponent) couldn't be read, left out")
@@ -84,13 +121,16 @@ enum ScanCutOut {
             }
         }
 
-        private static func sample(_ id: Int, file: URL, mask: Mask?, context: CIContext) -> PhotogrammetrySample? {
-            guard let image = CIImage(contentsOf: file) else { return nil }
+        private static func sample(_ id: Int, file: URL, mask: Mask?, scale: Double, context: CIContext) -> PhotogrammetrySample? {
+            guard let read = CIImage(contentsOf: file) else { return nil }
+            let image = scale < 0.999 ? read.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) : read
             let w = Int(image.extent.width), h = Int(image.extent.height)
+            guard w > 16, h > 16 else { return nil }
             let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary] as CFDictionary
             var made: CVPixelBuffer?
             guard CVPixelBufferCreate(nil, w, h, kCVPixelFormatType_32BGRA, attributes, &made) == kCVReturnSuccess, let pixels = made else { return nil }
-            context.render(image, to: pixels, bounds: image.extent, colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+            context.render(image, to: pixels, bounds: CGRect(x: image.extent.minX, y: image.extent.minY, width: CGFloat(w), height: CGFloat(h)),
+                           colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
             var sample = PhotogrammetrySample(id: id, image: pixels)
             if let mask { sample.objectMask = Self.objectMask(mask, width: w, height: h) }
             return sample
