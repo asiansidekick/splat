@@ -30,10 +30,10 @@ final class OwnCapture: NSObject, ARSessionDelegate {
     private var writing = 0
     private let queue = DispatchQueue(label: "scan-pictures")
     private let context = CIContext()
-    /// Phil, 2026-11-24 ("How can we improve our scans"): walking round, each picture is a full-resolution photo
-    /// (ARKit's high-resolution frame, about 12 MP on an iPhone 14 Pro) rather than a video frame (1920 x 1440).
-    private var useHighRes = false
-    private var highResFailures = 0
+    /// Phil, 2026-11-24 ("How can we improve our scans"): walking round, the camera runs at 4K (3840 x 2160) rather
+    /// than 1920 x 1440, so each picture has about three times the pixels. ARKit's full-resolution photos were tried
+    /// first (1421) but each one plays the shutter sound, and Reset must be silent (Phil, 2026-11-25).
+    private(set) var fourK = false
     /// A picture is being taken or judged: no other is asked for until it is kept or refused.
     private var busy = false
     /// How sharp the kept pictures were; a picture well below them is blurred and is taken again.
@@ -80,8 +80,7 @@ final class OwnCapture: NSObject, ARSessionDelegate {
         keptSharpness = []
         refusedInARow = 0
         blurRefused = 0
-        highResFailures = 0
-        useHighRes = false
+        fourK = false
         cameras = [:]
         lastShot = nil
         lastPose = nil
@@ -104,13 +103,13 @@ final class OwnCapture: NSObject, ARSessionDelegate {
             ScanLog.add("Turn on the spot: body tracking")
         } else {
             let configuration = ARWorldTrackingConfiguration()
-            // The video format that lets ARKit take full-resolution photos while it tracks.
-            if let high = ARWorldTrackingConfiguration.recommendedVideoFormatForHighResolutionFrameCapturing {
-                configuration.videoFormat = high
-                useHighRes = true
+            if let video = ARWorldTrackingConfiguration.recommendedVideoFormatFor4KResolution {
+                configuration.videoFormat = video
+                fourK = true
             }
             session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
-            ScanLog.add(useHighRes ? "Own camera: full-resolution pictures" : "Own camera: full-resolution pictures not offered, video frames")
+            let size = configuration.videoFormat.imageResolution
+            ScanLog.add(String(format: "Own camera: pictures %.0f x %.0f%@", size.width, size.height, fourK ? " (4K)" : ""))
         }
     }
 
@@ -126,6 +125,11 @@ final class OwnCapture: NSObject, ARSessionDelegate {
         }
         let held = Self.hold(device, lock)
         if lock { ScanLog.add(held ?? "Own camera: couldn't hold the exposure") }
+    }
+
+    /// The back camera is turning its sensitivity right up: too little light for sharp pictures.
+    static var dim: Bool {
+        (ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera?.iso ?? 0) > 1600
     }
 
     /// Holds (or gives back) a camera's exposure and white balance. Returns a log line when held.
@@ -153,8 +157,8 @@ final class OwnCapture: NSObject, ARSessionDelegate {
             try? await Task.sleep(nanoseconds: 20_000_000)
             waited += 1
         }
-        if blurRefused > 0 || useHighRes {
-            ScanLog.add("Own camera: \(shots) pictures kept\(useHighRes ? " at full resolution" : ""), \(blurRefused) blurred ones taken again")
+        if blurRefused > 0 || fourK {
+            ScanLog.add("Own camera: \(shots) pictures kept\(fourK ? " at 4K" : ""), \(blurRefused) blurred ones taken again")
         }
         busy = false
         if selfieTurn { cameras = Self.upright(visionPlaces) }
@@ -212,35 +216,9 @@ final class OwnCapture: NSObject, ARSessionDelegate {
         let previous = lastShot
         lastShot = (position, forward)
         busy = true
-        guard useHighRes else {
-            judge(CIImage(cvPixelBuffer: frame.capturedImage).copyRendered(), transform: frame.camera.transform, previous: previous)
-            return
-        }
-        session.captureHighResolutionFrame { [weak self] high, error in
-            let box = FrameBox(frame: high)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    guard let high = box.frame else {
-                        self.busy = false
-                        self.lastShot = previous
-                        self.highResFailures += 1
-                        ScanLog.add("Own camera: full-resolution picture failed (\(error?.localizedDescription ?? "no picture"))")
-                        if self.highResFailures >= 3 {
-                            // Video frames from now on; their sharpness is not comparable with the photos'.
-                            self.useHighRes = false
-                            self.keptSharpness = []
-                            ScanLog.add("Own camera: video frames from now on")
-                        }
-                        return
-                    }
-                    self.judge(CIImage(cvPixelBuffer: high.capturedImage), transform: high.camera.transform, previous: previous)
-                }
-            }
-        }
+        judge(CIImage(cvPixelBuffer: frame.capturedImage).copyRendered(), transform: frame.camera.transform, previous: previous)
     }
 
-    private struct FrameBox: @unchecked Sendable { let frame: ARFrame? }
     private struct ImageBox: @unchecked Sendable { let image: CIImage }
 
     /// Keeps a picture unless it is blurred next to the ones kept so far; a blurred one is taken again from about

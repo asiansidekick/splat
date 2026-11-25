@@ -183,11 +183,9 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
     private var noses: [SIMD3<Float>] = []
     private var frameCount = 0
     private var writing = 0
-    /// Walking round with the back camera, each picture is a full-resolution photo (about 12 MP on an iPhone 14 Pro)
-    /// rather than a video frame, for a sharper face (Phil, 2026-11-24).
-    private var useHighRes = false
-    private var highResBusy = false
-    private var highResFailures = 0
+    /// Walking round with the back camera, the camera runs at 4K for sharper pictures of the face (Phil, 2026-11-24).
+    /// ARKit's full-resolution photos play the shutter sound, and Reset must be silent (2026-11-25).
+    private var fourK = false
     private let queue = DispatchQueue(label: "head-pictures", qos: .userInitiated)
     private let context = CIContext()
 
@@ -226,15 +224,13 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
             Diagnostics.log(String(format: "Head scan: selfie camera %.0f x %.0f", configuration.videoFormat.imageResolution.width, configuration.videoFormat.imageResolution.height))
         } else {
             let configuration = ARWorldTrackingConfiguration()
-            useHighRes = false
-            highResBusy = false
-            highResFailures = 0
-            if let high = ARWorldTrackingConfiguration.recommendedVideoFormatForHighResolutionFrameCapturing {
-                configuration.videoFormat = high
-                useHighRes = true
+            fourK = false
+            if let video = ARWorldTrackingConfiguration.recommendedVideoFormatFor4KResolution {
+                configuration.videoFormat = video
+                fourK = true
             }
             session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
-            Diagnostics.log("Head scan: back camera, walking round\(useHighRes ? ", full-resolution pictures" : "")")
+            Diagnostics.log("Head scan: back camera, walking round\(fourK ? ", 4K pictures" : "")")
         }
     }
 
@@ -245,7 +241,7 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
         await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
         // The last pictures' notes (outline, face) come back on the main actor.
         var waited = 0
-        while writing > 0 || highResBusy, waited < 150 {
+        while writing > 0, waited < 150 {
             try? await Task.sleep(nanoseconds: 20_000_000)
             waited += 1
         }
@@ -337,7 +333,7 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
         setHint(fast ? "Slower" : "")
-        guard !fast, !highResBusy, writing < 3, record.shots.count - backKept < (selfie ? Self.frontShots : maxShots) else { return }
+        guard !fast, writing < 3, record.shots.count - backKept < (selfie ? Self.frontShots : maxShots) else { return }
         // A new picture once the view has changed enough: 5° round a selfie, 7° or 6 cm walking round.
         let key = selfie ? direction : place.columns.3.xyz
         if selfie {
@@ -347,35 +343,8 @@ final class HeadCapture: NSObject, ObservableObject, ARSessionDelegate {
             let moved = keptPlaces.map { simd_distance($0, key) }.min() ?? .greatestFiniteMagnitude
             guard turned >= 7 * .pi / 180 || moved >= 0.06 else { return }
         }
-        guard !selfie, useHighRes else {
-            keep(frame, place: place, direction: direction, folder: folder, posed: true)
-            return
-        }
-        highResBusy = true
-        session.captureHighResolutionFrame { [weak self] high, error in
-            let box = HeadFrameBox(frame: high)
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.highResBusy = false
-                    guard let high = box.frame else {
-                        self.highResFailures += 1
-                        Diagnostics.log("Head scan: full-resolution picture failed (\(error?.localizedDescription ?? "no picture"))")
-                        if self.highResFailures >= 3 {
-                            self.useHighRes = false
-                            Diagnostics.log("Head scan: video frames from now on")
-                        }
-                        return
-                    }
-                    guard self.recording, let folder = self.folder, !self.complete else { return }
-                    let camera = high.camera.transform
-                    self.keep(high, place: camera, direction: -camera.columns.2.xyz, folder: folder, posed: true)
-                }
-            }
-        }
+        keep(frame, place: place, direction: direction, folder: folder, posed: true)
     }
-
-    private struct HeadFrameBox: @unchecked Sendable { let frame: ARFrame? }
 
     private func setHint(_ text: String) {
         if hint != text { hint = text }

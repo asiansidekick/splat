@@ -298,7 +298,10 @@ final class ScanModel: ObservableObject {
             if own.turning {
                 text = !own.seesBody ? "Whole body in view" : own.tooFast ? "Turn slower" : phase == .capturing ? String(format: "%.0f°", min(360, abs(own.turned) * 180 / .pi)) : ""
             } else {
-                text = !own.tracking ? "Move slowly" : own.tooFast ? "Slow down" : ""
+                // Phil's 1422 scan was taken at ISO 3152: dim light gives noisy, blurred pictures and a builder that
+                // places some of them wrongly. Before recording (once it starts, the light is held) the torch is offered.
+                let dim = phase == .ready && Torch.shared.available && !Torch.shared.on && OwnCapture.dim
+                text = !own.tracking ? "Move slowly" : own.tooFast ? "Slow down" : dim ? "Dim light: turn the torch on" : ""
             }
             if hint != text { hint = text }
             if phase == .capturing, shots >= OwnCapture.maxShots || own.turnedRound { finish() }
@@ -755,9 +758,15 @@ final class ScanModel: ObservableObject {
         // Only selfie places can be mirrored. Elsewhere the mirrored try did harm: for pictures taken going round
         // at one height (a flat ring) the mirrored fit is as good as the true one turned upside down, so an object
         // scan could come out on its head (Phil, 2026-11-24). Scans from before the kind was written keep the try.
-        var fitted = ScanAlign.fit(from: from, to: to)
+        // Pictures the builder placed far off are left out of the fit (Phil, 2026-11-25: a dim object scan had a
+        // few, the whole fit was refused and the model came out the wrong way up).
+        let robust = ScanAlign.robustFit(from: from, to: to)
+        var fitted = robust?.fit
+        if let robust, robust.kept < from.count {
+            ScanLog.add("Poses: \(from.count - robust.kept) pictures the builder placed far off left out of the fit")
+        }
         let mayBeMirrored = folder.kind == nil || folder.kind == .selfie
-        if mayBeMirrored, let mirrored = ScanAlign.fit(from: from, to: to.map { SIMD3(-$0.x, $0.y, $0.z) }), mirrored.error < (fitted?.error ?? .greatestFiniteMagnitude) {
+        if mayBeMirrored, let mirrored = ScanAlign.robustFit(from: from, to: to.map { SIMD3(-$0.x, $0.y, $0.z) })?.fit, mirrored.error < (fitted?.error ?? .greatestFiniteMagnitude) {
             ScanLog.add(String(format: "Poses: fit better mirrored (error %.3f against %.3f m)", mirrored.error, fitted?.error ?? -1))
             fitted = mirrored
         }

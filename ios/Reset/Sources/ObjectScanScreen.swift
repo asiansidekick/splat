@@ -53,6 +53,9 @@ struct ScanScreen: View {
     @State private var showLibrary = false
     @State private var preview: URL?
     @State private var trimming: ScanFolder?
+    /// Each picture taken shows as a quick glow round the screen's edge and a light tap, with no sound
+    /// (Phil, 2026-11-25: the shutter noise was annoying; Reset is silent).
+    @State private var glow = false
 
     var body: some View {
         ZStack {
@@ -64,7 +67,19 @@ struct ScanScreen: View {
             } else if model.ownCamera {
                 CameraView(session: model.own.session).ignoresSafeArea()
             }
+            RoundedRectangle(cornerRadius: 0)
+                .strokeBorder(Color.white.opacity(glow ? 0.7 : 0), lineWidth: 6)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
             overlay
+        }
+        .onChange(of: model.shots) { taken in
+            guard taken > 0, model.phase == .capturing else { return }
+            Haptics.tap()
+            glow = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                withAnimation(.easeOut(duration: 0.35)) { glow = false }
+            }
         }
         .sheet(isPresented: $showLibrary) {
             LibraryView(preview: $preview, place: place, trim: { folder in
