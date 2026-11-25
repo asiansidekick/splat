@@ -86,9 +86,11 @@ enum ScanPictureMath {
         return out
     }
 
-    /// Whether a scan's cut-outs can be trusted: most pictures must have found the object in the middle, else
-    /// the builder gets no cut-outs at all (one wrong cut-out carves a piece off the model).
+    /// Whether a scan's cut-outs can be trusted: at least half the pictures must have found the object in the
+    /// middle, else the builder gets no cut-outs at all. Pictures that didn't find it go in whole (no cut-out),
+    /// which costs nothing but a little floor. Phil's 1422 object scan found it in 26 of 40 and the 3 in 4 asked
+    /// then left them all unused.
     static func useCutOuts(found: Int, of pictures: Int) -> Bool {
-        pictures > 0 && found * 4 >= pictures * 3
+        pictures > 0 && found * 2 >= pictures
     }
 }

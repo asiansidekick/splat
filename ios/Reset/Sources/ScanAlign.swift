@@ -65,4 +65,26 @@ enum ScanAlign {
             translation: [Float(shiftBy.x), Float(shiftBy.y), Float(shiftBy.z)],
             error: Float(sqrt(error / n)))
     }
+
+    /// The fit with pictures the builder placed wrongly left out (Phil, 2026-11-25: a dim scan's builder placed a few
+    /// pictures far off, the whole fit was refused and the model came out the wrong way up). Up to four rounds: the
+    /// pictures left more than 2.5 times the middle distance out (and over 3 cm) are dropped and the rest fitted again.
+    /// `kept` is how many pictures the final fit used; at least 60% of them and 6 pictures must stay.
+    static func robustFit(from a: [SIMD3<Float>], to b: [SIMD3<Float>]) -> (fit: Fit, kept: Int)? {
+        guard var best = fit(from: a, to: b) else { return nil }
+        var keep = Array(a.indices)
+        for _ in 0..<4 {
+            let q = best.quaternion
+            let t = SIMD3<Float>(best.translation[0], best.translation[1], best.translation[2])
+            let distances = keep.map { simd_distance(best.scale * q.act(a[$0]) + t, b[$0]) }
+            let middle = distances.sorted()[distances.count / 2]
+            let limit = max(0.03, middle * 2.5)
+            let next = zip(keep, distances).filter { $0.1 <= limit }.map(\.0)
+            guard next.count < keep.count, next.count >= max(6, (a.count * 3 + 4) / 5),
+                  let refit = fit(from: next.map { a[$0] }, to: next.map { b[$0] }) else { break }
+            keep = next
+            best = refit
+        }
+        return (best, keep.count)
+    }
 }

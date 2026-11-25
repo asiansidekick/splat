@@ -136,6 +136,23 @@ do {
     check(ScanAlign.fit(from: Array(from.prefix(3)), to: Array(to.prefix(3))) == nil, "align: too few pictures refused")
     let still = from.map { _ in SIMD3<Float>(1, 1, 1) }
     check(ScanAlign.fit(from: from, to: still) == nil, "align: a camera that never moved refused")
+
+    // Four pictures the builder placed far off: the plain fit is pulled out, the robust one leaves them out.
+    var wrong = to
+    for i in [3, 11, 19, 27] { wrong[i] += SIMD3<Float>(1.5, -2, 1) }
+    let plain = ScanAlign.fit(from: from, to: wrong)
+    check((plain?.error ?? 0) > 0.3, "align: wrong places pull the plain fit out (\(plain?.error ?? -1) m)")
+    if let robust = ScanAlign.robustFit(from: from, to: wrong) {
+        check(robust.kept == 36, "align: the four wrong places left out (\(robust.kept) kept)")
+        check(robust.fit.error < 0.01 && abs(robust.fit.scale - 2.7) < 0.01, "align: robust fit size and places right (\(robust.fit.scale), \(robust.fit.error) m)")
+        let up = robust.fit.quaternion.act(SIMD3<Float>(0, 1, 0))
+        check(simd_distance(up, turn.act(SIMD3<Float>(0, 1, 0))) < 0.01, "align: robust fit turns the right way up")
+    } else {
+        check(false, "align: robust fit found")
+    }
+    if let clean = ScanAlign.robustFit(from: from, to: to) {
+        check(clean.kept == 40, "align: nothing left out of a clean fit (\(clean.kept))")
+    }
 }
 
 // TrimMath: a loop on the screen takes triangles away, or keeps only them.
@@ -651,7 +668,7 @@ do {
     var corner = [Bool](repeating: false, count: 20 * 20)
     corner[0] = true
     check(ScanPictureMath.grow(corner, width: 20, height: 20, radius: 2).filter { $0 }.count == 9, "scan pictures: growing stops at the picture's edge")
-    check(ScanPictureMath.useCutOuts(found: 90, of: 100) && !ScanPictureMath.useCutOuts(found: 60, of: 100), "scan pictures: cut-outs only when most pictures found the object")
+    check(ScanPictureMath.useCutOuts(found: 26, of: 40) && !ScanPictureMath.useCutOuts(found: 15, of: 40), "scan pictures: cut-outs only when at least half the pictures found the object")
 }
 
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
