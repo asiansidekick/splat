@@ -221,8 +221,7 @@ final class ScanModel: ObservableObject {
         own.begin(folder, turning: personMode && personTurn, selfie: personSelfie)
         // Phil, 2026-11-24: an object scan came out upside down and then offered a skeleton. How the pictures are
         // taken is written down with them, so the finished model is handled for what it really is.
-        let kind: ScanFolder.Kind = own.selfieTurn ? .selfie : own.turning ? .turn : personMode ? .person : .object
-        folder.setKind(kind)
+        folder.setKind(ownKind)
         own.recording = recording
         phase = recording ? .capturing : .ready
         ScanLog.add("Own camera start: \(folder.name), recording \(recording)")
@@ -230,6 +229,11 @@ final class ScanModel: ObservableObject {
         poll = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
+    }
+
+    /// How Reset's own camera is taking the pictures, from the mode chosen now.
+    private var ownKind: ScanFolder.Kind {
+        own.selfieTurn ? .selfie : own.turning ? .turn : personMode ? .person : .object
     }
 
     /// Person mode needs Reset's own camera: Apple's capture, not yet recording, is swapped for it.
@@ -397,9 +401,12 @@ final class ScanModel: ObservableObject {
         if ownCamera {
             switch phase {
             case .ready:
+                // Written again now: Phil (2026-11-25, 1421) chose Object after the camera had started in Person, and
+                // the scan was still marked a person, so the object cut-outs were never used.
+                if let folder { folder.setKind(ownKind) }
                 own.recording = true
                 phase = .capturing
-                ScanLog.add("Own camera: record start")
+                ScanLog.add("Own camera: record start, \(ownKind.rawValue)")
             case .capturing:
                 finish()
             default: break
