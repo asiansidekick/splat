@@ -671,5 +671,24 @@ do {
     check(ScanPictureMath.useCutOuts(found: 26, of: 40) && !ScanPictureMath.useCutOuts(found: 15, of: 40), "scan pictures: cut-outs only when at least half the pictures found the object")
 }
 
+// Specks: stray LiDAR readings far out make small islands that punch holes in a model; big surfaces stay.
+do {
+    // A 20 x 20 grid of readings 2 m away (a wall), plus a 2 x 2 speck at 1.2 m in a 4 m-away background.
+    let k = simd_float3x3(SIMD3(100, 0, 0), SIMD3(0, 100, 0), SIMD3(50, 50, 1))
+    var depth = [Float](repeating: 0, count: 40 * 40)
+    for y in 0..<20 { for x in 0..<20 { depth[y * 40 + x] = 2 } }
+    for y in 30..<32 { for x in 30..<32 { depth[y * 40 + x] = 1.2 } }
+    let mesh = OccluderMesh.build(depth: depth, width: 40, height: 40, intrinsics: k, pose: matrix_identity_float4x4,
+                                  imageWidth: 100, imageHeight: 100, floor: -100)!
+    let clean = mesh.withoutSpecks(minTriangles: 20)
+    check(mesh.indices.count / 3 == 19 * 19 * 2 + 2, "specks: the wall and the speck both make triangles (\(mesh.indices.count / 3))")
+    check(clean.indices.count / 3 == 19 * 19 * 2, "specks: the speck is dropped, the wall kept (\(clean.indices.count / 3))")
+    var far = depth
+    for y in 0..<20 { for x in 0..<20 { far[y * 40 + x] = 6 } }
+    let ranged = OccluderMesh.build(depth: far, width: 40, height: 40, intrinsics: k, pose: matrix_identity_float4x4,
+                                    imageWidth: 100, imageHeight: 100, floor: -100, maxDepth: 5)!
+    check(ranged.indices.count / 3 == 2, "specks: readings past LiDAR's reach make nothing")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

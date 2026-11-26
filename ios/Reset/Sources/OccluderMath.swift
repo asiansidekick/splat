@@ -22,7 +22,8 @@ struct OccluderMesh: Sendable {
     static func build(depth: [Float], confidence: [UInt8]? = nil, minConfidence: UInt8 = 0, width dw: Int, height dh: Int,
                       intrinsics k: simd_float3x3, pose: simd_float4x4, imageWidth w: Float, imageHeight h: Float,
                       step: Int = 1, floor knownFloor: Float? = nil,
-                      pushBack: Float = 0.05, pushPerMetre: Float = 0.03, denoise: Bool = false) -> OccluderMesh? {
+                      pushBack: Float = 0.05, pushPerMetre: Float = 0.03, denoise: Bool = false,
+                      maxDepth: Float = 8) -> OccluderMesh? {
         guard dw > 8, dh > 8, step >= 1, w > 0, h > 0, depth.count >= dw * dh,
               k[0][0] > 0, k[1][1] > 0 else { return nil }
         if let confidence, confidence.count < dw * dh { return nil }
@@ -40,7 +41,7 @@ struct OccluderMesh: Sendable {
                 let d = depth[y * dw + x]
                 var p = SIMD3<Float>.zero
                 let sure = confidence.map { $0[y * dw + x] >= minConfidence } ?? true
-                if sure, d.isFinite, d > 0.12, d < 8 {
+                if sure, d.isFinite, d > 0.12, d < maxDepth {
                     let back = d + pushBack + pushPerMetre * d
                     let u = (Float(x) + 0.5) / Float(dw) * w, v = (Float(y) + 0.5) / Float(dh) * h
                     let world = pose * SIMD4((u - k[2][0]) / k[0][0] * back, -(v - k[2][1]) / k[1][1] * back, -back, 1)
@@ -452,5 +453,35 @@ enum RegionGrow {
         }
         // Shrinking: the outside grows back; the picture's border doesn't count as outside.
         return spread(spread(mask, true), false)
+    }
+}
+
+extension OccluderMesh {
+    /// The mesh without its specks: pieces of fewer than `minTriangles` joined triangles (Phil's 1424 recording, looking
+    /// down from a balcony: stray LiDAR readings punched changing holes in a model with nothing real in front of it).
+    func withoutSpecks(minTriangles: Int) -> OccluderMesh {
+        let count = positions.count / 3
+        guard minTriangles > 1, indices.count >= 3, count > 0 else { return self }
+        var parent = Array(0..<count)
+        func root(_ i: Int) -> Int {
+            var i = i
+            while parent[i] != i { parent[i] = parent[parent[i]]; i = parent[i] }
+            return i
+        }
+        func join(_ a: Int, _ b: Int) { let ra = root(a), rb = root(b); if ra != rb { parent[ra] = rb } }
+        let triangles = indices.count / 3
+        for t in 0..<triangles {
+            let a = Int(indices[t * 3]), b = Int(indices[t * 3 + 1]), c = Int(indices[t * 3 + 2])
+            join(a, b); join(b, c)
+        }
+        var sizes = [Int](repeating: 0, count: count)
+        for t in 0..<triangles { sizes[root(Int(indices[t * 3]))] += 1 }
+        var out = self
+        out.indices = []
+        out.indices.reserveCapacity(indices.count)
+        for t in 0..<triangles where sizes[root(Int(indices[t * 3]))] >= minTriangles {
+            out.indices.append(contentsOf: indices[(t * 3)..<(t * 3 + 3)])
+        }
+        return out
     }
 }

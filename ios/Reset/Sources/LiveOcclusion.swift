@@ -113,6 +113,10 @@ final class LiveOccluder {
         return moved < 0.015 && turned < 0.014 && rolled < 0.014
     }
     nonisolated static let sheetDistance: Float = 0.3
+    /// LiDAR's trustworthy reach: further readings are noise (Phil's 1424 recording looking down into an alley).
+    nonisolated static let reach: Float = 5
+    /// Pieces of the room smaller than this many triangles are stray readings, not real things.
+    nonisolated static let speck = 60
 
     /// Starts hiding models behind real things in this camera view, for as long as the view lives.
     @discardableResult
@@ -182,6 +186,14 @@ final class LiveOccluder {
         let shown = BehindReal.on && hasModels && !paused()
         updatePicks(frame, on: shown)
         let wanted = shown && BehindReal.wholeRoom && !editing
+        // The room stays a layer while a model is picked (its hiding only pauses), so Bring forward / Push back can say
+        // where the model will be after Done.
+        let room = shown && BehindReal.wholeRoom && (frame.sceneDepth != nil || frame.smoothedSceneDepth != nil)
+        if placer?.roomLayer != room { placer?.roomLayer = room }
+        if room {
+            node.renderingOrder = 10 * picks.count + 5
+            placer?.applyLayers()
+        }
         if wanted != wasOn {
             wasOn = wanted
             Diagnostics.log("Behind real things: live \(wanted ? "on" : "off")\(editing ? " (a model is picked)" : ""), LiDAR depth \(frame.sceneDepth != nil), smoothed \(frame.smoothedSceneDepth != nil)")
@@ -229,11 +241,11 @@ final class LiveOccluder {
                 let step = Float(image.width) / Float(guide.width)
                 mesh = OccluderMesh.build(depth: steady, width: guide.width, height: guide.height, intrinsics: intrinsics, pose: pose,
                                           imageWidth: Float(guide.width) * step, imageHeight: Float(guide.height) * step, step: 1,
-                                          floor: floor, pushBack: 0.08, pushPerMetre: 0.04)
+                                          floor: floor, pushBack: 0.08, pushPerMetre: 0.04, maxDepth: Self.reach)?.withoutSpecks(minTriangles: Self.speck)
             } else {
                 mesh = OccluderMesh.build(depth: values, width: width, height: height, intrinsics: intrinsics, pose: pose,
                                           imageWidth: Float(image.width), imageHeight: Float(image.height), step: 1, floor: floor,
-                                          pushBack: 0.08, pushPerMetre: 0.04, denoise: true)
+                                          pushBack: 0.08, pushPerMetre: 0.04, denoise: true, maxDepth: Self.reach)?.withoutSpecks(minTriangles: Self.speck)
             }
             let seconds = Date().timeIntervalSince(started)
             let report = logNow ? Self.report(models, depth: values, width: width, height: height, intrinsics: intrinsics,
@@ -251,6 +263,8 @@ final class LiveOccluder {
                     if self.seenFloors.count > 31 { self.seenFloors.removeFirst() }
                 }
                 self.node.geometry = mesh?.geometry()
+                // The room is the furthest layer: drawn after models brought in front of it, before the rest.
+                self.node.renderingOrder = 10 * self.picks.count + 5
                 self.built += 1
                 if timestamp - self.lastLog > 10 {
                     self.lastLog = timestamp

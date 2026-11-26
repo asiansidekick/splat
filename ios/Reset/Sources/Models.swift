@@ -69,18 +69,27 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     @Published var nearerThings: [UUID: Int] = [:]
 
     /// How many picked real things the model is behind.
-    func layer(of id: UUID) -> Int { min(max(0, (nearerThings[id] ?? inFrontCount) + (layerShift[id] ?? 0)), inFrontCount) }
+    /// Whether "Hide models behind anything nearer" is hiding models now: the room is then the furthest layer, and a
+    /// model brought forward past it shows in front of everything real that wasn't picked (Phil's 1424 recording: a
+    /// glass balustrade hid a scan placed down in the alley).
+    @Published var roomLayer = false { didSet { if roomLayer != oldValue { applyLayers() } } }
+    /// Layers a model can be behind: the picked things, and the room when it hides models.
+    var layerCount: Int { inFrontCount + (roomLayer ? 1 : 0) }
+    /// Where real distance puts a model: behind the picked things nearer than it, and behind the room.
+    private func baseLayer(of id: UUID) -> Int { (nearerThings[id] ?? inFrontCount) + (roomLayer ? 1 : 0) }
+
+    func layer(of id: UUID) -> Int { min(max(0, baseLayer(of: id) + (layerShift[id] ?? 0)), layerCount) }
 
     /// Moves the selected model one picked thing back (+1) or forward (-1).
     func moveSelectedLayer(by step: Int) {
         guard let id = selectedModel else { return }
         let now = layer(of: id)
-        let next = min(max(0, now + step), inFrontCount)
+        let next = min(max(0, now + step), layerCount)
         guard next != now else { return }
-        layerShift[id] = next - (nearerThings[id] ?? inFrontCount)
+        layerShift[id] = next - baseLayer(of: id)
         Haptics.tap()
         applyLayers()
-        Diagnostics.log("In front: model moved \(step > 0 ? "back" : "forward"), now behind \(next) of \(inFrontCount) picked things")
+        Diagnostics.log("In front: model moved \(step > 0 ? "back" : "forward"), now behind \(next) of \(layerCount) layers (\(inFrontCount) picked\(roomLayer ? " + the room" : ""))")
     }
 
     /// Whether the selected model was moved by Push back / Bring forward away from where real distance puts it.
@@ -2951,10 +2960,10 @@ struct ModelEdgeTools: View {
             if placer.onPickInFront != nil {
                 CutoutTool(word: placer.inFrontCount > 0 ? "In front \(placer.inFrontCount)" : "In front", symbol: "square.3.layers.3d.top.filled",
                            on: placer.pickingInFront) { placer.pickingInFront.toggle() }
-                if let id = placer.selectedModel, placer.inFrontCount > 0 {
+                if let id = placer.selectedModel, placer.layerCount > 0 {
                     let layer = placer.layer(of: id)
                     if layer > 0 { CutoutTool(word: "Bring forward", symbol: "square.2.layers.3d.top.filled") { placer.moveSelectedLayer(by: -1) } }
-                    if layer < placer.inFrontCount { CutoutTool(word: "Push back", symbol: "square.2.layers.3d.bottom.filled") { placer.moveSelectedLayer(by: 1) } }
+                    if layer < placer.layerCount { CutoutTool(word: "Push back", symbol: "square.2.layers.3d.bottom.filled") { placer.moveSelectedLayer(by: 1) } }
                     if placer.selectedLayerChanged { CutoutTool(word: "Real order", symbol: "ruler.fill", tint: Theme.accent) { placer.resetSelectedLayer() } }
                 }
             }
