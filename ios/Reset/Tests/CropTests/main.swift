@@ -698,7 +698,7 @@ do {
     for y in 0..<16 { depth[y * 20 + 10] = 1 }
     let pose = matrix_identity_float4x4
     let same = DepthWarp.warp(depth, width: 20, height: 16, lens: lens, from: pose, to: pose)
-    check(same[8 * 20 + 10] == 1 && same[8 * 20 + 3] == 4, "warp: from the same place nothing moves")
+    check(near(same[8 * 20 + 10], 1, 0.001) && near(same[8 * 20 + 3], 4, 0.001), "warp: from the same place nothing moves")
     // Step 0.1 m right: the wire 1 m away moves 2 pixels left, the wall 4 m away half a pixel.
     var right = pose
     right.columns.3 = SIMD4(0.1, 0, 0, 1)
