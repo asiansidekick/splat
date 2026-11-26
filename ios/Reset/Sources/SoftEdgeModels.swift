@@ -48,7 +48,7 @@ final class SoftEdgeCache {
             return
         }
         if built[step] == nil {
-            built[step] = parts.map { part in
+            built[step] = parts.map { part -> SCNGeometry in
                 let fade = part.distance.map { SoftEdgeMath.fade($0, width: width) }
                 guard fade.contains(where: { $0 < SoftEdge.solid }) else { return part.original }
                 let geometry = SoftEdge.softened(sources: part.sources, elements: part.elements, materials: part.materials, fade: fade)
