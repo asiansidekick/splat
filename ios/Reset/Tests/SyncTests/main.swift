@@ -635,6 +635,11 @@ func runModelLightTests() {
     let old = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","name":"Old","file":"models/o.usdz","transform":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}"#
     let oldModel = try? JSONDecoder().decode(PlacedModel.self, from: Data(old.utf8))
     expect(oldModel != nil && oldModel?.light == nil, "model light: a model saved before lighting still opens, lit as before")
+    var softened = PlacedModel(name: "Scan 3", file: "models/s.usdz", transform: flatten(matrix_identity_float4x4))
+    softened.softEdge = 2
+    let softBack = try? JSONDecoder().decode(PlacedModel.self, from: JSONEncoder().encode(softened))
+    expect(softBack?.softEdge == 2, "soft edge: saved with the model and read back")
+    expect(oldModel != nil && oldModel?.softEdge == nil, "soft edge: a model saved before soft edges opens with its hard edge")
     let plain = ModelLight()
     expect(plain.isPlain && plain.tint == SIMD3<Float>(1, 1, 1) && plain.direction == nil && plain.shade(normal: [0, 0, 1]) == 1,
            "model light: the normal setting changes nothing")
