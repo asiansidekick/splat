@@ -116,8 +116,9 @@ final class LiveOccluder {
     nonisolated static let sheetDistance: Float = 0.3
     /// LiDAR's trustworthy reach: further readings are noise (Phil's 1424 recording looking down into an alley).
     nonisolated static let reach: Float = 5
-    /// Pieces of the room smaller than this many triangles are stray readings, not real things.
-    nonisolated static let speck = 16
+    /// Pieces of the room smaller than this many triangles are stray readings, not real things. Kept tiny (Phil on 1425: at
+    /// 60 the foreground things he wanted in front stopped hiding the model; the picture vote now drops strays instead).
+    nonisolated static let speck = 8
 
     /// Starts hiding models behind real things in this camera view, for as long as the view lives.
     @discardableResult
