@@ -99,8 +99,9 @@ final class LiveOccluder {
     private var lastPickLog: TimeInterval = 0
     private var pickFound = true
     /// The last few sharpened depths and picked outlines while the camera holds still (EdgeDepth.steady, OutlineVote).
-    private var depthHistory: [[Float]] = []
-    private var depthHistoryPose: simd_float4x4?
+    /// The last few sharpened room depths and where the camera was for each: moved to the camera's place now before
+    /// they vote, so the room holds steady while the phone moves too (Phil, 2026-11-26: wires flickered).
+    private var depthHistory: [(depth: [Float], pose: simd_float4x4)] = []
     private var maskHistoryPose: simd_float4x4?
     nonisolated static let historyLength = 6
 
@@ -116,7 +117,7 @@ final class LiveOccluder {
     /// LiDAR's trustworthy reach: further readings are noise (Phil's 1424 recording looking down into an alley).
     nonisolated static let reach: Float = 5
     /// Pieces of the room smaller than this many triangles are stray readings, not real things.
-    nonisolated static let speck = 60
+    nonisolated static let speck = 16
 
     /// Starts hiding models behind real things in this camera view, for as long as the view lives.
     @discardableResult
@@ -222,9 +223,10 @@ final class LiveOccluder {
         let models = placer?.worldPositions ?? []
         let logNow = frame.timestamp - lastLog > 10
         let timestamp = frame.timestamp
-        if !Self.still(depthHistoryPose, pose) {
-            depthHistory = []
-            depthHistoryPose = pose
+        // Pictures from much further away or turned well away say little about the view now.
+        depthHistory.removeAll { old in
+            simd_distance(old.pose.columns.3.xyz, pose.columns.3.xyz) > 0.5
+                || simd_dot(-old.pose.columns.2.xyz, -pose.columns.2.xyz) < 0.9
         }
         let history = depthHistory
         Task.detached(priority: .userInitiated) {
@@ -236,9 +238,14 @@ final class LiveOccluder {
                 let sharp = EdgeDepth.refine(depth: clean, width: width, height: height, guide: guide.values,
                                              guideWidth: guide.width, guideHeight: guide.height)
                 latest = sharp
-                let steady = EdgeDepth.steady(history + [sharp])
                 // The guide covers the whole picture less any odd pixels at the right and bottom.
                 let step = Float(image.width) / Float(guide.width)
+                let lens = DepthWarp.Lens(fx: intrinsics[0][0] / step, fy: intrinsics[1][1] / step,
+                                          cx: intrinsics[2][0] / step, cy: intrinsics[2][1] / step)
+                let moved = history.filter { $0.depth.count == sharp.count }.map {
+                    DepthWarp.warp($0.depth, width: guide.width, height: guide.height, lens: lens, from: $0.pose, to: pose)
+                }
+                let steady = EdgeDepth.steady(moved + [sharp])
                 mesh = OccluderMesh.build(depth: steady, width: guide.width, height: guide.height, intrinsics: intrinsics, pose: pose,
                                           imageWidth: Float(guide.width) * step, imageHeight: Float(guide.height) * step, step: 1,
                                           floor: floor, pushBack: 0.08, pushPerMetre: 0.04, maxDepth: Self.reach)?.withoutSpecks(minTriangles: Self.speck)
@@ -254,8 +261,8 @@ final class LiveOccluder {
                 guard let self else { return }
                 self.building = false
                 guard self.wasOn else { self.clear(); return }
-                if let latest, Self.still(self.depthHistoryPose, pose) {
-                    self.depthHistory.append(latest)
+                if let latest {
+                    self.depthHistory.append((latest, pose))
                     if self.depthHistory.count > Self.historyLength { self.depthHistory.removeFirst() }
                 }
                 if let mesh, let seen = mesh.seenFloor, seen < cameraY - 0.6 {
@@ -268,7 +275,7 @@ final class LiveOccluder {
                 self.built += 1
                 if timestamp - self.lastLog > 10 {
                     self.lastLog = timestamp
-                    Diagnostics.log("Behind real things: \((mesh?.indices.count ?? 0) / 3) triangles from \(width)x\(height) depth, \(history.count + 1) still pictures\(guide.map { ", sharpened to \($0.width)x\($0.height)" } ?? ""), \(Int(seconds * 1000)) ms, floor \(floor.map { String(format: "%.2f", $0) } ?? "none"), \(self.built) made\(report)")
+                    Diagnostics.log("Behind real things: \((mesh?.indices.count ?? 0) / 3) triangles from \(width)x\(height) depth, \(history.count + 1) pictures voting\(guide.map { ", sharpened to \($0.width)x\($0.height)" } ?? ""), \(Int(seconds * 1000)) ms, floor \(floor.map { String(format: "%.2f", $0) } ?? "none"), \(self.built) made\(report)")
                 }
             }
         }

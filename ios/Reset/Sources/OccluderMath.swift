@@ -197,16 +197,22 @@ enum EdgeDepth {
         var out = [Float](repeating: 0, count: last.count)
         var values = [Float](repeating: 0, count: frames.count)
         for i in 0..<last.count {
-            var n = 0
-            for frame in frames where frame[i] > 0 { values[n] = frame[i]; n += 1 }
-            guard n * 2 >= frames.count, n > 0 else { continue }
+            // A reading below 0 means that picture didn't see this spot at all (it was out of view): it doesn't vote.
+            var n = 0, seen = 0
+            for frame in frames where frame[i] >= 0 {
+                seen += 1
+                if frame[i] > 0 { values[n] = frame[i]; n += 1 }
+            }
+            // Thin things (wires, rails) are read in only some pictures: 2 in 5 is enough to keep them, and the nearer
+            // third of the readings wins, so a wire doesn't flicker in and out (Phil, 2026-11-26).
+            guard n > 0, n * 5 >= seen * 2 else { continue }
             for a in 1..<max(n, 1) {
                 let v = values[a]
                 var b = a - 1
                 while b >= 0, values[b] > v { values[b + 1] = values[b]; b -= 1 }
                 values[b + 1] = v
             }
-            out[i] = values[n / 2]
+            out[i] = values[n / 3]
         }
         return out
     }
@@ -481,6 +487,52 @@ extension OccluderMesh {
         out.indices.reserveCapacity(indices.count)
         for t in 0..<triangles where sizes[root(Int(indices[t * 3]))] >= minTriangles {
             out.indices.append(contentsOf: indices[(t * 3)..<(t * 3 + 3)])
+        }
+        return out
+    }
+}
+
+/// A depth picture moved to where another camera sees it (Phil, 2026-11-26: thin wires flickered while the phone moved;
+/// the pictures before can only vote once they are seen from where the camera is now). Each reading is put back in the
+/// room and seen again from the new camera, nearest winning; spots the old picture didn't cover read -1 (not seen).
+enum DepthWarp {
+    struct Lens: Sendable { var fx: Float, fy: Float, cx: Float, cy: Float }
+
+    static func warp(_ depth: [Float], width: Int, height: Int, lens: Lens, from: simd_float4x4, to: simd_float4x4,
+                     typical: Float = 2) -> [Float] {
+        guard width > 0, height > 0, depth.count >= width * height else { return [] }
+        var out = [Float](repeating: -1, count: width * height)
+        let move = to.inverse * from
+        // Spots the old picture had in view (judged at `typical` metres) start as seen but empty (0): an old picture with
+        // no reading there votes "nothing", so one stray reading now doesn't win alone.
+        let back = from.inverse * to
+        for y in 0..<height {
+            for x in 0..<width {
+                let u = Float(x) + 0.5, v = Float(y) + 0.5
+                let p = back * SIMD4((u - lens.cx) / lens.fx * typical, -(v - lens.cy) / lens.fy * typical, -typical, 1)
+                guard p.z < -0.05 else { continue }
+                let ou = lens.fx * p.x / -p.z + lens.cx, ov = -lens.fy * p.y / -p.z + lens.cy
+                if ou >= 0, ou < Float(width), ov >= 0, ov < Float(height) { out[y * width + x] = 0 }
+            }
+        }
+        for y in 0..<height {
+            for x in 0..<width {
+                let d = depth[y * width + x]
+                guard d > 0, d.isFinite else { continue }
+                let u = Float(x) + 0.5, v = Float(y) + 0.5
+                let p = move * SIMD4((u - lens.cx) / lens.fx * d, -(v - lens.cy) / lens.fy * d, -d, 1)
+                guard p.z < -0.05 else { continue }
+                let z = -p.z
+                let nu = lens.fx * p.x / z + lens.cx, nv = -lens.fy * p.y / z + lens.cy
+                // Two pixels each way, so a nearer picture leaves no cracks.
+                let x0 = Int((nu - 0.5).rounded(.down)), y0 = Int((nv - 0.5).rounded(.down))
+                for yy in y0...(y0 + 1) where yy >= 0 && yy < height {
+                    for xx in x0...(x0 + 1) where xx >= 0 && xx < width {
+                        let i = yy * width + xx
+                        if out[i] <= 0 || z < out[i] { out[i] = z }
+                    }
+                }
+            }
         }
         return out
     }

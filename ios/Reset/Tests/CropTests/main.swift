@@ -690,5 +690,37 @@ do {
     check(ranged.indices.count / 3 == 2, "specks: readings past LiDAR's reach make nothing")
 }
 
+// Moving: earlier depth pictures are seen from where the camera is now, so a thin wire holds steady.
+do {
+    let lens = DepthWarp.Lens(fx: 20, fy: 20, cx: 10, cy: 8)
+    // 20 x 16: a wall 4 m away, a wire 1 m away down column 10.
+    var depth = [Float](repeating: 4, count: 20 * 16)
+    for y in 0..<16 { depth[y * 20 + 10] = 1 }
+    let pose = matrix_identity_float4x4
+    let same = DepthWarp.warp(depth, width: 20, height: 16, lens: lens, from: pose, to: pose)
+    check(same[8 * 20 + 10] == 1 && same[8 * 20 + 3] == 4, "warp: from the same place nothing moves")
+    // Step 0.1 m right: the wire 1 m away moves 2 pixels left, the wall 4 m away half a pixel.
+    var right = pose
+    right.columns.3 = SIMD4(0.1, 0, 0, 1)
+    let moved = DepthWarp.warp(depth, width: 20, height: 16, lens: lens, from: pose, to: right)
+    check(near(moved[8 * 20 + 8], 1, 0.01), "warp: a near wire moves with parallax (\(moved[8 * 20 + 8]))")
+    var farRight = pose
+    farRight.columns.3 = SIMD4(1, 0, 0, 1)
+    let stepped = DepthWarp.warp(depth, width: 20, height: 16, lens: lens, from: pose, to: farRight)
+    check(stepped[8 * 20 + 19] < 0, "warp: what the old picture never saw doesn't vote (\(stepped[8 * 20 + 19]))")
+    // A wire read in 3 of 6 pictures stays; a stray reading in 1 of 6 doesn't.
+    var history: [[Float]] = []
+    for k in 0..<6 {
+        var row = [Float](repeating: 4, count: 4)
+        if k % 2 == 0 { row[1] = 1 } else { row[1] = 0 }
+        if k == 5 { row[2] = 1.2 } else { row[2] = 0 }
+        history.append(row)
+    }
+    let steady = EdgeDepth.steady(history)
+    check(steady[1] == 1, "warp: a wire seen in half the pictures holds steady (\(steady[1]))")
+    check(steady[2] == 0, "warp: a stray reading once is dropped")
+    check(EdgeDepth.steady([[-1, 2], [3, 2]]) == [3, 2], "warp: a picture that didn't see a spot doesn't vote")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)
