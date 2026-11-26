@@ -90,6 +90,23 @@ jobs:
           cat light-results.txt
           sed -nE 's/^FAIL  (.*)$/::error::\1/p; s/^SKIP  (.*)$/::warning::\1/p' light-results.txt
           exit $status
+      - name: Soft edge tests
+        working-directory: ios/Reset
+        run: |
+          # Soft edges on cropped scans: the cut-edge sums, and a cut sheet rendered hard and soft (pictures go with the ghost test pictures).
+          if ! swiftc -O Sources/SoftEdgeMath.swift Sources/SoftEdge.swift Sources/ModelLightShader.swift Tests/SoftEdgeTests/main.swift -o soft-edge-tests > soft-compile.log 2>&1; then
+            grep -E ": error: " soft-compile.log | sort -u | head -10 \
+              | sed -E 's#^(.*/)?((Sources|Tests)/[^:]+):([0-9]+):([0-9]+): error: (.*)$#::error file=ios/Reset/\2,line=\4,col=\5::\6#'
+            tail -40 soft-compile.log
+            exit 1
+          fi
+          set +e
+          ./soft-edge-tests test-pictures > soft-results.txt 2>&1
+          status=$?
+          set -e
+          cat soft-results.txt
+          sed -nE 's/^FAIL  (.*)$/::error::\1/p; s/^SKIP  (.*)$/::warning::\1/p' soft-results.txt
+          exit $status
       - name: Scan person tests
         working-directory: ios/Reset
         run: |
