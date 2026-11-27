@@ -249,11 +249,11 @@ final class LiveOccluder {
                 let steady = EdgeDepth.steady(moved + [sharp])
                 mesh = OccluderMesh.build(depth: steady, width: guide.width, height: guide.height, intrinsics: intrinsics, pose: pose,
                                           imageWidth: Float(guide.width) * step, imageHeight: Float(guide.height) * step, step: 1,
-                                          floor: floor, pushBack: 0.08, pushPerMetre: 0.04, maxDepth: Self.reach)?.withoutSpecks(minTriangles: Self.speck)
+                                          floor: floor, pushBack: 0.06, pushPerMetre: 0.04, pushPerMetreSquared: 0.02, maxDepth: Self.reach)?.withoutSpecks(minTriangles: Self.speck)
             } else {
                 mesh = OccluderMesh.build(depth: values, width: width, height: height, intrinsics: intrinsics, pose: pose,
                                           imageWidth: Float(image.width), imageHeight: Float(image.height), step: 1, floor: floor,
-                                          pushBack: 0.08, pushPerMetre: 0.04, denoise: true, maxDepth: Self.reach)?.withoutSpecks(minTriangles: Self.speck)
+                                          pushBack: 0.06, pushPerMetre: 0.04, pushPerMetreSquared: 0.02, denoise: true, maxDepth: Self.reach)?.withoutSpecks(minTriangles: Self.speck)
             }
             let seconds = Date().timeIntervalSince(started)
             let report = logNow ? Self.report(models, depth: values, width: width, height: height, intrinsics: intrinsics,
@@ -568,7 +568,7 @@ final class LiveOccluder {
     private var layerOrder: [UUID] = []
     /// Whether picked things are shaped by real depth now (so each model goes behind them all and depth decides).
     private var pickDepth = false
-    private var pickDepthHistory: [[Float]] = []
+    private var pickDepthHistory: [(depth: [Float], pose: simd_float4x4)] = []
 
     private func clearSheets() {
         for node in sheetNodes.values { node.removeFromParentNode() }
@@ -684,8 +684,15 @@ final class LiveOccluder {
         }
         let guide = depthValues == nil ? nil : Self.luma(image, step: max(2, Int(camera.imageResolution.width) / 480))
         let depthGrid = picks.contains(where: \.grown) ? Self.depthGrid(frame) : nil
-        if !still { pickDepthHistory = [] }
+        // Like the room: earlier depth pictures are moved to where the camera is now and vote, so a picked awning
+        // holds steady in a moving hand (Phil, 2026-11-27: "the flickering is too much").
+        pickDepthHistory.removeAll { old in
+            simd_distance(old.pose.columns.3.xyz, pose.columns.3.xyz) > 0.5
+                || simd_dot(-old.pose.columns.2.xyz, -pose.columns.2.xyz) < 0.9
+        }
         let depthHistory = pickDepthHistory
+        let intrinsics = camera.intrinsics
+        let imageWidth = Float(camera.imageResolution.width)
         Task.detached(priority: .userInitiated) {
             let started = Date()
             let found = Self.instances(in: image)
@@ -699,7 +706,13 @@ final class LiveOccluder {
                                                guideWidth: guide.width, guideHeight: guide.height)
                 if refined.count == guide.width * guide.height {
                     sharp = refined
-                    room = (EdgeDepth.steady(depthHistory + [refined]), guide.width, guide.height)
+                    let step = imageWidth / Float(guide.width)
+                    let depthLens = DepthWarp.Lens(fx: intrinsics[0][0] / step, fy: intrinsics[1][1] / step,
+                                                   cx: intrinsics[2][0] / step, cy: intrinsics[2][1] / step)
+                    let moved = depthHistory.filter { $0.depth.count == refined.count }.map {
+                        DepthWarp.warp($0.depth, width: guide.width, height: guide.height, lens: depthLens, from: $0.pose, to: pose)
+                    }
+                    room = (EdgeDepth.steady(moved + [refined]), guide.width, guide.height)
                 }
             }
             for pick in current {
@@ -780,8 +793,8 @@ final class LiveOccluder {
                     self.picks[i] = pick
                 }
                 self.pickNode.simdOrientation = rotation
-                if let sharp, keepHistory {
-                    self.pickDepthHistory.append(sharp)
+                if let sharp {
+                    self.pickDepthHistory.append((sharp, pose))
                     if self.pickDepthHistory.count > Self.historyLength { self.pickDepthHistory.removeFirst() }
                 }
                 self.pickDepth = room != nil
@@ -843,7 +856,7 @@ final class LiveOccluder {
         mesh.indices.reserveCapacity(strips.count * 6)
         func vertex(_ x: Float, _ y: Float, _ d: Float) {
             // A little behind the real surface (more far away, where LiDAR is rougher) so a model touching it isn't cut.
-            let back = d + 0.03 + 0.02 * d
+            let back = DepthMargin.back(d)
             let u = x * sx, v = y * sy
             let p = pose * SIMD4((u - k[2][0]) / k[0][0] * back, -(v - k[2][1]) / k[1][1] * back, -back, 1)
             mesh.positions.append(contentsOf: [p.x, p.y, p.z])

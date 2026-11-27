@@ -22,7 +22,7 @@ struct OccluderMesh: Sendable {
     static func build(depth: [Float], confidence: [UInt8]? = nil, minConfidence: UInt8 = 0, width dw: Int, height dh: Int,
                       intrinsics k: simd_float3x3, pose: simd_float4x4, imageWidth w: Float, imageHeight h: Float,
                       step: Int = 1, floor knownFloor: Float? = nil,
-                      pushBack: Float = 0.05, pushPerMetre: Float = 0.03, denoise: Bool = false,
+                      pushBack: Float = 0.05, pushPerMetre: Float = 0.03, pushPerMetreSquared: Float = 0, denoise: Bool = false,
                       maxDepth: Float = 8) -> OccluderMesh? {
         guard dw > 8, dh > 8, step >= 1, w > 0, h > 0, depth.count >= dw * dh,
               k[0][0] > 0, k[1][1] > 0 else { return nil }
@@ -42,7 +42,7 @@ struct OccluderMesh: Sendable {
                 var p = SIMD3<Float>.zero
                 let sure = confidence.map { $0[y * dw + x] >= minConfidence } ?? true
                 if sure, d.isFinite, d > 0.12, d < maxDepth {
-                    let back = d + pushBack + pushPerMetre * d
+                    let back = d + pushBack + pushPerMetre * d + pushPerMetreSquared * d * d
                     let u = (Float(x) + 0.5) / Float(dw) * w, v = (Float(y) + 0.5) / Float(dh) * h
                     let world = pose * SIMD4((u - k[2][0]) / k[0][0] * back, -(v - k[2][1]) / k[1][1] * back, -back, 1)
                     p = SIMD3(world.x, world.y, world.z)
@@ -536,4 +536,12 @@ enum DepthWarp {
         }
         return out
     }
+}
+
+/// How far behind a LiDAR reading a hiding surface is put, so a model at about the same distance isn't cut by noise.
+/// LiDAR's scatter grows with the square of distance (Phil's 1427 recording in low light: a scan 4.3 m away over an alley
+/// flickered in dashes as readings there fell in front of it one picture and behind it the next): 12 cm at 1 m, as
+/// before, so wires near the camera still hide what's behind them; about 60 cm at 4.3 m.
+enum DepthMargin {
+    static func back(_ d: Float) -> Float { d + 0.06 + 0.04 * d + 0.02 * d * d }
 }

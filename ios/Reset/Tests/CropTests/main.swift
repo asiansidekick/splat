@@ -722,5 +722,12 @@ do {
     check(EdgeDepth.steady([[-1, 2], [3, 2]]) == [3, 2], "warp: a picture that didn't see a spot doesn't vote")
 }
 
+// Margin: near wires still hide what's just behind them; far, LiDAR's wider scatter doesn't cut a model in dashes.
+do {
+    check(near(DepthMargin.back(1) - 1, 0.12, 0.001), "margin: 12 cm at 1 m (wires near the camera still hide)")
+    let far = DepthMargin.back(4.3) - 4.3
+    check(far > 0.55 && far < 0.65, "margin: about 60 cm at 4.3 m (\(far))")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)
