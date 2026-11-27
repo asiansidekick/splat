@@ -153,6 +153,8 @@ struct PlacedModel: Codable, Identifiable, Equatable {
     var scan: Bool?
     /// Phil, 2026-11-21: "control over lighting of each model". Nil while it is lit as it always was.
     var light: ModelLight?
+    /// Phil, 2026-11-26: fades out toward the edges it was cut at (SoftEdgeModels.swift): 1 soft, 2 softer, nil hard.
+    var softEdge: Int?
 }
 
 /// How one placed model is lit (ModelLighting.swift): brighter or darker, warmer or cooler, and optionally a light from

@@ -299,6 +299,11 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
     @Published var lightPart: ModelLight.Part = .brightness
     /// The light being dragged, saved into `models` when the finger lifts; the sun that shows where it comes from.
     var lightDraft: (id: UUID, light: ModelLight)?
+    /// Phil, 2026-11-26: soft edges on cropped scans (SoftEdgeModels.swift). Each softened model's meshes and distances
+    /// from its cut edges; models being worked out; models found to have no cut edges.
+    var softEdgeCaches: [UUID: SoftEdgeCache] = [:]
+    var softEdgeWorking: Set<UUID> = []
+    var softEdgeClosed: Set<UUID> = []
     var lightSun: SCNNode?
     var lastLightShown = Date.distantPast
     @Published private(set) var carrying = false
@@ -2422,6 +2427,7 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         modelNodes[model.id] = node
         refreshDimensions(model.id)
         Self.applyLight(model.light, to: node)
+        if model.softEdge != nil { applySoftEdge(model.id) }
         return node
     }
 
@@ -2973,6 +2979,10 @@ struct ModelEdgeTools: View {
         } else {
             CutoutTool(word: "True size", symbol: "1.square") { placer.resetSelectedModelSize() }
             if placer.selectedTilted { CutoutTool(word: "Upright", symbol: "arrow.up.to.line", tint: Theme.accent) { placer.makeUpright() } }
+        }
+        // Phil, 2026-11-26: a cropped scan fades out toward its cut edges. Hard edge, Soft edge, Softer edge.
+        if placer.selectedCanSoften {
+            CutoutTool(word: placer.softEdgeWord, symbol: "square.dashed", on: placer.selectedSoftEdge > 0) { placer.cycleSoftEdge() }
         }
         CutoutTool(word: placer.showDimensions ? "Sizes " + ModelDimensions.textStepNames[min(max(placer.dimensionStep, 0), 3)] : "Sizes", symbol: "ruler") { placer.cycleDimensions() }
         CutoutTool(word: "Done", symbol: "checkmark") { placer.selectedModel = nil }

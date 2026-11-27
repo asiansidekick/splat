@@ -260,6 +260,8 @@ final class ReferenceSyncLibrary: SyncLibrary {
                     if model.file.hasSuffix(".fbx") { result.models[index].rigPose = model.rigPose }
                     // Phil, 2026-11-21: each model's own light goes with it.
                     result.models[index].light = model.light
+                    // Phil, 2026-11-26: and its soft edge.
+                    result.models[index].softEdge = model.softEdge
                 }
             } else if model.file.hasPrefix("models/"), has(model.file) {
                 result.models.append(model)
