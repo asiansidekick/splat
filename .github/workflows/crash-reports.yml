@@ -1,0 +1,23 @@
+name: Crash reports
+
+# Prints the newest TestFlight crash reports for Reset.
+on:
+  push:
+    branches: [ios-overlay]
+    paths: [".github/scripts/crash_reports.py", ".github/workflows/crash-reports.yml"]
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install pyjwt cryptography
+      - env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUNDLE_ID: com.asiansidekick.reset.K2LQWV85T9
+        run: |
+          printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/key.p8"
+          ASC_KEY_PATH="$RUNNER_TEMP/key.p8" python3 .github/scripts/crash_reports.py
