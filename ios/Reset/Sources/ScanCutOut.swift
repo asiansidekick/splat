@@ -1,9 +1,7 @@
 import CoreImage
 import CoreVideo
 import ImageIO
-import RealityKit
 import Vision
-import os
 
 /// Phil, 2026-11-24 ("How can we improve our scans"): an object scan built from Reset's own pictures used to build
 /// the floor and the room round the object too, which left a ragged base to trim. Now each picture tells the model
@@ -18,31 +16,40 @@ enum ScanCutOut {
         let height: Int
     }
 
-    struct Prepared: @unchecked Sendable {
-        let samples: Samples
-        /// Sample number to picture file name, for matching the builder's camera places to Reset's.
-        let names: [Int: String]
+    struct Prepared: Sendable {
+        /// The cut-out pictures on disk, same file names as the scan's own pictures (so the builder's camera places
+        /// match Reset's by name), the room round the object painted plain grey.
+        let images: URL
         let found: Int
     }
 
-    /// Phil, 2026-11-25 (1423): Reset stopped 13 s into the first build fed picture by picture. The likely cause is
-    /// memory (62 4K pictures are about 2 GB as the builder holds them), so the pictures are made smaller when they
-    /// would not fit in 40% of the memory left, memory is logged as they go in, and a build that stops the app leaves
-    /// a marker: after two such stops cut-outs are no longer used.
-    private static let stopsKey = "scanCutOutStops"
-    static func marker(_ folder: ScanFolder) -> URL { folder.url.appendingPathComponent("cut-outs-running") }
+    /// Phil, 2026-11-25 (1423) and 2026-11-28 (1428): every build that handed the builder its pictures from memory
+    /// with cut-outs stopped the app the moment the builder took them, whatever their size (1428 fed them in at
+    /// 46% and 56%, it stopped before the first picture went in), while every build from the pictures folder works.
+    /// So the cut-outs are now written as pictures in their own folder and the builder reads that folder the way it
+    /// reads the scan's own pictures, one at a time from disk. If that build fails, the whole pictures are built.
+    /// A build that stops the app still leaves a marker: after two such stops cut-outs are no longer used.
+    private static let stopsKey = "scanCutOutFolderStops"
+    static func marker(_ folder: ScanFolder) -> URL { folder.url.appendingPathComponent("cut-outs-building") }
+    /// The marker of the memory-fed cut-outs (1423 to 1428): no longer counted, just cleared.
+    private static func oldMarker(_ folder: ScanFolder) -> URL { folder.url.appendingPathComponent("cut-outs-running") }
+    static func images(_ folder: ScanFolder) -> URL { folder.url.appendingPathComponent("Images cut-outs", isDirectory: true) }
 
     /// Counts builds with cut-outs that stopped the app (their marker is still there).
     static func noteStops() {
-        for folder in ScanFolder.all() where FileManager.default.fileExists(atPath: marker(folder).path) {
+        for folder in ScanFolder.all() {
+            try? FileManager.default.removeItem(at: oldMarker(folder))
+            guard FileManager.default.fileExists(atPath: marker(folder).path) else { continue }
             try? FileManager.default.removeItem(at: marker(folder))
+            try? FileManager.default.removeItem(at: images(folder))
             let stops = UserDefaults.standard.integer(forKey: stopsKey) + 1
             UserDefaults.standard.set(stops, forKey: stopsKey)
             ScanLog.add("Cut-outs: the app stopped while building \(folder.name) with cut-outs (\(stops) so far)")
         }
     }
 
-    /// The scan's pictures with their cut-outs, or nil when the cut-outs aren't to be trusted.
+    /// The scan's pictures with the room round the object painted out, in their own folder, or nil when the
+    /// cut-outs aren't to be trusted (or couldn't be written).
     static func prepare(_ folder: ScanFolder, progress: @escaping @Sendable (Double) -> Void) -> Prepared? {
         if UserDefaults.standard.integer(forKey: stopsKey) >= 2 {
             ScanLog.add("Cut-outs: off, the app stopped twice building with them")
@@ -55,24 +62,36 @@ enum ScanCutOut {
         var masks: [Mask?] = []
         for (i, file) in files.enumerated() {
             masks.append(autoreleasepool { mask(file) })
-            progress(Double(i + 1) / Double(files.count))
+            progress(0.5 * Double(i + 1) / Double(files.count))
         }
         let found = masks.compactMap { $0 }.count
         ScanLog.add("Cut-outs: the object found in the middle of \(found) of \(files.count) pictures")
         guard ScanPictureMath.useCutOuts(found: found, of: files.count) else { return nil }
-        var names: [Int: String] = [:]
-        for (i, file) in files.enumerated() { names[i] = file.lastPathComponent }
-        // How big the pictures may be: all of them, with cut-outs, in 40% of the memory left.
-        var scale = 1.0
-        if let source = CGImageSourceCreateWithURL(files[0] as CFURL, nil),
-           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-           let w = properties[kCGImagePropertyPixelWidth] as? Int, let h = properties[kCGImagePropertyPixelHeight] as? Int {
-            let needed = Double(files.count) * Double(w * h) * 5
-            let free = Double(os_proc_available_memory())
-            scale = min(1, (0.4 * free / needed).squareRoot())
-            ScanLog.add(String(format: "Cut-outs: %.0f MB free, %d pictures %d x %d, fed in at %.0f%%", free / 1_000_000, files.count, w, h, scale * 100))
+
+        let out = images(folder)
+        try? FileManager.default.removeItem(at: out)
+        do {
+            try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        } catch {
+            ScanLog.add("Cut-outs: couldn't make their folder: \(error)")
+            return nil
         }
-        return Prepared(samples: Samples(files: files, masks: masks, scale: scale), names: names, found: found)
+        let context = CIContext(options: [.cacheIntermediates: false])
+        var written = 0
+        for (i, file) in files.enumerated() {
+            let target = out.appendingPathComponent(file.lastPathComponent)
+            let ok = autoreleasepool { ScanCutOutPicture.write(file, keep: masks[i]?.keep, width: masks[i]?.width ?? 0, height: masks[i]?.height ?? 0, to: target, context: context) }
+            if ok { written += 1 } else { ScanLog.add("Cut-outs: picture \(file.lastPathComponent) couldn't be written, left out") }
+            if i % 20 == 0 { ScanLog.add("Cut-outs: picture \(i) written, " + Diagnostics.memory()) }
+            progress(0.5 + 0.5 * Double(i + 1) / Double(files.count))
+        }
+        guard written >= max(3, files.count * 3 / 4) else {
+            ScanLog.add("Cut-outs: only \(written) of \(files.count) pictures written, building from the whole pictures")
+            try? FileManager.default.removeItem(at: out)
+            return nil
+        }
+        ScanLog.add("Cut-outs: \(written) pictures written, " + Diagnostics.memory())
+        return Prepared(images: out, found: found)
     }
 
     /// Vision's foreground for one picture: the thing in the middle, grown by a fortieth of the picture's width.
@@ -93,68 +112,5 @@ enum ScanCutOut {
         guard let label = ScanPictureMath.middleLabel(labels, width: w, height: h) else { return nil }
         let keep = labels.map { $0 == label }
         return Mask(keep: ScanPictureMath.grow(keep, width: w, height: h, radius: max(2, w / 40)), width: w, height: h)
-    }
-
-    /// The pictures as the builder's samples, read one at a time as it asks for them.
-    struct Samples: Sequence, @unchecked Sendable {
-        let files: [URL]
-        let masks: [Mask?]
-        /// The pictures are made this much smaller (1 keeps them as taken).
-        let scale: Double
-
-        func makeIterator() -> AnyIterator<PhotogrammetrySample> {
-            var index = 0
-            let context = CIContext()
-            return AnyIterator {
-                while index < files.count {
-                    let i = index
-                    index += 1
-                    if i % 10 == 0 {
-                        ScanLog.add(String(format: "Cut-outs: picture %d going in, %.0f MB free", i, Double(os_proc_available_memory()) / 1_000_000))
-                    }
-                    if let sample = autoreleasepool(invoking: { Self.sample(i, file: files[i], mask: masks[i], scale: scale, context: context) }) {
-                        return sample
-                    }
-                    ScanLog.add("Cut-outs: picture \(files[i].lastPathComponent) couldn't be read, left out")
-                }
-                return nil
-            }
-        }
-
-        private static func sample(_ id: Int, file: URL, mask: Mask?, scale: Double, context: CIContext) -> PhotogrammetrySample? {
-            guard let read = CIImage(contentsOf: file) else { return nil }
-            let image = scale < 0.999 ? read.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) : read
-            let w = Int(image.extent.width), h = Int(image.extent.height)
-            guard w > 16, h > 16 else { return nil }
-            let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary] as CFDictionary
-            var made: CVPixelBuffer?
-            guard CVPixelBufferCreate(nil, w, h, kCVPixelFormatType_32BGRA, attributes, &made) == kCVReturnSuccess, let pixels = made else { return nil }
-            context.render(image, to: pixels, bounds: CGRect(x: image.extent.minX, y: image.extent.minY, width: CGFloat(w), height: CGFloat(h)),
-                           colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
-            var sample = PhotogrammetrySample(id: id, image: pixels)
-            if let mask { sample.objectMask = Self.objectMask(mask, width: w, height: h) }
-            return sample
-        }
-
-        /// The cut-out at the picture's own size: 255 is the object, 0 the rest. The cut-out's rows run top down,
-        /// as do the pixel buffer's.
-        private static func objectMask(_ mask: Mask, width: Int, height: Int) -> CVPixelBuffer? {
-            var made: CVPixelBuffer?
-            let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary] as CFDictionary
-            guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_OneComponent8, attributes, &made) == kCVReturnSuccess,
-                  let buffer = made else { return nil }
-            CVPixelBufferLockBaseAddress(buffer, [])
-            defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
-            guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { return nil }
-            let row = CVPixelBufferGetBytesPerRow(buffer)
-            var columns = [Int](repeating: 0, count: width)
-            for x in 0..<width { columns[x] = Swift.min(mask.width - 1, x * mask.width / width) }
-            for y in 0..<height {
-                let my = Swift.min(mask.height - 1, y * mask.height / height) * mask.width
-                let line = base + y * row
-                for x in 0..<width { line[x] = mask.keep[my + columns[x]] ? 255 : 0 }
-            }
-            return buffer
-        }
     }
 }

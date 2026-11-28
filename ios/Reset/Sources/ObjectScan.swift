@@ -563,11 +563,12 @@ final class ScanModel: ObservableObject {
                 guard PhotogrammetrySession.isSupported else {
                     throw NSError(domain: "Scan", code: 1, userInfo: [NSLocalizedDescriptionKey: DeviceSupport.apology("building 3D models")])
                 }
-                defer { try? FileManager.default.removeItem(at: ScanCutOut.marker(folder)) }
-                var config = PhotogrammetrySession.Configuration()
-                config.checkpointDirectory = folder.checkpoint
-                // An object from Reset's own pictures: each picture says which part is the object (2026-11-24).
-                var names: [Int: String] = [:]
+                defer {
+                    try? FileManager.default.removeItem(at: ScanCutOut.marker(folder))
+                    try? FileManager.default.removeItem(at: ScanCutOut.images(folder))
+                }
+                // An object from Reset's own pictures: the builder gets pictures with the room round the object
+                // painted out (2026-11-24), written to their own folder (2026-11-28, see ScanCutOut).
                 var cutOuts: ScanCutOut.Prepared?
                 if crop == nil, folder.cameras != nil, folder.kind == .object {
                     self?.buildingWords = "Finding the object in each picture"
@@ -579,57 +580,41 @@ final class ScanModel: ObservableObject {
                         ScanCutOut.noteStops()
                         return ScanCutOut.prepare(folder, progress: report)
                     }.value
+                    guard !Task.isCancelled else { return }
                     self?.buildingWords = "Building the 3D model on the phone"
                     if cutOuts == nil { ScanLog.add("Cut-outs: not used, building from the whole pictures") }
                 }
-                let session: PhotogrammetrySession
                 if let cutOuts {
-                    names = cutOuts.names
+                    var config = PhotogrammetrySession.Configuration()
                     let cutCheckpoint = folder.url.appendingPathComponent("Checkpoint cut-outs", isDirectory: true)
                     try? FileManager.default.removeItem(at: cutCheckpoint)
                     try? FileManager.default.createDirectory(at: cutCheckpoint, withIntermediateDirectories: true)
                     config.checkpointDirectory = cutCheckpoint
-                    config.isObjectMaskingEnabled = true
                     // Left behind only if the app stops while building (ScanCutOut.noteStops counts it next time).
                     try? Data().write(to: ScanCutOut.marker(folder))
-                    session = try PhotogrammetrySession(input: cutOuts.samples, configuration: config)
-                } else {
-                    session = try PhotogrammetrySession(input: folder.images, configuration: config)
-                }
-                if let crop {
-                    let geometry = PhotogrammetrySession.Request.Geometry(bounds: BoundingBox(min: crop.min, max: crop.max))
-                    try session.process(requests: [.modelFile(url: out, detail: .reduced, geometry: geometry)])
-                } else {
-                    // Bounds come back in the session's own space, which the crop box must be in.
-                    // Pictures from Reset's own camera carry no size or which way is up: the builder's idea of where
-                    // each was taken is asked for too, to line the model up with the room afterwards.
-                    let ownCameras = folder.cameras
-                    try session.process(requests: ownCameras == nil ? [.modelFile(url: out), .bounds] : [.modelFile(url: out), .bounds, .poses])
-                }
-                for try await output in session.outputs {
-                    switch output {
-                    case .requestProgress(_, let fraction):
-                        self?.phase = .building(fraction)
-                    case .requestComplete(_, let result):
-                        if case .bounds(let b) = result {
-                            ScanLog.add("Session bounds: \(b.min) to \(b.max)")
-                            folder.saveSessionBounds(CropBox(min: b.min, max: b.max))
-                        } else if case .poses(let poses) = result {
-                            Self.saveFit(poses, folder: folder, names: names)
-                        } else {
-                            ScanLog.add("Model saved: \(out.lastPathComponent)")
+                    ScanLog.add("Cut-outs: building from \(cutOuts.found) cut-out pictures, " + Diagnostics.memory())
+                    do {
+                        if try await self?.runBuilder(input: cutOuts.images, config: config, folder: folder, out: out, crop: nil) == true,
+                           FileManager.default.fileExists(atPath: out.path) {
+                            try? FileManager.default.removeItem(at: cutCheckpoint)
+                            self?.built(folder, cropped: false)
+                            return
                         }
-                    case .requestError(_, let error):
-                        throw error
-                    case .processingComplete:
-                        self?.built(folder, cropped: crop != nil)
-                        return
-                    case .processingCancelled:
-                        self?.phase = .failed("Building was cancelled.")
-                        return
-                    default:
-                        break
+                        ScanLog.add("Cut-outs: the build gave no model, building from the whole pictures")
+                    } catch {
+                        ScanLog.add("Cut-outs: the build failed (\(error)), building from the whole pictures")
                     }
+                    try? FileManager.default.removeItem(at: ScanCutOut.marker(folder))
+                    try? FileManager.default.removeItem(at: cutCheckpoint)
+                    try? FileManager.default.removeItem(at: out)
+                    guard !Task.isCancelled else { return }
+                    self?.phase = .building(0)
+                }
+                var config = PhotogrammetrySession.Configuration()
+                config.checkpointDirectory = folder.checkpoint
+                guard try await self?.runBuilder(input: folder.images, config: config, folder: folder, out: out, crop: crop) == true else {
+                    if !Task.isCancelled { self?.phase = .failed("Building was cancelled.") }
+                    return
                 }
                 self?.built(folder, cropped: crop != nil)
             } catch {
@@ -638,6 +623,44 @@ final class ScanModel: ObservableObject {
                 self?.library = ScanFolder.all()
             }
         }
+    }
+
+    /// One run of Apple's builder on a folder of pictures. True when it finished, false when it was cancelled.
+    private func runBuilder(input: URL, config: PhotogrammetrySession.Configuration, folder: ScanFolder, out: URL, crop: CropBox?) async throws -> Bool {
+        let session = try PhotogrammetrySession(input: input, configuration: config)
+        if let crop {
+            let geometry = PhotogrammetrySession.Request.Geometry(bounds: BoundingBox(min: crop.min, max: crop.max))
+            try session.process(requests: [.modelFile(url: out, detail: .reduced, geometry: geometry)])
+        } else {
+            // Bounds come back in the session's own space, which the crop box must be in.
+            // Pictures from Reset's own camera carry no size or which way is up: the builder's idea of where
+            // each was taken is asked for too (by picture name), to line the model up with the room afterwards.
+            try session.process(requests: folder.cameras == nil ? [.modelFile(url: out), .bounds] : [.modelFile(url: out), .bounds, .poses])
+        }
+        for try await output in session.outputs {
+            switch output {
+            case .requestProgress(_, let fraction):
+                phase = .building(fraction)
+            case .requestComplete(_, let result):
+                if case .bounds(let b) = result {
+                    ScanLog.add("Session bounds: \(b.min) to \(b.max)")
+                    folder.saveSessionBounds(CropBox(min: b.min, max: b.max))
+                } else if case .poses(let poses) = result {
+                    Self.saveFit(poses, folder: folder)
+                } else {
+                    ScanLog.add("Model saved: \(out.lastPathComponent)")
+                }
+            case .requestError(_, let error):
+                throw error
+            case .processingComplete:
+                return true
+            case .processingCancelled:
+                return false
+            default:
+                break
+            }
+        }
+        return !Task.isCancelled
     }
 
     private func built(_ folder: ScanFolder, cropped: Bool) {

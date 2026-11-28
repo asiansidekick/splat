@@ -1,6 +1,8 @@
 import Foundation
 import simd
 import CoreGraphics
+import CoreImage
+import ImageIO
 
 // Synthetic scans for CropMath: a floor patch with an object on it, clutter, and noise.
 var failures = 0
@@ -743,6 +745,51 @@ do {
     for y in 30..<50 { for x in 40..<60 { gap[y * 100 + x] = 9 } }
     check(!hidden(gap, 7), "hidden: a model seen through a gap in the wall")
     check(!hidden([Float](repeating: 0, count: 100 * 80), 7), "hidden: no depth (sky) hides nothing")
+}
+
+// Cut-out pictures (ScanCutOutPicture): the room painted grey, the object and the camera details kept, the right way up.
+do {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cutout-test-\(getpid())", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    // A 400 x 200 picture, all dark red, with a lens focal length in its camera details.
+    let w = 400, h = 200
+    var pixels = [UInt8](repeating: 0, count: w * h * 4)
+    for i in 0..<(w * h) { pixels[i * 4] = 180; pixels[i * 4 + 1] = 20; pixels[i * 4 + 2] = 20; pixels[i * 4 + 3] = 255 }
+    let space = CGColorSpace(name: CGColorSpace.sRGB)!
+    let made = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: space,
+                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!.makeImage()!
+    let source = dir.appendingPathComponent("IMG_0001.jpg")
+    let destination = CGImageDestinationCreateWithURL(source as CFURL, "public.jpeg" as CFString, 1, nil)!
+    CGImageDestinationAddImage(destination, made, [kCGImagePropertyExifDictionary: [kCGImagePropertyExifFocalLength: 6.86]] as CFDictionary)
+    check(CGImageDestinationFinalize(destination), "cut-out pictures: the test picture is written")
+    // The object: the top left quarter of a 40 x 20 cut-out (rows top down).
+    var keep = [Bool](repeating: false, count: 40 * 20)
+    for y in 0..<10 { for x in 0..<20 { keep[y * 40 + x] = true } }
+    let target = dir.appendingPathComponent("cut").appendingPathExtension("jpg")
+    check(ScanCutOutPicture.write(source, keep: keep, width: 40, height: 20, to: target, context: CIContext()), "cut-out pictures: written")
+    if let back = CGImageSourceCreateWithURL(target as CFURL, nil), let image = CGImageSourceCreateImageAtIndex(back, 0, nil) {
+        check(image.width == w && image.height == h, "cut-out pictures: written at the picture's own size (\(image.width) x \(image.height))")
+        var read = [UInt8](repeating: 0, count: w * h * 4)
+        let ctx = CGContext(data: &read, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: space,
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        // The context's rows run top down in memory.
+        func pixel(_ x: Int, _ y: Int) -> (Int, Int, Int) { let i = (y * w + x) * 4; return (Int(read[i]), Int(read[i + 1]), Int(read[i + 2])) }
+        let object = pixel(50, 30), room = pixel(350, 170), below = pixel(50, 170)
+        check(object.0 > 150 && object.1 < 50, "cut-out pictures: the object (top left) is kept as it was \(object)")
+        check(abs(room.0 - 128) < 12 && abs(room.1 - 128) < 12 && abs(room.2 - 128) < 12, "cut-out pictures: the room is plain grey \(room)")
+        check(abs(below.0 - 128) < 12 && abs(below.1 - 128) < 12, "cut-out pictures: the cut-out isn't upside down (bottom left is grey \(below))")
+        let properties = CGImageSourceCopyPropertiesAtIndex(back, 0, nil) as? [CFString: Any]
+        let exif = properties?[kCGImagePropertyExifDictionary] as? [CFString: Any]
+        let focal = (exif?[kCGImagePropertyExifFocalLength] as? NSNumber)?.doubleValue ?? 0
+        check(abs(focal - 6.86) < 0.01, "cut-out pictures: the lens details are kept (focal length \(focal))")
+    } else {
+        check(false, "cut-out pictures: the written picture can be read")
+    }
+    let copied = dir.appendingPathComponent("copied.jpg")
+    check(ScanCutOutPicture.write(source, keep: nil, width: 0, height: 0, to: copied, context: CIContext())
+          && FileManager.default.contentsEqual(atPath: source.path, andPath: copied.path), "cut-out pictures: a picture without a cut-out is copied as it is")
 }
 
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
