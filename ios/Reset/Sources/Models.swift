@@ -92,6 +92,43 @@ final class ModelPlacer: NSObject, ObservableObject, UIGestureRecognizerDelegate
         Diagnostics.log("In front: model moved \(step > 0 ? "back" : "forward"), now behind \(next) of \(layerCount) layers (\(inFrontCount) picked\(roomLayer ? " + the room" : ""))")
     }
 
+    /// Models the room hides completely now (Phil's 1428 recording: a scan dragged 7 m out over the street vanished behind
+    /// walls 1.5 m away). Each shows a faint outline, and a note offers to bring them forward.
+    @Published private(set) var hiddenBehindRoom: Set<UUID> = []
+    func setHiddenBehindRoom(_ ids: Set<UUID>) {
+        guard ids != hiddenBehindRoom else { return }
+        if !ids.subtracting(hiddenBehindRoom).isEmpty {
+            Diagnostics.log("Behind real things: \(ids.count) model\(ids.count == 1 ? "" : "s") hidden completely, outline shown")
+        }
+        hiddenBehindRoom = ids
+    }
+    /// Models drawn behind the room now: the ones whose hiding the live view checks.
+    var behindRoom: Set<UUID> {
+        guard roomLayer else { return [] }
+        return Set(modelNodes.keys.filter { layer(of: $0) == layerCount })
+    }
+    /// Each model's round outline in the room: its middle and how far its furthest part reaches.
+    var worldSpheres: [UUID: (centre: SIMD3<Float>, radius: Float)] {
+        modelNodes.mapValues { node in
+            let p = node.presentation
+            let (centre, radius) = p.boundingSphere
+            let scale = p.simdWorldTransform
+            let grow = max(simd_length(scale.columns.0.xyz), simd_length(scale.columns.1.xyz), simd_length(scale.columns.2.xyz))
+            return (p.simdConvertPosition(SIMD3<Float>(centre), to: nil), Float(radius) * grow)
+        }
+    }
+    /// Brings every completely hidden model in front of the room (still behind any picked thing nearer than it).
+    func bringHiddenForward() {
+        guard roomLayer else { return }
+        for id in hiddenBehindRoom where modelNodes[id] != nil {
+            layerShift[id] = layerCount - 1 - baseLayer(of: id)
+        }
+        Diagnostics.log("In front: \(hiddenBehindRoom.count) hidden model\(hiddenBehindRoom.count == 1 ? "" : "s") brought in front of the room")
+        hiddenBehindRoom = []
+        Haptics.tap()
+        applyLayers()
+    }
+
     /// Whether the selected model was moved by Push back / Bring forward away from where real distance puts it.
     var selectedLayerChanged: Bool { selectedModel.map { (layerShift[$0] ?? 0) != 0 } ?? false }
 
@@ -2731,6 +2768,23 @@ struct ModelOverlay: View {
                     .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(.ultraThinMaterial, in: Capsule())
                     .allowsHitTesting(false)
+            }
+            if placer.selectedModelName == nil, !placer.hiddenBehindRoom.isEmpty {
+                VStack(spacing: 4) {
+                    Text(placer.hiddenBehindRoom.count == 1 ? "Model hidden behind something nearer" : "Models hidden behind something nearer")
+                        .font(Theme.footnote)
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.6), radius: 3)
+                        .fixedSize()
+                        .allowsHitTesting(false)
+                    Button("Bring forward") { TapGate.run("Bring hidden forward") { placer.bringHiddenForward() } }
+                        .caughtTap("Bring hidden forward") { placer.bringHiddenForward() }
+                        .buttonStyle(.bordered)
+                        .font(Theme.headline)
+                        .controlSize(.small)
+                        .padding(6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
             }
             if placer.selectedModelName == nil, !placer.models.isEmpty {
                 Button("Find model") { TapGate.run("Find model") { placer.bringToView() } }

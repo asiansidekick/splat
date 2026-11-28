@@ -729,5 +729,21 @@ do {
     check(far > 0.55 && far < 0.65, "margin: about 60 cm at 4.3 m (\(far))")
 }
 
+// Hidden check: a model far behind a near wall is hidden completely; seen through a gap, or in front, it isn't.
+do {
+    let k = simd_float3x3(columns: (SIMD3<Float>(100, 0, 0), SIMD3<Float>(0, 100, 0), SIMD3<Float>(50, 40, 1)))
+    let wall = [Float](repeating: 1.5, count: 100 * 80)
+    func hidden(_ depth: [Float], _ z: Float) -> Bool {
+        HiddenCheck.fullyHidden(centre: SIMD3(0, 0, -z), radius: 1, depth: depth, width: 100, height: 80,
+                                intrinsics: k, pose: matrix_identity_float4x4, imageWidth: 100, imageHeight: 80)
+    }
+    check(hidden(wall, 7), "hidden: a model 7 m away behind a wall 1.5 m away")
+    check(!hidden(wall, 2.2), "hidden: a model just behind the wall isn't counted (margin)")
+    var gap = wall
+    for y in 30..<50 { for x in 40..<60 { gap[y * 100 + x] = 9 } }
+    check(!hidden(gap, 7), "hidden: a model seen through a gap in the wall")
+    check(!hidden([Float](repeating: 0, count: 100 * 80), 7), "hidden: no depth (sky) hides nothing")
+}
+
 print(failures == 0 ? "All crop tests passed" : "\(failures) crop test(s) failed")
 exit(failures == 0 ? 0 : 1)

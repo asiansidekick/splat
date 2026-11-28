@@ -161,6 +161,63 @@ final class LiveOccluder {
 
     private func clear() {
         node.geometry = nil
+        noteHidden([], checked: [])
+    }
+
+    /// How many builds in a row each model was found hidden (+) or not (-): two in a row change what shows, so a
+    /// model at the edge of hiding doesn't make its outline blink.
+    private var hiddenRuns: [UUID: Int] = [:]
+    private var outlines: [UUID: SCNNode] = [:]
+
+    private func noteHidden(_ hidden: Set<UUID>, checked: Set<UUID>) {
+        for id in Set(hiddenRuns.keys).union(checked) {
+            let was = hiddenRuns[id] ?? 0
+            if hidden.contains(id) { hiddenRuns[id] = max(1, was + 1) }
+            else if checked.contains(id) { hiddenRuns[id] = min(-1, was - 1) }
+            else { hiddenRuns[id] = nil }
+        }
+        let current = placer?.hiddenBehindRoom ?? []
+        var shown = current.filter { (hiddenRuns[$0] ?? -2) > -2 }
+        shown.formUnion(hiddenRuns.filter { $0.value >= 2 }.map(\.key))
+        placer?.setHiddenBehindRoom(shown)
+        for (id, outline) in outlines where !shown.contains(id) {
+            outline.removeFromParentNode()
+            outlines[id] = nil
+        }
+        for id in shown {
+            guard let model = placer?.modelNodes[id] else { continue }
+            let outline: SCNNode
+            if let made = outlines[id] {
+                outline = made
+            } else {
+                outline = Self.outline(of: model.presentation)
+                view?.scene.rootNode.addChildNode(outline)
+                outlines[id] = outline
+            }
+            outline.simdWorldTransform = model.presentation.simdWorldTransform
+        }
+    }
+
+    /// A faint box round a hidden model, drawn over everything so its place shows through the wall.
+    private static func outline(of model: SCNNode) -> SCNNode {
+        let (lo, hi) = model.boundingBox
+        let a = SIMD3<Float>(lo), b = SIMD3<Float>(hi)
+        let corners = (0..<8).map { i in SCNVector3(i & 1 == 0 ? a.x : b.x, i & 2 == 0 ? a.y : b.y, i & 4 == 0 ? a.z : b.z) }
+        let edges: [Int32] = [0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 1, 3, 4, 6, 5, 7, 0, 4, 1, 5, 2, 6, 3, 7]
+        let geometry = SCNGeometry(sources: [SCNGeometrySource(vertices: corners)],
+                                   elements: [SCNGeometryElement(indices: edges, primitiveType: .line)])
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = UIColor.white
+        material.transparency = 0.45
+        material.readsFromDepthBuffer = false
+        material.writesToDepthBuffer = false
+        geometry.materials = [material]
+        let node = SCNNode(geometry: geometry)
+        node.name = "live.hiddenOutline"
+        node.renderingOrder = 1001
+        node.categoryBitMask = ReviewPick.occluderMask
+        return node
     }
 
     private func tick() {
@@ -169,6 +226,8 @@ final class LiveOccluder {
             timer = nil
             node.removeFromParentNode()
             pickNode.removeFromParentNode()
+            outlines.values.forEach { $0.removeFromParentNode() }
+            outlines = [:]
             return
         }
         guard let frame = view.session.currentFrame else { clear(); return }
@@ -222,6 +281,11 @@ final class LiveOccluder {
         // The camera picture's brightness at about a quarter of its size, to sharpen the edges with (EdgeDepth).
         let guide = Self.luma(frame.capturedImage, step: max(2, Int(image.width) / 480))
         let models = placer?.worldPositions ?? []
+        let checked: [(id: UUID, centre: SIMD3<Float>, radius: Float)] = {
+            guard let placer else { return [] }
+            let spheres = placer.worldSpheres
+            return placer.behindRoom.compactMap { id in spheres[id].map { (id, $0.centre, $0.radius) } }
+        }()
         let logNow = frame.timestamp - lastLog > 10
         let timestamp = frame.timestamp
         // Pictures from much further away or turned well away say little about the view now.
@@ -255,6 +319,10 @@ final class LiveOccluder {
                                           imageWidth: Float(image.width), imageHeight: Float(image.height), step: 1, floor: floor,
                                           pushBack: 0.06, pushPerMetre: 0.04, pushPerMetreSquared: 0.02, denoise: true, maxDepth: Self.reach)?.withoutSpecks(minTriangles: Self.speck)
             }
+            let hiddenNow = Set(checked.filter {
+                HiddenCheck.fullyHidden(centre: $0.centre, radius: $0.radius, depth: values, width: width, height: height,
+                                        intrinsics: intrinsics, pose: pose, imageWidth: Float(image.width), imageHeight: Float(image.height))
+            }.map(\.id))
             let seconds = Date().timeIntervalSince(started)
             let report = logNow ? Self.report(models, depth: values, width: width, height: height, intrinsics: intrinsics,
                                                      pose: pose, image: image) : ""
@@ -271,6 +339,7 @@ final class LiveOccluder {
                     if self.seenFloors.count > 31 { self.seenFloors.removeFirst() }
                 }
                 self.node.geometry = mesh?.geometry()
+                self.noteHidden(hiddenNow, checked: Set(checked.map(\.id)))
                 // The room is the furthest layer: drawn after models brought in front of it, before the rest.
                 self.node.renderingOrder = 10 * self.picks.count + 5
                 self.built += 1

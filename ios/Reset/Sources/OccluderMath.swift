@@ -545,3 +545,34 @@ enum DepthWarp {
 enum DepthMargin {
     static func back(_ d: Float) -> Float { d + 0.06 + 0.04 * d + 0.02 * d * d }
 }
+
+/// Whether a model is hidden completely behind real things nearer than it (Phil's 1428 recording: a scan dragged out over
+/// the street, 7 m away, vanished behind walls 1.5 m away on Done, with nothing to say where it went). Samples the depth
+/// over the model's round outline on the picture; hidden when nearly every reading is a surface nearer than the model's
+/// nearest point, by more than the room's margin.
+enum HiddenCheck {
+    static func fullyHidden(centre: SIMD3<Float>, radius: Float, depth: [Float], width: Int, height: Int,
+                            intrinsics k: simd_float3x3, pose: simd_float4x4, imageWidth: Float, imageHeight: Float) -> Bool {
+        guard width > 0, height > 0, depth.count == width * height else { return false }
+        let c = pose.inverse * SIMD4(centre, 1)
+        let distance = -c.z
+        let nearest = distance - radius
+        guard nearest > 0.2 else { return false }
+        let u = k[0][0] * c.x / distance + k[2][0], v = -k[1][1] * c.y / distance + k[2][1]
+        let r = k[0][0] * radius / distance
+        let steps = 9
+        var inside = 0, hidden = 0
+        for j in 0..<steps {
+            for i in 0..<steps {
+                let a = Float(i) / Float(steps - 1) * 2 - 1, b = Float(j) / Float(steps - 1) * 2 - 1
+                guard a * a + b * b <= 1 else { continue }
+                let x = Int((u + a * r) / imageWidth * Float(width)), y = Int((v + b * r) / imageHeight * Float(height))
+                guard x >= 0, x < width, y >= 0, y < height else { continue }
+                inside += 1
+                let real = depth[y * width + x]
+                if real > 0.12, DepthMargin.back(real) < nearest { hidden += 1 }
+            }
+        }
+        return inside >= 12 && Float(hidden) >= 0.95 * Float(inside)
+    }
+}
